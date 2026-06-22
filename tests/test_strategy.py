@@ -1,6 +1,10 @@
 import pandas as pd
 
-from poma.strategy import build_market_cap_targets, rank_by_market_cap, select_maintained_or_improved
+from poma.strategy import (
+    build_market_cap_targets,
+    rank_by_market_cap,
+    select_maintained_or_improved,
+)
 
 
 def test_rank_by_market_cap_descending() -> None:
