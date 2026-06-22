@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-import requests
+from ib_insync import IB, MarketOrder, Stock
 
 from poma.config import Settings, TradingMode
 from poma.models import CurrentPosition, ProposedTrade
@@ -24,37 +24,58 @@ class DryRunBroker:
         _ = trades
 
 
-class RemoteExecutorBroker:
-    """Calls a small executor service that runs near IB Gateway on the VPS."""
-
+class IbkrBroker:
     def __init__(self, settings: Settings) -> None:
-        if not settings.executor_endpoint or not settings.executor_api_key:
-            raise ValueError("EXECUTOR_ENDPOINT and EXECUTOR_API_KEY are required for remote execution")
-        self.endpoint = settings.executor_endpoint.rstrip("/")
-        self.api_key = settings.executor_api_key
+        settings.assert_safe_for_execution()
+        self.settings = settings
+
+    def _connect(self) -> IB:
+        ib = IB()
+        ib.connect(
+            self.settings.ibkr_host,
+            self.settings.ibkr_port,
+            clientId=self.settings.ibkr_client_id,
+            account=self.settings.ibkr_account or "",
+        )
+        return ib
 
     def positions(self) -> list[CurrentPosition]:
-        response = requests.get(
-            f"{self.endpoint}/positions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            timeout=30,
-        )
-        response.raise_for_status()
-        return [CurrentPosition(**row) for row in response.json()]
+        ib = self._connect()
+        try:
+            rows: list[CurrentPosition] = []
+            for item in ib.portfolio():
+                if item.contract.secType != "STK":
+                    continue
+                if self.settings.ibkr_account and item.account != self.settings.ibkr_account:
+                    continue
+                rows.append(
+                    CurrentPosition(
+                        ticker=item.contract.symbol.upper(),
+                        quantity=float(item.position),
+                        market_value=float(item.marketValue),
+                    )
+                )
+            return rows
+        finally:
+            ib.disconnect()
 
     def submit_trades(self, trades: list[ProposedTrade]) -> None:
-        payload = [trade.__dict__ | {"side": trade.side.value} for trade in trades]
-        response = requests.post(
-            f"{self.endpoint}/orders",
-            json={"trades": payload},
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            timeout=60,
-        )
-        response.raise_for_status()
+        if not trades:
+            return
+        ib = self._connect()
+        try:
+            for trade in trades:
+                contract = Stock(trade.ticker, "SMART", "USD")
+                order = MarketOrder(trade.side.value, abs(trade.quantity))
+                if self.settings.ibkr_account:
+                    order.account = self.settings.ibkr_account
+                ib.placeOrder(contract, order)
+                ib.sleep(0.2)
+        finally:
+            ib.disconnect()
 
 
 def build_broker(settings: Settings) -> Broker:
-    settings.assert_safe_for_execution()
     if settings.trading_mode == TradingMode.DRY_RUN:
         return DryRunBroker()
-    return RemoteExecutorBroker(settings)
+    return IbkrBroker(settings)

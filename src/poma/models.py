@@ -36,6 +36,7 @@ class CurrentPosition:
 class ProposedTrade:
     ticker: str
     side: OrderSide
+    quantity: float
     notional: float
     reason: str
 
@@ -43,6 +44,7 @@ class ProposedTrade:
 @dataclass(frozen=True)
 class RebalancePlan:
     run_id: str
+    session_date: str
     targets: list[TargetPosition]
     trades: list[ProposedTrade]
     warnings: list[str]

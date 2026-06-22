@@ -1,35 +1,52 @@
 # Architecture
 
-## Components
+## Chosen architecture
 
 ```text
-Data Provider
-  -> Cloud Run Job
-  -> Rebalance report
-  -> Remote Executor API
-  -> IB Gateway on VPS
+Ubuntu VPS
+  -> cron every 5 minutes
+  -> POMA monitor command
+  -> IB Gateway on same VPS
   -> IBKR
 ```
 
-## Why not full serverless with IBKR?
+The app checks the Nasdaq/NYSE market calendar on every run and only rebalances when:
 
-For normal retail IBKR accounts, the execution path generally requires a locally running authenticated gateway/session. POMA therefore treats the broker gateway as the only always-on component. The strategy itself remains stateless and serverless-friendly.
+1. Today is a US trading day.
+2. The market has been open for at least `REBALANCE_AFTER_OPEN_MINUTES`.
+3. The local state file says today's rebalance has not already completed.
 
-## Failure modes handled by design
+This avoids hardcoding Singapore or New York cron times and handles daylight saving time through the market-calendar library.
+
+## Why this is simpler and cheaper
+
+Removed by design:
+
+- Cloud Run
+- Cloud Scheduler
+- Artifact Registry
+- Secret Manager
+- Terraform
+- Remote executor API
+- Multi-environment deployment machinery
+
+This eliminates the main sources of accidental cloud bill growth. The only always-on component is the VPS you already need for IB Gateway.
+
+## Runtime files
+
+```text
+state/rebalance_state.json   # last completed trading session
+reports/*.json               # generated rebalance reports
+.env                         # local secrets/config; never commit
+```
+
+## Failure modes
 
 | Failure | Mitigation |
 |---|---|
-| Missing data | Provider validation fails before target generation. |
-| Excessive turnover | `MAX_TURNOVER_PCT` blocks execution. |
-| Live mode accidental enablement | `ALLOW_LIVE_TRADING=true` required. |
-| Tiny uneconomic trades | `MIN_TRADE_NOTIONAL_USD` filter. |
-| Concentration risk | `MAX_POSITION_PCT` cap. |
-| Broker outage | Cloud Run job writes report before execution attempt. |
-
-## Suggested future hardening
-
-- Add a dedicated FastAPI executor service with IBKR order/fill reconciliation.
-- Add persistent Postgres/Supabase trade ledger.
-- Add Telegram alerts for run summary and failures.
-- Add backtesting module with historical constituent snapshots.
-- Add OpenTelemetry or structured log export.
+| US DST changes | Market calendar decides the rebalance window. |
+| US holiday / half-day | Market calendar returns the correct session schedule. |
+| Repeated cron invocations | State file allows only one rebalance per session. |
+| Excess turnover | Turnover guard blocks execution. |
+| Accidental live trading | `ALLOW_LIVE_TRADING=true` required for live mode. |
+| Cloud cost growth | No cloud runtime, registry, scheduler, or secret store. |

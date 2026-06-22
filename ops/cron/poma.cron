@@ -1,0 +1,3 @@
+# Check every 5 minutes. POMA decides whether the US market has been open for 10+ minutes
+# and whether today's rebalance already ran. This avoids DST-specific cron schedules.
+*/5 * * * * cd /opt/poma && mkdir -p logs && /usr/bin/docker compose run --rm poma monitor >> /opt/poma/logs/poma-cron.log 2>&1

@@ -1,0 +1,13 @@
+services:
+  poma:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: ["monitor"]
+    volumes:
+      - ./reports:/app/reports
+      - ./state:/app/state
+    network_mode: host
+
+# Run IB Gateway separately on the same VPS and keep it supervised.
+# POMA connects to IBKR_HOST/IBKR_PORT from .env.

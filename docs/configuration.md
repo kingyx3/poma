@@ -1,77 +1,52 @@
-# Production configuration
+# Configuration
 
-## GitHub environments
+## Required files on the VPS
 
-Create these GitHub environments:
+- `.env` — runtime config and secrets.
+- `state/` — local state volume.
+- `reports/` — local rebalance reports.
+- `logs/` — cron logs if using the sample crontab.
 
-- `development`
-- `staging`
-- `production`
+Do not commit `.env`, `state/`, `reports/`, or `logs/`.
 
-For `production`, require manual approval before deployment.
+## Required external setup
 
-## GitHub Actions secrets
+- IBKR account with paper trading enabled first.
+- IB Gateway running on the same VPS.
+- Data-provider subscription that supports Nasdaq-100 constituents, market caps, and prices.
+- Optional Telegram bot/chat for alerts.
 
-| Secret | Environment | Purpose |
-|---|---|---|
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | all | Workload Identity Provider resource name used by GitHub Actions. |
-| `GCP_DEPLOYER_SERVICE_ACCOUNT` | all | Deployer service account email used by GitHub Actions. |
-
-Broker/data credentials should **not** be stored directly as GitHub Actions secrets for runtime use. Store runtime credentials in GCP Secret Manager and grant only the Cloud Run runtime service account access.
-
-## GitHub Actions variables
-
-| Variable | Example | Purpose |
-|---|---:|---|
-| `GCP_PROJECT_ID` | `my-prod-project` | GCP project for deployment. |
-| `GCP_REGION` | `asia-southeast1` | Region for Artifact Registry and Cloud Run Job. |
-| `GAR_REPOSITORY` | `poma` | Artifact Registry Docker repository. |
-| `CLOUD_RUN_JOB_NAME` | `poma-rebalance` | Cloud Run Job name provisioned by Terraform. |
-
-## GCP Secret Manager runtime secrets
-
-| Secret | Purpose |
-|---|---|
-| `poma-fmp-api-key` | Financial Modeling Prep API key. |
-| `poma-executor-api-key` | Shared secret used by Cloud Run Job to call the VPS executor. |
-
-## Runtime environment variables
+## Environment variables
 
 | Variable | Required | Default | Notes |
 |---|---:|---|---|
-| `APP_ENV` | yes | `development` | `development`, `staging`, or `production`. |
+| `APP_ENV` | yes | `development` | Label only; no multi-env cloud deployment. |
 | `TRADING_MODE` | yes | `dry_run` | `dry_run`, `paper`, or `live`. |
 | `ALLOW_LIVE_TRADING` | live only | `false` | Must be true for live trading. |
-| `DATA_PROVIDER` | yes | `fixture` | Use `fmp` in production. |
-| `FMP_API_KEY` | production | empty | Inject from Secret Manager. |
+| `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars`. |
+| `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
+| `DATA_PROVIDER` | yes | `fixture` | Use `fmp` only after validating endpoint output. |
+| `FMP_API_KEY` | production | empty | Stored locally in `.env`; not in GitHub. |
 | `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override if your plan uses different endpoints. |
 | `UNIVERSE` | yes | `nasdaq100` | This scaffold is Nasdaq-100 focused. |
 | `RANK_LOOKBACK_PERIODS` | yes | `21` | Approx. one trading month. |
-| `REBALANCE_FREQUENCY` | yes | `monthly` | Operational schedule label. |
 | `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. |
 | `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap. |
 | `MAX_TURNOVER_PCT` | yes | `0.35` | Blocks excessive rebalance churn. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Avoids tiny uneconomic trades. |
-| `EXECUTOR_ENDPOINT` | paper/live | empty | VPS executor HTTPS endpoint. |
-| `EXECUTOR_API_KEY` | paper/live | empty | Inject from Secret Manager. |
-| `IBKR_HOST` | executor | `127.0.0.1` | Used on the VPS, not Cloud Run. |
-| `IBKR_PORT` | executor | `7497` | IBKR paper default is usually 7497; live often differs. |
-| `IBKR_CLIENT_ID` | executor | `101` | Dedicated client id for this bot. |
-| `IBKR_ACCOUNT` | executor | empty | Set to intended IBKR account id. |
+| `MIN_WEIGHT_DELTA_PCT` | yes | `0.01` | Avoids churn from tiny target changes. |
+| `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the VPS. |
+| `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
+| `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |
+| `IBKR_ACCOUNT` | paper/live | empty | Set to the intended IBKR account id. |
+| `STATE_DIR` | yes | `state` | Local state directory. |
+| `REPORT_DIR` | yes | `reports` | Local report directory. |
+| `TELEGRAM_BOT_TOKEN` | no | empty | Optional alerts. |
+| `TELEGRAM_CHAT_ID` | no | empty | Optional alerts. |
 
-## Required external accounts
+## GitHub secrets and variables
 
-- IBKR account with paper trading enabled first.
-- IB Gateway or Client Portal Gateway running on the executor host.
-- Data-provider subscription that covers Nasdaq-100 constituents and market-cap snapshots.
-- GCP project with billing enabled.
+None are required for deployment.
 
-## Deployment gates
-
-Production should require:
-
-1. CI green.
-2. Manual environment approval.
-3. `TRADING_MODE=paper` for an observation period.
-4. Explicit `TRADING_MODE=live` + `ALLOW_LIVE_TRADING=true` change reviewed separately.
+The only GitHub workflow is CI. This intentionally avoids Artifact Registry, Secret Manager, Workload Identity Federation, and cloud deployment secrets so costs cannot balloon accidentally.

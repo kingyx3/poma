@@ -1,16 +1,14 @@
 [Unit]
-Description=POMA executor service placeholder
-After=network-online.target
+Description=POMA local rebalancer container
+After=network-online.target docker.service
 Wants=network-online.target
+Requires=docker.service
 
 [Service]
-Type=simple
+Type=oneshot
 WorkingDirectory=/opt/poma
 EnvironmentFile=/opt/poma/.env
-ExecStart=/usr/bin/docker compose -f /opt/poma/docker-compose.vps.yml up
-ExecStop=/usr/bin/docker compose -f /opt/poma/docker-compose.vps.yml down
-Restart=always
-RestartSec=10
+ExecStart=/usr/bin/docker compose run --rm poma monitor
 User=poma
 Group=poma
 

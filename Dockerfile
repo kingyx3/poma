@@ -13,11 +13,10 @@ RUN apt-get update \
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN pip install --upgrade pip \
-    && pip install .
+RUN pip install --upgrade pip && pip install .
 
 RUN useradd --create-home --shell /usr/sbin/nologin appuser
 USER appuser
 
 ENTRYPOINT ["python", "-m", "poma.cli"]
-CMD ["rebalance", "--dry-run"]
+CMD ["monitor"]

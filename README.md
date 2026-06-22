@@ -1,44 +1,33 @@
-# POMA — Nasdaq-100 Long-Only Rebalancer
+# POMA — Simple Nasdaq-100 Rebalancer
 
-POMA is a production-oriented Python scaffold for a low-cost, scheduled, long-only Nasdaq-100 trading strategy.
+POMA is a low-cost Python trading bot for a personal long-only Nasdaq-100 strategy.
 
-The default strategy:
-
-1. Builds the Nasdaq-100 universe from a configured data provider.
-2. Ranks companies by market cap.
-3. Selects stocks whose market-cap rank is maintained or improved versus the selected lookback period.
-4. Builds market-cap-weighted target positions.
-5. Applies risk controls.
-6. Generates a dry-run rebalance report or sends orders through an execution adapter.
-
-> This repository is engineering infrastructure, not financial advice. Keep `TRADING_MODE=dry_run` or `paper` until you have validated data quality, taxes, costs, and execution behavior.
-
-## Recommended production architecture
+It is intentionally simple:
 
 ```text
-Cloud Scheduler
-  -> Cloud Run Job: strategy + target generation
-  -> Executor API on tiny VPS
-  -> IB Gateway
-  -> IBKR
+Ubuntu VPS
+  -> cron every 5 minutes
+  -> POMA checks US market calendar
+  -> if market has been open for 10+ minutes and today's run has not happened
+  -> rebalance directly through IB Gateway on the same VPS
 ```
 
-IBKR execution for normal retail accounts usually requires an authenticated long-running IB Gateway, TWS, or Client Portal Gateway session. This repo therefore keeps all compute serverless-friendly while isolating the unavoidable broker gateway to a tiny VPS.
+No Cloud Run. No Terraform. No Artifact Registry. No Secret Manager. No remote executor service.
 
-## Repository layout
+That avoids silent cloud-cost creep. The expected recurring infra cost is just the VPS plus your data-provider plan.
 
-```text
-.
-├── src/poma/                  # Application code
-├── tests/                     # Unit tests
-├── infra/terraform/gcp/       # GCP Cloud Run Job/Scheduler scaffold
-├── ops/systemd/               # VPS service examples
-├── .github/workflows/         # CI and deployment workflows
-├── docs/                      # Production runbooks and configuration
-├── Dockerfile                 # Cloud Run Job / executor image
-├── docker-compose.vps.yml     # VPS executor deployment
-└── .env.example               # Local config template
-```
+> This repository is engineering infrastructure, not financial advice. Keep `TRADING_MODE=dry_run` or `paper` until the strategy, data, and execution are validated.
+
+## Strategy
+
+1. Fetch Nasdaq-100 constituents and market caps.
+2. Rank by market cap.
+3. Select stocks whose market-cap rank is maintained or improved versus the lookback snapshot.
+4. Weight selected names by market cap.
+5. Apply risk controls.
+6. Trade only when the target/current weight delta clears the configured threshold.
+
+Default timing is **10 minutes after US market open**, checked using a real exchange calendar so daylight saving time, US holidays, and half-days are handled by the application rather than by cron.
 
 ## Local quickstart
 
@@ -47,8 +36,25 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env
-python -m poma.cli rebalance --dry-run
+python -m poma.cli monitor
 pytest
+```
+
+## VPS deployment
+
+```bash
+git clone <repo-url> /opt/poma
+cd /opt/poma
+cp .env.example .env
+# edit .env
+docker compose build
+docker compose up -d
+```
+
+Install the sample cron so the container checks every 5 minutes:
+
+```bash
+crontab ops/cron/poma.cron
 ```
 
 ## Trading modes
@@ -56,25 +62,21 @@ pytest
 | Mode | Purpose |
 |---|---|
 | `dry_run` | Computes targets and writes reports only. No broker connection required. |
-| `paper` | Sends orders to paper account/executor only. |
-| `live` | Sends live orders. Requires explicit `ALLOW_LIVE_TRADING=true`. |
+| `paper` | Connects to IB Gateway paper trading. |
+| `live` | Connects to live IBKR. Requires `ALLOW_LIVE_TRADING=true`. |
 
-## Core safeguards included
+## Included safeguards
 
 - Dry-run default.
 - Explicit live-trading guard.
-- Max single-position cap.
+- One rebalance per market session via local state file.
+- Market-calendar timing instead of brittle DST cron logic.
 - Cash buffer.
-- Max turnover guard.
+- Max single-position cap.
+- Max turnover block.
 - Minimum trade notional.
-- Duplicate-run idempotency key.
-- Rebalance report artifact.
-- Unit tests for ranking, weighting, and risk controls.
+- Minimum target/current weight delta.
+- JSON rebalance reports.
+- Optional Telegram alerts.
 
-## Required GitHub configuration
-
-See [`docs/configuration.md`](docs/configuration.md) for all required GitHub Actions secrets and variables before production deployment.
-
-## Production readiness checklist
-
-See [`docs/production-readiness.md`](docs/production-readiness.md).
+See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
