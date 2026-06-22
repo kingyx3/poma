@@ -31,7 +31,11 @@ def test_turnover_limit_blocks_execution() -> None:
         min_trade_notional_usd=1,
         min_weight_delta_pct=0,
     )
-    warnings = enforce_turnover_limit(trades, portfolio_value_usd=1_000, max_turnover_pct=0.10)
+    warnings = enforce_turnover_limit(
+        trades,
+        portfolio_value_usd=1_000,
+        max_turnover_pct=0.10,
+    )
     assert warnings
     assert "block execution" in warnings[0]
 
