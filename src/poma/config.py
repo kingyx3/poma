@@ -59,7 +59,10 @@ class Settings(BaseSettings):
     order_type: OrderType = Field(default=OrderType.LIMIT, alias="ORDER_TYPE")
     allow_market_orders: bool = Field(default=False, alias="ALLOW_MARKET_ORDERS")
     limit_offset_bps: float = Field(default=10.0, alias="LIMIT_OFFSET_BPS")
-    max_order_notional_usd: PositiveFloat = Field(default=2_000.0, alias="MAX_ORDER_NOTIONAL_USD")
+    max_order_notional_usd: PositiveFloat = Field(
+        default=2_000.0,
+        alias="MAX_ORDER_NOTIONAL_USD",
+    )
     max_daily_trades: PositiveInt = Field(default=30, alias="MAX_DAILY_TRADES")
 
     ibkr_host: str = Field(default="127.0.0.1", alias="IBKR_HOST")
@@ -93,7 +96,7 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
-    def telegram_is_required(self) -> "Settings":
+    def telegram_is_required(self) -> Settings:
         if not self.telegram_bot_token or not self.telegram_chat_id:
             raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
         return self
