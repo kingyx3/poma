@@ -68,7 +68,11 @@ def enforce_turnover_limit(
     portfolio_value_usd: float,
     max_turnover_pct: float,
 ) -> list[str]:
-    turnover = sum(t.notional for t in trades) / portfolio_value_usd if portfolio_value_usd else 0
+    turnover = 0.0
+    if portfolio_value_usd:
+        turnover = sum(t.notional for t in trades) / portfolio_value_usd
     if turnover > max_turnover_pct:
-        return [f"turnover {turnover:.2%} exceeds limit {max_turnover_pct:.2%}; block execution"]
+        return [
+            f"turnover {turnover:.2%} exceeds limit {max_turnover_pct:.2%}; block execution"
+        ]
     return []
