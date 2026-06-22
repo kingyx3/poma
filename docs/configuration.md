@@ -7,7 +7,7 @@
 - `reports/` — local rebalance reports.
 - `logs/` — cron logs if using the sample crontab.
 
-Do not commit `.env`, `state/`, `reports/`, or `logs/`.
+Do not commit `.env`, `state/`, `reports`, or `logs`.
 
 ## Required external setup
 
@@ -36,6 +36,11 @@ Do not commit `.env`, `state/`, `reports/`, or `logs/`.
 | `MAX_TURNOVER_PCT` | yes | `0.35` | Blocks excessive rebalance churn. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Avoids tiny uneconomic trades. |
 | `MIN_WEIGHT_DELTA_PCT` | yes | `0.01` | Avoids churn from tiny target changes. |
+| `ORDER_TYPE` | yes | `limit` | Use `limit` by default. |
+| `ALLOW_MARKET_ORDERS` | live market only | `false` | Explicit opt-in for live market orders. |
+| `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset from reference price. |
+| `MAX_ORDER_NOTIONAL_USD` | yes | `2000` | Blocks unexpectedly large orders. |
+| `MAX_DAILY_TRADES` | yes | `30` | Blocks unexpectedly high trade count. |
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the VPS. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
 | `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |
