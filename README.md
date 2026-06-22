@@ -2,6 +2,20 @@
 
 POMA is a low-cost Python scaffold for a personal long-only Nasdaq-100 strategy.
 
+## Strategy
+
+The default strategy is now explicit:
+
+```text
+Universe: Nasdaq-100
+Lookback: 90 days
+Score: previous_rank - current_rank
+Selection: top 30 stocks by rank improvement score
+Weighting: market-cap weighted, with risk caps
+```
+
+Rank 1 is the largest company by market cap, so a positive score means the stock moved up the market-cap ranking over the 90-day window.
+
 ## Architecture
 
 ```text
@@ -58,6 +72,7 @@ Docker Compose is used as a one-shot runner from cron. Do not run the POMA conta
 - Failed runs become manual-review events.
 - Market-calendar timing instead of brittle DST cron logic.
 - Cash buffer.
+- Max 30 holdings by default.
 - Max position, turnover, order size, and trade-count limits.
 - Minimum trade notional and minimum weight-delta filters.
 - JSON reports with proposed trades and execution results.
