@@ -29,7 +29,8 @@ Do not commit `.env`, `state/`, `reports`, or `logs`.
 | `FMP_API_KEY` | production | empty | Stored locally in `.env`; not in GitHub. |
 | `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override if your plan uses different endpoints. |
 | `UNIVERSE` | yes | `nasdaq100` | This scaffold is Nasdaq-100 focused. |
-| `RANK_LOOKBACK_PERIODS` | yes | `21` | Approx. one trading month. |
+| `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
+| `MAX_HOLDINGS` | yes | `30` | Hold only the top names by rank improvement score. |
 | `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. |
 | `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap. |
