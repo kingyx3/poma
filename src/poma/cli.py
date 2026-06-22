@@ -29,7 +29,10 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
                 "run_id": plan.run_id,
                 "session_date": plan.session_date,
                 "targets": [target.__dict__ for target in plan.targets],
-                "trades": [trade.__dict__ | {"side": trade.side.value} for trade in plan.trades],
+                "trades": [
+                    trade.__dict__ | {"side": trade.side.value}
+                    for trade in plan.trades
+                ],
                 "warnings": plan.warnings,
             },
             indent=2,
@@ -73,7 +76,13 @@ def _rebalance(session_date: str, force_dry_run: bool) -> RebalancePlan:
     )
     warnings = validate_targets(targets, settings.max_position_pct)
     warnings.extend(trade_warnings)
-    warnings.extend(enforce_turnover_limit(trades, settings.portfolio_value_usd, settings.max_turnover_pct))
+    warnings.extend(
+        enforce_turnover_limit(
+            trades,
+            settings.portfolio_value_usd,
+            settings.max_turnover_pct,
+        )
+    )
 
     plan = RebalancePlan(
         run_id=utc_run_id(),
@@ -89,7 +98,10 @@ def _rebalance(session_date: str, force_dry_run: bool) -> RebalancePlan:
         console.print(f"Dry run / blocked. Report written to {report_path}")
         for warning in warnings:
             console.print(f"[yellow]WARNING[/yellow] {warning}")
-        send_alert(settings, f"POMA {session_date}: dry-run/blocked, {len(trades)} proposed trades")
+        send_alert(
+            settings,
+            f"POMA {session_date}: dry-run/blocked, {len(trades)} proposed trades",
+        )
         return plan
 
     broker.submit_trades(trades)
