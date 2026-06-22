@@ -14,7 +14,7 @@ Do not commit `.env`, `state/`, `reports`, or `logs`.
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same VPS.
 - Data-provider subscription that supports Nasdaq-100 constituents, market caps, and prices.
-- Optional Telegram bot/chat for alerts.
+- Telegram bot and chat ID for mandatory run alerts.
 
 ## Environment variables
 
@@ -48,8 +48,8 @@ Do not commit `.env`, `state/`, `reports`, or `logs`.
 | `IBKR_ACCOUNT` | paper/live | empty | Set to the intended IBKR account id. |
 | `STATE_DIR` | yes | `state` | Local state directory. |
 | `REPORT_DIR` | yes | `reports` | Local report directory. |
-| `TELEGRAM_BOT_TOKEN` | no | empty | Optional alerts. |
-| `TELEGRAM_CHAT_ID` | no | empty | Optional alerts. |
+| `TELEGRAM_BOT_TOKEN` | yes | none | Required for startup; local `.env` only. |
+| `TELEGRAM_CHAT_ID` | yes | none | Required for startup; local `.env` only. |
 
 ## GitHub secrets and variables
 
