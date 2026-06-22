@@ -39,6 +39,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env
+# set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env
 python -m poma.cli monitor
 pytest
 ```
@@ -49,7 +50,7 @@ pytest
 git clone <repo-url> /opt/poma
 cd /opt/poma
 cp .env.example .env
-# edit .env
+# edit .env, including mandatory Telegram values
 bash ops/scripts/deploy.sh
 crontab ops/cron/poma.cron
 ```
@@ -67,6 +68,7 @@ Docker Compose is used as a one-shot runner from cron. Do not run the POMA conta
 ## Included safeguards
 
 - Dry-run default.
+- Mandatory Telegram configuration at startup.
 - Explicit live-trading guard.
 - One attempted rebalance per market session via local state file.
 - Failed runs become manual-review events.
@@ -76,6 +78,5 @@ Docker Compose is used as a one-shot runner from cron. Do not run the POMA conta
 - Max position, turnover, order size, and trade-count limits.
 - Minimum trade notional and minimum weight-delta filters.
 - JSON reports with proposed trades and execution results.
-- Optional Telegram alerts.
 
 See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
