@@ -4,7 +4,7 @@ POMA is a low-cost Python scaffold for a personal long-only Nasdaq-100 strategy.
 
 ## Strategy
 
-The default strategy is now explicit:
+The default strategy is explicit:
 
 ```text
 Universe: Nasdaq-100
@@ -19,16 +19,16 @@ Rank 1 is the largest company by market cap, so a positive score means the stock
 ## Architecture
 
 ```text
-Ubuntu VPS
+Ubuntu VPS / GCP e2-micro VM
   -> cron every 5 minutes
   -> POMA checks US market calendar
   -> if market has been open for 10+ minutes and today's run has not happened
-  -> rebalance directly through IB Gateway on the same VPS
+  -> rebalance directly through IB Gateway on the same host
 ```
 
-No Cloud Run. No Terraform. No Artifact Registry. No Secret Manager. No remote executor service.
+No Cloud Run. No Artifact Registry. No Secret Manager. No remote executor service.
 
-The expected recurring infrastructure cost is just the VPS plus your data-provider plan.
+The simplest recurring infrastructure is one small host plus your data-provider plan. The optional Terraform path provisions a GCP free-tier-aligned `e2-micro` VM and pushes the runtime `.env` from GitHub Actions variables/secrets. See [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
 
 > This repository is engineering infrastructure, not financial advice. Keep `TRADING_MODE=dry_run` or `paper` until the strategy, data, and execution are validated.
 
@@ -46,6 +46,8 @@ pytest
 
 ## VPS deployment
 
+### Manual VPS
+
 ```bash
 git clone <repo-url> /opt/poma
 cd /opt/poma
@@ -54,6 +56,14 @@ cp .env.example .env
 bash ops/scripts/deploy.sh
 crontab ops/cron/poma.cron
 ```
+
+### GCP e2-micro via GitHub Actions + Terraform
+
+1. Configure the required GitHub Variables and Secrets from [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
+2. Run **Actions** → **Deploy GCP e2-micro VM** with `terraform_action=plan`.
+3. Rerun with `terraform_action=apply` when the plan is expected.
+
+The deploy workflow renders every key from `.env.example` into a VM-local `.env` file using GitHub Variables/Secrets, uploads the repo package through IAP SSH, runs a dry-run deploy smoke test, and installs the cron schedule.
 
 Docker Compose is used as a one-shot runner from cron. Do not run the POMA container as an always-on service.
 
@@ -78,5 +88,6 @@ Docker Compose is used as a one-shot runner from cron. Do not run the POMA conta
 - Max position, turnover, order size, and trade-count limits.
 - Minimum trade notional and minimum weight-delta filters.
 - JSON reports with proposed trades and execution results.
+- CI/CD `.env` rendering fails if required GitHub Variables/Secrets are missing.
 
 See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
