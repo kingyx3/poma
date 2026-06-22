@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -158,14 +159,25 @@ def _rebalance(
 
 @app.command()
 def rebalance(
-    session_date: str = typer.Option("manual", help="Session label used in the report."),
-    dry_run: bool = typer.Option(False, help="Force dry-run mode for this run."),
+    session_date: Annotated[
+        str,
+        typer.Option(help="Session label used in the report."),
+    ] = "manual",
+    dry_run: Annotated[
+        bool,
+        typer.Option(help="Force dry-run mode for this run."),
+    ] = False,
 ) -> None:
     _rebalance(session_date=session_date, run_id=utc_run_id(), force_dry_run=dry_run)
 
 
 @app.command()
-def monitor(dry_run: bool = typer.Option(False, help="Force dry-run mode for this run.")) -> None:
+def monitor(
+    dry_run: Annotated[
+        bool,
+        typer.Option(help="Force dry-run mode for this run."),
+    ] = False,
+) -> None:
     settings = get_settings()
     state = LocalState(settings.state_dir)
 
