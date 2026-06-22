@@ -13,6 +13,11 @@ class TradingMode(StrEnum):
     LIVE = "live"
 
 
+class OrderType(StrEnum):
+    LIMIT = "limit"
+    MARKET = "market"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -50,6 +55,12 @@ class Settings(BaseSettings):
     )
     min_weight_delta_pct: float = Field(default=0.01, alias="MIN_WEIGHT_DELTA_PCT")
 
+    order_type: OrderType = Field(default=OrderType.LIMIT, alias="ORDER_TYPE")
+    allow_market_orders: bool = Field(default=False, alias="ALLOW_MARKET_ORDERS")
+    limit_offset_bps: float = Field(default=10.0, alias="LIMIT_OFFSET_BPS")
+    max_order_notional_usd: PositiveFloat = Field(default=2_000.0, alias="MAX_ORDER_NOTIONAL_USD")
+    max_daily_trades: PositiveInt = Field(default=30, alias="MAX_DAILY_TRADES")
+
     ibkr_host: str = Field(default="127.0.0.1", alias="IBKR_HOST")
     ibkr_port: int = Field(default=7497, alias="IBKR_PORT")
     ibkr_client_id: int = Field(default=101, alias="IBKR_CLIENT_ID")
@@ -73,9 +84,23 @@ class Settings(BaseSettings):
             raise ValueError("percentage settings must be between 0 and 1")
         return value
 
+    @field_validator("limit_offset_bps")
+    @classmethod
+    def bps_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("basis-point settings must be non-negative")
+        return value
+
     def assert_safe_for_execution(self) -> None:
         if self.trading_mode == TradingMode.LIVE and not self.allow_live_trading:
             raise RuntimeError("LIVE trading requires ALLOW_LIVE_TRADING=true")
+        market_order_blocked = (
+            self.trading_mode == TradingMode.LIVE
+            and self.order_type == OrderType.MARKET
+            and not self.allow_market_orders
+        )
+        if market_order_blocked:
+            raise RuntimeError("LIVE market orders require ALLOW_MARKET_ORDERS=true")
 
 
 def get_settings() -> Settings:
