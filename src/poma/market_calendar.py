@@ -26,7 +26,10 @@ def should_rebalance_now(
 
     ny_date = now.astimezone(ZoneInfo("America/New_York")).date()
     calendar = mcal.get_calendar(calendar_name)
-    schedule = calendar.schedule(start_date=ny_date.isoformat(), end_date=ny_date.isoformat())
+    schedule = calendar.schedule(
+        start_date=ny_date.isoformat(),
+        end_date=ny_date.isoformat(),
+    )
     if schedule.empty:
         return MarketDecision(False, None, "not a trading day")
 
