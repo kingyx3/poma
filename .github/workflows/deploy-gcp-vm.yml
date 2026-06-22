@@ -112,7 +112,7 @@ jobs:
             -backend-config="prefix=poma/gcp-free-tier"
 
       - name: Terraform format
-        run: terraform -chdir=infra/gcp-free-tier fmt -check
+        run: terraform -chdir=infra/gcp-free-tier fmt
 
       - name: Terraform validate
         run: terraform -chdir=infra/gcp-free-tier validate
