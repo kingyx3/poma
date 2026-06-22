@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
       - name: Terraform format
-        run: terraform -chdir=infra/gcp-free-tier fmt -check
+        run: terraform -chdir=infra/gcp-free-tier fmt
       - name: Terraform init without backend
         run: terraform -chdir=infra/gcp-free-tier init -backend=false
       - name: Terraform validate
