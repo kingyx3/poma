@@ -46,7 +46,11 @@ class IbkrBroker:
             for item in ib.portfolio():
                 if item.contract.secType != "STK":
                     continue
-                if self.settings.ibkr_account and item.account != self.settings.ibkr_account:
+                account_mismatch = (
+                    self.settings.ibkr_account
+                    and item.account != self.settings.ibkr_account
+                )
+                if account_mismatch:
                     continue
                 rows.append(
                     CurrentPosition(
