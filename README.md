@@ -1,8 +1,8 @@
 # POMA — Simple Nasdaq-100 Rebalancer
 
-POMA is a low-cost Python trading bot for a personal long-only Nasdaq-100 strategy.
+POMA is a low-cost Python scaffold for a personal long-only Nasdaq-100 strategy.
 
-It is intentionally simple:
+## Architecture
 
 ```text
 Ubuntu VPS
@@ -14,20 +14,9 @@ Ubuntu VPS
 
 No Cloud Run. No Terraform. No Artifact Registry. No Secret Manager. No remote executor service.
 
-That avoids silent cloud-cost creep. The expected recurring infra cost is just the VPS plus your data-provider plan.
+The expected recurring infrastructure cost is just the VPS plus your data-provider plan.
 
 > This repository is engineering infrastructure, not financial advice. Keep `TRADING_MODE=dry_run` or `paper` until the strategy, data, and execution are validated.
-
-## Strategy
-
-1. Fetch Nasdaq-100 constituents and market caps.
-2. Rank by market cap.
-3. Select stocks whose market-cap rank is maintained or improved versus the lookback snapshot.
-4. Weight selected names by market cap.
-5. Apply risk controls.
-6. Trade only when the target/current weight delta clears the configured threshold.
-
-Default timing is **10 minutes after US market open**, checked using a real exchange calendar so daylight saving time, US holidays, and half-days are handled by the application rather than by cron.
 
 ## Local quickstart
 
@@ -47,15 +36,11 @@ git clone <repo-url> /opt/poma
 cd /opt/poma
 cp .env.example .env
 # edit .env
-docker compose build
-docker compose up -d
-```
-
-Install the sample cron so the container checks every 5 minutes:
-
-```bash
+bash ops/scripts/deploy.sh
 crontab ops/cron/poma.cron
 ```
+
+Docker Compose is used as a one-shot runner from cron. Do not run the POMA container as an always-on service.
 
 ## Trading modes
 
@@ -69,14 +54,13 @@ crontab ops/cron/poma.cron
 
 - Dry-run default.
 - Explicit live-trading guard.
-- One rebalance per market session via local state file.
+- One attempted rebalance per market session via local state file.
+- Failed runs become manual-review events.
 - Market-calendar timing instead of brittle DST cron logic.
 - Cash buffer.
-- Max single-position cap.
-- Max turnover block.
-- Minimum trade notional.
-- Minimum target/current weight delta.
-- JSON rebalance reports.
+- Max position, turnover, order size, and trade-count limits.
+- Minimum trade notional and minimum weight-delta filters.
+- JSON reports with proposed trades and execution results.
 - Optional Telegram alerts.
 
 See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
