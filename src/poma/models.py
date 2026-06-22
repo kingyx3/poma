@@ -38,7 +38,22 @@ class ProposedTrade:
     side: OrderSide
     quantity: float
     notional: float
+    reference_price: float
+    limit_price: float | None
     reason: str
+
+
+@dataclass(frozen=True)
+class OrderResult:
+    ticker: str
+    side: OrderSide
+    quantity: float
+    notional: float
+    order_id: int | None
+    status: str
+    filled: float
+    average_fill_price: float | None
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,4 +62,5 @@ class RebalancePlan:
     session_date: str
     targets: list[TargetPosition]
     trades: list[ProposedTrade]
+    execution_results: list[OrderResult]
     warnings: list[str]
