@@ -1,7 +1,6 @@
 services:
   poma:
     build: .
-    restart: unless-stopped
     env_file: .env
     command: ["monitor"]
     volumes:
@@ -9,5 +8,6 @@ services:
       - ./state:/app/state
     network_mode: host
 
+# Run this with `docker compose run --rm poma monitor` from cron.
+# Do not run this service as an always-on restarting process; cron is the scheduler.
 # Run IB Gateway separately on the same VPS and keep it supervised.
-# POMA connects to IBKR_HOST/IBKR_PORT from .env.
