@@ -14,18 +14,28 @@ class TradingMode(StrEnum):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_env: str = Field(default="development", alias="APP_ENV")
     trading_mode: TradingMode = Field(default=TradingMode.DRY_RUN, alias="TRADING_MODE")
     allow_live_trading: bool = Field(default=False, alias="ALLOW_LIVE_TRADING")
 
     market_calendar: str = Field(default="NASDAQ", alias="MARKET_CALENDAR")
-    rebalance_after_open_minutes: PositiveInt = Field(default=10, alias="REBALANCE_AFTER_OPEN_MINUTES")
+    rebalance_after_open_minutes: PositiveInt = Field(
+        default=10,
+        alias="REBALANCE_AFTER_OPEN_MINUTES",
+    )
 
     data_provider: str = Field(default="fixture", alias="DATA_PROVIDER")
     fmp_api_key: str | None = Field(default=None, alias="FMP_API_KEY")
-    fmp_base_url: str = Field(default="https://financialmodelingprep.com/stable", alias="FMP_BASE_URL")
+    fmp_base_url: str = Field(
+        default="https://financialmodelingprep.com/stable",
+        alias="FMP_BASE_URL",
+    )
 
     universe: str = Field(default="nasdaq100", alias="UNIVERSE")
     rank_lookback_periods: PositiveInt = Field(default=21, alias="RANK_LOOKBACK_PERIODS")
@@ -34,7 +44,10 @@ class Settings(BaseSettings):
     cash_buffer_pct: float = Field(default=0.02, alias="CASH_BUFFER_PCT")
     max_position_pct: float = Field(default=0.10, alias="MAX_POSITION_PCT")
     max_turnover_pct: float = Field(default=0.35, alias="MAX_TURNOVER_PCT")
-    min_trade_notional_usd: PositiveFloat = Field(default=25.0, alias="MIN_TRADE_NOTIONAL_USD")
+    min_trade_notional_usd: PositiveFloat = Field(
+        default=25.0,
+        alias="MIN_TRADE_NOTIONAL_USD",
+    )
     min_weight_delta_pct: float = Field(default=0.01, alias="MIN_WEIGHT_DELTA_PCT")
 
     ibkr_host: str = Field(default="127.0.0.1", alias="IBKR_HOST")
@@ -49,7 +62,10 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = Field(default=None, alias="TELEGRAM_CHAT_ID")
 
     @field_validator(
-        "cash_buffer_pct", "max_position_pct", "max_turnover_pct", "min_weight_delta_pct"
+        "cash_buffer_pct",
+        "max_position_pct",
+        "max_turnover_pct",
+        "min_weight_delta_pct",
     )
     @classmethod
     def pct_between_zero_and_one(cls, value: float) -> float:
