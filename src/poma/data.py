@@ -63,12 +63,14 @@ def _normalise_snapshot(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "market_cap": "market_cap",
         "price": "price",
     }
-    frame = frame.rename(columns={k: v for k, v in rename_map.items() if k in frame.columns})
+    valid_renames = {key: value for key, value in rename_map.items() if key in frame.columns}
+    frame = frame.rename(columns=valid_renames)
     required = {"ticker", "market_cap"}
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"provider snapshot missing required columns: {sorted(missing)}")
-    frame = frame[[c for c in ["ticker", "market_cap", "price"] if c in frame.columns]].copy()
+    columns = [column for column in ["ticker", "market_cap", "price"] if column in frame]
+    frame = frame[columns].copy()
     frame["ticker"] = frame["ticker"].astype(str).str.upper().str.strip()
     frame["market_cap"] = pd.to_numeric(frame["market_cap"], errors="coerce")
     frame = frame.dropna(subset=["ticker", "market_cap"])
