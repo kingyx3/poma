@@ -13,8 +13,8 @@ class MarketDataClient(Protocol):
     def current_universe_snapshot(self) -> pd.DataFrame:
         """Return columns: ticker, market_cap, price."""
 
-    def previous_universe_snapshot(self, periods_ago: int) -> pd.DataFrame:
-        """Return columns: ticker, market_cap, price for the comparison period."""
+    def previous_universe_snapshot(self, days_ago: int) -> pd.DataFrame:
+        """Return columns: ticker, market_cap, price for the comparison date."""
 
 
 class FmpMarketDataClient:
@@ -44,10 +44,10 @@ class FmpMarketDataClient:
         rows = self._get("nasdaq-constituent")
         return _normalise_snapshot(rows)
 
-    def previous_universe_snapshot(self, periods_ago: int) -> pd.DataFrame:
+    def previous_universe_snapshot(self, days_ago: int) -> pd.DataFrame:
         # Provider-specific historical constituent and market-cap support varies. The default
-        # implementation expects a configured stable endpoint that returns historical snapshots.
-        rows = self._get("historical-nasdaq-constituent", {"periodsAgo": periods_ago})
+        # implementation expects a configured endpoint that returns a snapshot from N days ago.
+        rows = self._get("historical-nasdaq-constituent", {"daysAgo": days_ago})
         return _normalise_snapshot(rows)
 
 
@@ -113,8 +113,8 @@ class FixtureMarketDataClient:
             ]
         )
 
-    def previous_universe_snapshot(self, periods_ago: int) -> pd.DataFrame:
-        _ = periods_ago
+    def previous_universe_snapshot(self, days_ago: int) -> pd.DataFrame:
+        _ = days_ago
         return pd.DataFrame(
             [
                 {"ticker": "AAPL", "market_cap": 3_000_000_000_000, "price": 200},
