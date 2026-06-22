@@ -1,0 +1,16 @@
+[Unit]
+Description=POMA local rebalancer container
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/poma
+EnvironmentFile=/opt/poma/.env
+ExecStart=/usr/bin/docker compose run --rm poma monitor
+User=poma
+Group=poma
+
+[Install]
+WantedBy=multi-user.target

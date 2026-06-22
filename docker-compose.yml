@@ -1,0 +1,13 @@
+services:
+  poma:
+    build: .
+    env_file: .env
+    command: ["monitor"]
+    volumes:
+      - ./reports:/app/reports
+      - ./state:/app/state
+    network_mode: host
+
+# Run this with `docker compose run --rm poma monitor` from cron.
+# Do not run this service as an always-on restarting process; cron is the scheduler.
+# Run IB Gateway separately on the same VPS and keep it supervised.
