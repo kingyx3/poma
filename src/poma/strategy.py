@@ -26,9 +26,9 @@ def select_top_rank_improvements(
         raise ValueError("max_holdings must be positive")
 
     current_ranked = rank_by_market_cap(current)
-    previous_ranked = rank_by_market_cap(previous)[["ticker", "market_cap_rank"]].rename(
-        columns={"market_cap_rank": "previous_rank"}
-    )
+    previous_ranked = rank_by_market_cap(previous)[
+        ["ticker", "market_cap_rank"]
+    ].rename(columns={"market_cap_rank": "previous_rank"})
     joined = current_ranked.merge(previous_ranked, on="ticker", how="inner")
     joined["rank_improvement_score"] = joined["previous_rank"] - joined["market_cap_rank"]
     return joined.sort_values(
@@ -68,7 +68,8 @@ def build_market_cap_targets(
     if selected.empty:
         return []
     investable_value = portfolio_value_usd * (1 - cash_buffer_pct)
-    raw_weights = selected.set_index("ticker")["market_cap"] / selected["market_cap"].sum()
+    market_caps = selected.set_index("ticker")["market_cap"]
+    raw_weights = market_caps / selected["market_cap"].sum()
     weights = _apply_max_weight_cap(raw_weights, max_position_pct)
     return [
         TargetPosition(
