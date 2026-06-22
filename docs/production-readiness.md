@@ -46,7 +46,9 @@ This repo is designed to be production-ready for paper trading once CI is green 
 
 ## Alerts and reconciliation
 
-- [ ] Configure Telegram alerts.
+- [ ] Configure Telegram credentials before any run.
+- [ ] Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; the app fails fast without them.
+- [ ] Send a test alert before enabling cron.
 - [ ] Save every rebalance report.
 - [ ] Review IBKR orders/fills after every paper/live run.
 - [ ] Treat any `failed` state as manual-review only.
