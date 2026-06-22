@@ -1,18 +1,18 @@
 # Configuration
 
-## Required files on the VPS
+## Required files on the host
 
 - `.env` — runtime config and secrets.
 - `state/` — local state volume.
 - `reports/` — local rebalance reports.
 - `logs/` — cron logs if using the sample crontab.
 
-Do not commit `.env`, `state/`, `reports`, or `logs`.
+Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 
 ## Required external setup
 
 - IBKR account with paper trading enabled first.
-- IB Gateway running on the same VPS.
+- IB Gateway running on the same host.
 - Data-provider subscription that supports Nasdaq-100 constituents, market caps, and prices.
 - Telegram bot and chat ID for mandatory run alerts.
 
@@ -20,13 +20,13 @@ Do not commit `.env`, `state/`, `reports`, or `logs`.
 
 | Variable | Required | Default | Notes |
 |---|---:|---|---|
-| `APP_ENV` | yes | `development` | Label only; no multi-env cloud deployment. |
+| `APP_ENV` | yes | `development` | Label only. Use `production` on the deployed host. |
 | `TRADING_MODE` | yes | `dry_run` | `dry_run`, `paper`, or `live`. |
 | `ALLOW_LIVE_TRADING` | live only | `false` | Must be true for live trading. |
 | `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars`. |
 | `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
 | `DATA_PROVIDER` | yes | `fixture` | Use `fmp` only after validating endpoint output. |
-| `FMP_API_KEY` | production | empty | Stored locally in `.env`; not in GitHub. |
+| `FMP_API_KEY` | `fmp` only | empty | Store as a GitHub Secret for CI/CD deployment. |
 | `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override if your plan uses different endpoints. |
 | `UNIVERSE` | yes | `nasdaq100` | This scaffold is Nasdaq-100 focused. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
@@ -42,17 +42,34 @@ Do not commit `.env`, `state/`, `reports`, or `logs`.
 | `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset from reference price. |
 | `MAX_ORDER_NOTIONAL_USD` | yes | `2000` | Blocks unexpectedly large orders. |
 | `MAX_DAILY_TRADES` | yes | `30` | Blocks unexpectedly high trade count. |
-| `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the VPS. |
+| `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
 | `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |
-| `IBKR_ACCOUNT` | paper/live | empty | Set to the intended IBKR account id. |
+| `IBKR_ACCOUNT` | paper/live | empty | Store as a GitHub Secret for CI/CD deployment. |
 | `STATE_DIR` | yes | `state` | Local state directory. |
 | `REPORT_DIR` | yes | `reports` | Local report directory. |
-| `TELEGRAM_BOT_TOKEN` | yes | none | Required for startup; local `.env` only. |
-| `TELEGRAM_CHAT_ID` | yes | none | Required for startup; local `.env` only. |
+| `TELEGRAM_BOT_TOKEN` | yes | none | Required for startup; store as a GitHub Secret for CI/CD deployment. |
+| `TELEGRAM_CHAT_ID` | yes | none | Required for startup; store as a GitHub Secret for CI/CD deployment. |
+
+## CI/CD `.env` rendering
+
+The deploy workflow does not store secrets in GCP Secret Manager. Instead, it renders a VM-local `.env` file from GitHub Variables and Secrets, then uploads it to `/opt/poma/.env` over IAP SSH.
+
+`ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects placeholder Telegram values, and writes the output file with `0600` permissions.
+
+Runtime values should be split as follows:
+
+- GitHub Variables: non-secret values such as trading mode, risk limits, calendar, provider mode, and local paths.
+- GitHub Secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT`.
+
+See [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md) for the full GitHub Variables/Secrets list.
 
 ## GitHub secrets and variables
 
-None are required for deployment.
+Required for GCP VM deployment:
 
-The only GitHub workflow is CI. This intentionally avoids Artifact Registry, Secret Manager, Workload Identity Federation, and cloud deployment secrets so costs cannot balloon accidentally.
+- `GCP_SERVICE_ACCOUNT_KEY` secret.
+- `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, and `TF_STATE_BUCKET` variables.
+- Every runtime key from `.env.example`, supplied through GitHub Variables or Secrets.
+
+No Artifact Registry or Secret Manager configuration is required.
