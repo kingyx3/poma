@@ -32,7 +32,11 @@ class FmpMarketDataClient:
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         merged = {"apikey": self.settings.fmp_api_key, **(params or {})}
-        response = requests.get(f"{self.settings.fmp_base_url}/{path.lstrip('/')}", params=merged, timeout=30)
+        response = requests.get(
+            f"{self.settings.fmp_base_url}/{path.lstrip('/')}",
+            params=merged,
+            timeout=30,
+        )
         response.raise_for_status()
         return response.json()
 
