@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, PositiveFloat, PositiveInt, field_validator
+from pydantic import Field, PositiveFloat, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -91,6 +91,12 @@ class Settings(BaseSettings):
         if value < 0:
             raise ValueError("basis-point settings must be non-negative")
         return value
+
+    @model_validator(mode="after")
+    def telegram_is_required(self) -> "Settings":
+        if not self.telegram_bot_token or not self.telegram_chat_id:
+            raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
+        return self
 
     def assert_safe_for_execution(self) -> None:
         if self.trading_mode == TradingMode.LIVE and not self.allow_live_trading:
