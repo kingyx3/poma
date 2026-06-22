@@ -1,6 +1,6 @@
 # Production readiness checklist
 
-This repo is designed to be production-ready for paper trading once CI is green and the VPS dry-run works. For live money, complete the live-trading gates below.
+This repo is designed to be production-ready for paper trading once CI is green and the host dry-run works. For live money, complete the live-trading gates below.
 
 ## Before any live trading
 
@@ -8,27 +8,44 @@ This repo is designed to be production-ready for paper trading once CI is green 
 - [ ] Validate the data-provider endpoints and field meanings.
 - [ ] Run at least one full week in `dry_run`.
 - [ ] Run at least one full week in `paper`.
-- [ ] Confirm IB Gateway reconnect behavior after VPS reboot.
+- [ ] Confirm IB Gateway reconnect behavior after host reboot.
 - [ ] Confirm order type policy and fractional-share behavior in your IBKR account.
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
 
-## VPS setup
+## Host setup
 
-- [ ] Use one small Ubuntu VPS.
-- [ ] Run IB Gateway supervised on the VPS.
+- [ ] Use one small Ubuntu host.
+- [ ] For GCP free-tier deployment, keep Terraform on `e2-micro` with a `pd-standard` boot disk at or below 30 GB.
+- [ ] Run IB Gateway supervised on the host.
 - [ ] Run `docker compose run --rm poma monitor` every 5 minutes via cron.
-- [ ] Keep `.env` local and readable only by the service user.
-- [ ] Rotate IBKR/data-provider credentials when needed.
-- [ ] Run `ops/scripts/bootstrap_vps.sh` or manually perform equivalent setup.
+- [ ] Keep `.env` readable only by the service user.
+- [ ] For CI/CD deployment, render `.env` only from GitHub Variables/Secrets.
+- [ ] Rotate IBKR/data-provider/Telegram credentials when needed.
+- [ ] Run `ops/scripts/bootstrap_vps.sh` or use the Terraform startup script.
 - [ ] Run `ops/scripts/deploy.sh` for local build and dry-run smoke test.
+
+## CI/CD deployment
+
+- [ ] Store all non-secret `.env.example` keys as GitHub Variables.
+- [ ] Store `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT` as GitHub Secrets.
+- [ ] Store `GCP_SERVICE_ACCOUNT_KEY` as a GitHub Secret.
+- [ ] Store `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, and `TF_STATE_BUCKET` as GitHub Variables.
+- [ ] Run the deploy workflow with `terraform_action=plan` before `apply`.
+- [ ] Confirm GitHub Actions uploaded `/opt/poma/.env` and installed `ops/cron/poma.cron`.
+- [ ] Confirm the cron log appears at `/opt/poma/logs/poma-cron.log`.
 
 ## Cost controls
 
-- [ ] Do not enable cloud deploy workflows unless you deliberately reintroduce cloud infra.
+- [ ] Use exactly one VM.
+- [ ] Keep the VM as `e2-micro`.
+- [ ] Keep the boot disk as `pd-standard` and at or below 30 GB.
+- [ ] Keep the region as `us-west1`, `us-central1`, or `us-east1`.
+- [ ] Keep Terraform state in one small US-region GCS bucket.
 - [ ] Do not push images to Artifact Registry for this personal deployment.
 - [ ] Do not create recurring Secret Manager versions for this bot.
+- [ ] Do not add Cloud NAT, Cloud Run, Cloud Scheduler, Pub/Sub, Redis, or managed databases.
 - [ ] Keep reports/logs locally and prune them periodically.
-- [ ] Use one VPS and local Docker builds.
+- [ ] Use one host and local Docker builds.
 
 ## Risk controls
 
@@ -56,6 +73,6 @@ This repo is designed to be production-ready for paper trading once CI is green 
 
 ## Do we need Ansible?
 
-No for this one-VPS setup. A shell bootstrap script plus Docker Compose is simpler and cheaper.
+No for this one-host setup. A shell bootstrap script plus Docker Compose is simpler and cheaper.
 
-Use Ansible later only if you need repeatable provisioning across multiple VPS hosts, disaster-recovery rebuilds, or stricter configuration drift control.
+Use Ansible later only if you need repeatable provisioning across multiple hosts, disaster-recovery rebuilds, or stricter configuration drift control.
