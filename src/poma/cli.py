@@ -20,7 +20,7 @@ from poma.risk import (
     validate_targets,
 )
 from poma.state import LocalState
-from poma.strategy import build_market_cap_targets, select_maintained_or_improved
+from poma.strategy import build_market_cap_targets, select_top_rank_improvements
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -82,8 +82,12 @@ def _rebalance(
     broker = build_broker(settings)
 
     current = data_client.current_universe_snapshot()
-    previous = data_client.previous_universe_snapshot(settings.rank_lookback_periods)
-    selected = select_maintained_or_improved(current, previous)
+    previous = data_client.previous_universe_snapshot(settings.rank_lookback_days)
+    selected = select_top_rank_improvements(
+        current=current,
+        previous=previous,
+        max_holdings=settings.max_holdings,
+    )
     targets = build_market_cap_targets(
         selected=selected,
         portfolio_value_usd=settings.portfolio_value_usd,
