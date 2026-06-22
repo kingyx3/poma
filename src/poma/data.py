@@ -86,10 +86,30 @@ class FixtureMarketDataClient:
         today = date.today()
         return pd.DataFrame(
             [
-                {"ticker": "MSFT", "market_cap": 3_100_000_000_000, "price": 420, "as_of": today},
-                {"ticker": "NVDA", "market_cap": 3_000_000_000_000, "price": 125, "as_of": today},
-                {"ticker": "AAPL", "market_cap": 2_900_000_000_000, "price": 195, "as_of": today},
-                {"ticker": "AMZN", "market_cap": 1_900_000_000_000, "price": 180, "as_of": today},
+                {
+                    "ticker": "MSFT",
+                    "market_cap": 3_100_000_000_000,
+                    "price": 420,
+                    "as_of": today,
+                },
+                {
+                    "ticker": "NVDA",
+                    "market_cap": 3_000_000_000_000,
+                    "price": 125,
+                    "as_of": today,
+                },
+                {
+                    "ticker": "AAPL",
+                    "market_cap": 2_900_000_000_000,
+                    "price": 195,
+                    "as_of": today,
+                },
+                {
+                    "ticker": "AMZN",
+                    "market_cap": 1_900_000_000_000,
+                    "price": 180,
+                    "as_of": today,
+                },
             ]
         )
 
