@@ -11,11 +11,16 @@ def rank_by_market_cap(snapshot: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"snapshot missing required columns: {sorted(missing)}")
     ranked = snapshot.copy()
-    ranked["market_cap_rank"] = ranked["market_cap"].rank(ascending=False, method="first").astype(int)
+    ranked["market_cap_rank"] = (
+        ranked["market_cap"].rank(ascending=False, method="first").astype(int)
+    )
     return ranked.sort_values("market_cap_rank")
 
 
-def select_maintained_or_improved(current: pd.DataFrame, previous: pd.DataFrame) -> pd.DataFrame:
+def select_maintained_or_improved(
+    current: pd.DataFrame,
+    previous: pd.DataFrame,
+) -> pd.DataFrame:
     current_ranked = rank_by_market_cap(current)
     previous_ranked = rank_by_market_cap(previous)[["ticker", "market_cap_rank"]].rename(
         columns={"market_cap_rank": "previous_rank"}
@@ -40,7 +45,7 @@ def _apply_max_weight_cap(weights: pd.Series, max_weight: float) -> pd.Series:
         under = ~over
         if not under.any() or excess <= 1e-12:
             break
-        capped[under] = capped[under] + excess * capped[under] / capped[under].sum()
+        capped[under] += excess * capped[under] / capped[under].sum()
     total = capped.sum()
     if total <= 0:
         raise ValueError("capped weights sum to zero")
