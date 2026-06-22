@@ -25,3 +25,15 @@ jobs:
         run: pytest
       - name: Docker build smoke test
         run: docker build -t poma:${{ github.sha }} .
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform format
+        run: terraform -chdir=infra/gcp-free-tier fmt -check
+      - name: Terraform init without backend
+        run: terraform -chdir=infra/gcp-free-tier init -backend=false
+      - name: Terraform validate
+        run: terraform -chdir=infra/gcp-free-tier validate
