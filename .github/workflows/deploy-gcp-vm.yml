@@ -1,0 +1,169 @@
+name: Deploy GCP e2-micro VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      terraform_action:
+        description: Run Terraform plan only, or apply and deploy.
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+        default: plan
+      deploy_app:
+        description: Upload code and rendered .env after Terraform apply.
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: poma-gcp-free-tier-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Terraform and deploy
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+      # Terraform / GCP configuration from GitHub Variables.
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_ZONE: ${{ vars.GCP_ZONE }}
+      GCP_VM_NAME: ${{ vars.GCP_VM_NAME }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+
+      # POMA runtime .env values from GitHub Variables.
+      APP_ENV: ${{ vars.APP_ENV }}
+      TRADING_MODE: ${{ vars.TRADING_MODE }}
+      ALLOW_LIVE_TRADING: ${{ vars.ALLOW_LIVE_TRADING }}
+      MARKET_CALENDAR: ${{ vars.MARKET_CALENDAR }}
+      REBALANCE_AFTER_OPEN_MINUTES: ${{ vars.REBALANCE_AFTER_OPEN_MINUTES }}
+      UNIVERSE: ${{ vars.UNIVERSE }}
+      RANK_LOOKBACK_DAYS: ${{ vars.RANK_LOOKBACK_DAYS }}
+      MAX_HOLDINGS: ${{ vars.MAX_HOLDINGS }}
+      PORTFOLIO_VALUE_USD: ${{ vars.PORTFOLIO_VALUE_USD }}
+      CASH_BUFFER_PCT: ${{ vars.CASH_BUFFER_PCT }}
+      MAX_POSITION_PCT: ${{ vars.MAX_POSITION_PCT }}
+      MAX_TURNOVER_PCT: ${{ vars.MAX_TURNOVER_PCT }}
+      MIN_TRADE_NOTIONAL_USD: ${{ vars.MIN_TRADE_NOTIONAL_USD }}
+      MIN_WEIGHT_DELTA_PCT: ${{ vars.MIN_WEIGHT_DELTA_PCT }}
+      ORDER_TYPE: ${{ vars.ORDER_TYPE }}
+      ALLOW_MARKET_ORDERS: ${{ vars.ALLOW_MARKET_ORDERS }}
+      LIMIT_OFFSET_BPS: ${{ vars.LIMIT_OFFSET_BPS }}
+      MAX_ORDER_NOTIONAL_USD: ${{ vars.MAX_ORDER_NOTIONAL_USD }}
+      MAX_DAILY_TRADES: ${{ vars.MAX_DAILY_TRADES }}
+      DATA_PROVIDER: ${{ vars.DATA_PROVIDER }}
+      FMP_BASE_URL: ${{ vars.FMP_BASE_URL }}
+      IBKR_HOST: ${{ vars.IBKR_HOST }}
+      IBKR_PORT: ${{ vars.IBKR_PORT }}
+      IBKR_CLIENT_ID: ${{ vars.IBKR_CLIENT_ID }}
+      STATE_DIR: ${{ vars.STATE_DIR }}
+      REPORT_DIR: ${{ vars.REPORT_DIR }}
+
+      # POMA runtime .env secrets from GitHub Secrets.
+      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+      IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate required deployment settings
+        run: |
+          set -euo pipefail
+          required=(GCP_PROJECT_ID GCP_REGION GCP_ZONE GCP_VM_NAME TF_STATE_BUCKET)
+          for key in "${required[@]}"; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Missing GitHub variable: ${key}"
+              exit 1
+            fi
+          done
+
+      - name: Render .env from GitHub variables and secrets
+        run: python ops/scripts/render_env.py --strict-env --output .env.deploy
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: |
+          terraform -chdir=infra/gcp-free-tier init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="prefix=poma/gcp-free-tier"
+
+      - name: Terraform format
+        run: terraform -chdir=infra/gcp-free-tier fmt -check
+
+      - name: Terraform validate
+        run: terraform -chdir=infra/gcp-free-tier validate
+
+      - name: Terraform plan
+        run: |
+          terraform -chdir=infra/gcp-free-tier plan -out=tfplan \
+            -var="project_id=${GCP_PROJECT_ID}" \
+            -var="region=${GCP_REGION}" \
+            -var="zone=${GCP_ZONE}" \
+            -var="instance_name=${GCP_VM_NAME}"
+
+      - name: Terraform apply
+        if: ${{ inputs.terraform_action == 'apply' }}
+        run: terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan
+
+      - name: Package application
+        if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude='.git' \
+            --exclude='.venv' \
+            --exclude='.env' \
+            --exclude='.env.deploy' \
+            --exclude='reports' \
+            --exclude='state' \
+            --exclude='logs' \
+            -czf /tmp/poma.tar.gz .
+
+      - name: Upload and install on VM
+        if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
+        run: |
+          set -euo pipefail
+
+          instance_name="$(terraform -chdir=infra/gcp-free-tier output -raw instance_name)"
+          zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
+          ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+
+          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
+            'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
+
+          gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
+          gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
+
+          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
+            set -euo pipefail
+            sudo mkdir -p /opt/poma
+            sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
+            sudo mv /tmp/poma.env /opt/poma/.env
+            sudo chmod 600 /opt/poma/.env
+            sudo chown -R poma:poma /opt/poma
+            cd /opt/poma
+            sudo -u poma bash ops/scripts/deploy.sh
+            sudo -u poma crontab ops/cron/poma.cron
+          '
