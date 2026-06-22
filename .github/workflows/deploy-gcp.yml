@@ -1,0 +1,47 @@
+name: Deploy GCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [development, staging, production]
+  push:
+    branches: [main]
+
+env:
+  GAR_LOCATION: ${{ vars.GCP_REGION }}
+  GAR_REPOSITORY: ${{ vars.GAR_REPOSITORY }}
+  IMAGE_NAME: poma
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker $GAR_LOCATION-docker.pkg.dev --quiet
+      - name: Build image
+        run: |
+          docker build -t "$GAR_LOCATION-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/$GAR_REPOSITORY/$IMAGE_NAME:${{ github.sha }}" .
+      - name: Push image
+        run: |
+          docker push "$GAR_LOCATION-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/$GAR_REPOSITORY/$IMAGE_NAME:${{ github.sha }}"
+      - name: Update Cloud Run Job image
+        run: |
+          gcloud run jobs update "${{ vars.CLOUD_RUN_JOB_NAME }}" \
+            --image "$GAR_LOCATION-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/$GAR_REPOSITORY/$IMAGE_NAME:${{ github.sha }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}"

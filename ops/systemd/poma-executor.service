@@ -1,0 +1,18 @@
+[Unit]
+Description=POMA executor service placeholder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/poma
+EnvironmentFile=/opt/poma/.env
+ExecStart=/usr/bin/docker compose -f /opt/poma/docker-compose.vps.yml up
+ExecStop=/usr/bin/docker compose -f /opt/poma/docker-compose.vps.yml down
+Restart=always
+RestartSec=10
+User=poma
+Group=poma
+
+[Install]
+WantedBy=multi-user.target

@@ -23,7 +23,22 @@ Cloud Scheduler
   -> IBKR
 ```
 
-IBKR execution for normal retail accounts usually requires an authenticated long-running IB Gateway, TWS, or Client Portal Gateway session. This repo keeps all compute serverless-friendly while isolating the unavoidable broker gateway to a tiny VPS.
+IBKR execution for normal retail accounts usually requires an authenticated long-running IB Gateway, TWS, or Client Portal Gateway session. This repo therefore keeps all compute serverless-friendly while isolating the unavoidable broker gateway to a tiny VPS.
+
+## Repository layout
+
+```text
+.
+├── src/poma/                  # Application code
+├── tests/                     # Unit tests
+├── infra/terraform/gcp/       # GCP Cloud Run Job/Scheduler scaffold
+├── ops/systemd/               # VPS service examples
+├── .github/workflows/         # CI and deployment workflows
+├── docs/                      # Production runbooks and configuration
+├── Dockerfile                 # Cloud Run Job / executor image
+├── docker-compose.vps.yml     # VPS executor deployment
+└── .env.example               # Local config template
+```
 
 ## Local quickstart
 
@@ -44,14 +59,22 @@ pytest
 | `paper` | Sends orders to paper account/executor only. |
 | `live` | Sends live orders. Requires explicit `ALLOW_LIVE_TRADING=true`. |
 
-## Included
+## Core safeguards included
 
-- Strategy, risk, broker, and data-provider abstractions.
-- Dry-run default and explicit live-trading guard.
-- Max position, turnover, cash-buffer, and minimum-trade safeguards.
-- Docker image for Cloud Run Jobs / VPS usage.
-- GitHub Actions CI and GCP deployment workflow.
-- Terraform scaffold for Artifact Registry, Cloud Run Job, Scheduler, IAM, and secrets.
-- Production configuration and readiness docs.
+- Dry-run default.
+- Explicit live-trading guard.
+- Max single-position cap.
+- Cash buffer.
+- Max turnover guard.
+- Minimum trade notional.
+- Duplicate-run idempotency key.
+- Rebalance report artifact.
+- Unit tests for ranking, weighting, and risk controls.
 
-See [`docs/configuration.md`](docs/configuration.md) and [`docs/production-readiness.md`](docs/production-readiness.md).
+## Required GitHub configuration
+
+See [`docs/configuration.md`](docs/configuration.md) for all required GitHub Actions secrets and variables before production deployment.
+
+## Production readiness checklist
+
+See [`docs/production-readiness.md`](docs/production-readiness.md).
