@@ -15,6 +15,11 @@ def validate_targets(targets: list[TargetPosition], max_position_pct: float) -> 
     return warnings
 
 
+def _build_limit_price(side: OrderSide, reference_price: float, offset_bps: float) -> float:
+    multiplier = 1 + offset_bps / 10_000 if side == OrderSide.BUY else 1 - offset_bps / 10_000
+    return round(reference_price * multiplier, 2)
+
+
 def generate_trades(
     targets: list[TargetPosition],
     current_positions: list[CurrentPosition],
@@ -22,6 +27,7 @@ def generate_trades(
     portfolio_value_usd: float,
     min_trade_notional_usd: float,
     min_weight_delta_pct: float,
+    limit_offset_bps: float,
 ) -> tuple[list[ProposedTrade], list[str]]:
     current_by_ticker = {p.ticker: p for p in current_positions}
     target_by_ticker = {t.ticker: t.target_notional for t in targets}
@@ -39,13 +45,13 @@ def generate_trades(
         if abs(delta) / portfolio_value_usd < min_weight_delta_pct:
             continue
 
-        price = latest_prices.get(ticker)
-        if not price or price <= 0:
+        reference_price = latest_prices.get(ticker)
+        if not reference_price or reference_price <= 0:
             warnings.append(f"missing valid latest price for {ticker}; skipping trade")
             continue
 
         side = OrderSide.BUY if delta > 0 else OrderSide.SELL
-        quantity = abs(delta) / price
+        quantity = abs(delta) / reference_price
         if side == OrderSide.SELL and current:
             quantity = min(quantity, abs(current.quantity))
         if quantity <= 0:
@@ -57,6 +63,8 @@ def generate_trades(
                 side=side,
                 quantity=quantity,
                 notional=abs(delta),
+                reference_price=reference_price,
+                limit_price=_build_limit_price(side, reference_price, limit_offset_bps),
                 reason="rebalance_to_target_weight",
             )
         )
@@ -76,3 +84,22 @@ def enforce_turnover_limit(
             f"turnover {turnover:.2%} exceeds limit {max_turnover_pct:.2%}; block execution"
         ]
     return []
+
+
+def enforce_order_limits(
+    trades: list[ProposedTrade],
+    max_order_notional_usd: float,
+    max_daily_trades: int,
+) -> list[str]:
+    warnings: list[str] = []
+    if len(trades) > max_daily_trades:
+        warnings.append(
+            f"trade count {len(trades)} exceeds limit {max_daily_trades}; block execution"
+        )
+    oversized = [trade for trade in trades if trade.notional > max_order_notional_usd]
+    if oversized:
+        tickers = ", ".join(trade.ticker for trade in oversized)
+        warnings.append(
+            f"orders exceed max notional {max_order_notional_usd:.2f}: {tickers}; block execution"
+        )
+    return warnings
