@@ -26,7 +26,7 @@ Before bootstrapping an environment, add this temporary environment secret only 
 
 | Secret | Required for | Notes |
 |---|---|---|
-| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | Bootstrap only | Temporary GCP service-account JSON key. Delete it from the environment after WIF bootstrap succeeds. |
+| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | Bootstrap only | Plain service-account JSON key, or base64-encoded service-account JSON. Do not use p12/binary key files. Delete it from the environment after WIF bootstrap succeeds. |
 
 After bootstrap, add only the runtime secrets needed by that environment:
 
