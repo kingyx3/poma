@@ -32,33 +32,31 @@ gcloud storage buckets create gs://<unique-tf-state-bucket> \
   --uniform-bucket-level-access
 ```
 
-Create a GitHub Actions service account and grant the minimum practical deployment roles:
+## One-time WIF bootstrap
+
+Run the WIF bootstrap module once from Cloud Shell or a local terminal. This creates the GitHub deployer service account, grants its deployment roles, and lets GitHub Actions authenticate through OIDC instead of a long-lived JSON key.
 
 ```bash
-gcloud iam service-accounts create poma-github-deployer \
-  --project=<gcp-project-id> \
-  --display-name="POMA GitHub deployer"
+gcloud services enable \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com \
+  sts.googleapis.com \
+  serviceusage.googleapis.com
 
-gcloud projects add-iam-policy-binding <gcp-project-id> \
-  --member="serviceAccount:poma-github-deployer@<gcp-project-id>.iam.gserviceaccount.com" \
-  --role="roles/compute.admin"
-
-gcloud projects add-iam-policy-binding <gcp-project-id> \
-  --member="serviceAccount:poma-github-deployer@<gcp-project-id>.iam.gserviceaccount.com" \
-  --role="roles/iap.tunnelResourceAccessor"
-
-gcloud projects add-iam-policy-binding <gcp-project-id> \
-  --member="serviceAccount:poma-github-deployer@<gcp-project-id>.iam.gserviceaccount.com" \
-  --role="roles/serviceusage.serviceUsageAdmin"
-
-gcloud projects add-iam-policy-binding <gcp-project-id> \
-  --member="serviceAccount:poma-github-deployer@<gcp-project-id>.iam.gserviceaccount.com" \
-  --role="roles/storage.objectAdmin"
+terraform -chdir=infra/gcp-wif-bootstrap init
+terraform -chdir=infra/gcp-wif-bootstrap apply \
+  -var="project_id=<gcp-project-id>" \
+  -var="github_repository=kingyx3/poma"
 ```
 
-Create a JSON key for that service account and store it as the `GCP_SERVICE_ACCOUNT_KEY` GitHub secret.
+Copy the Terraform outputs into GitHub Variables:
 
-> Production hardening: replace the JSON key with Workload Identity Federation when you are ready. This avoids long-lived cloud keys in GitHub Secrets.
+| Terraform output | GitHub Variable |
+|---|---|
+| `workload_identity_provider` | `GCP_WORKLOAD_IDENTITY_PROVIDER` |
+| `service_account_email` | `GCP_SERVICE_ACCOUNT_EMAIL` |
+
+After WIF is configured, do not create or store `GCP_SERVICE_ACCOUNT_KEY`.
 
 ## Manual budget alert setup
 
@@ -75,6 +73,8 @@ Terraform and deployment variables:
 | `GCP_ZONE` | `us-west1-b` | Must be in `GCP_REGION`. |
 | `GCP_VM_NAME` | `poma-free-tier` | Compute Engine instance name. |
 | `TF_STATE_BUCKET` | `my-poma-tf-state` | Existing GCS bucket for Terraform state. |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Terraform output | Full WIF provider resource name. |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | Terraform output | Deployer service account email. |
 
 Runtime `.env` variables from GitHub Variables:
 
@@ -113,7 +113,6 @@ Set every runtime variable explicitly even when the value matches `.env.example`
 
 | Secret | Required | Notes |
 |---|---:|---|
-| `GCP_SERVICE_ACCOUNT_KEY` | yes | JSON key for the deployer service account. Replace with WIF later. |
 | `TELEGRAM_BOT_TOKEN` | yes | Mandatory alerts. |
 | `TELEGRAM_CHAT_ID` | yes | Mandatory alerts. |
 | `FMP_API_KEY` | when `DATA_PROVIDER=fmp` | Leave unset for fixture-only dry runs. |
@@ -127,13 +126,14 @@ Set every runtime variable explicitly even when the value matches `.env.example`
 
 On apply, GitHub Actions:
 
-1. Renders `.env.deploy` from GitHub Variables and Secrets.
-2. Validates FMP output when `DATA_PROVIDER=fmp`.
-3. Runs Terraform against `infra/gcp-free-tier`.
-4. Packages the repository without local state, reports, logs, or `.env` files.
-5. Uploads the package and rendered `.env` to the VM through IAP.
-6. Runs `ops/scripts/deploy.sh`, which forces a fixture-backed dry-run rebalance and verifies that a report was created.
-7. Installs `ops/cron/poma.cron`.
+1. Authenticates to Google Cloud through Workload Identity Federation.
+2. Renders `.env.deploy` from GitHub Variables and Secrets.
+3. Validates FMP output when `DATA_PROVIDER=fmp`.
+4. Runs Terraform against `infra/gcp-free-tier`.
+5. Packages the repository without local state, reports, logs, or `.env` files.
+6. Uploads the package and rendered `.env` to the VM through IAP.
+7. Runs `ops/scripts/deploy.sh`, which forces a fixture-backed dry-run rebalance and verifies that a report was created.
+8. Installs `ops/cron/poma.cron`.
 
 ## IB Gateway supervision
 
