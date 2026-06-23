@@ -10,16 +10,23 @@ Terraform creates only the minimum GCP resources needed for the bot:
 - One 30 GB `pd-standard` boot disk.
 - One small dedicated VPC/subnet.
 - One firewall rule that allows SSH only through IAP TCP forwarding.
+- An optional Cloud Billing budget alert when `GCP_BILLING_ACCOUNT_ID` is set.
 - No Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, or managed database.
 
 Keep `GCP_REGION` set to one of the Compute Engine free-tier regions: `us-west1`, `us-central1`, or `us-east1`.
+
+> Cost note: the VM is free-tier-aligned, not guaranteed zero-cost. External IPv4 addresses and outbound network usage can still create small charges. Keep a budget alert enabled and review the bill after the first deploy.
 
 ## One-time GCP setup
 
 Enable billing on the project, then create a Terraform state bucket in a US free-tier Cloud Storage region:
 
 ```bash
-gcloud services enable compute.googleapis.com iap.googleapis.com serviceusage.googleapis.com
+gcloud services enable \
+  billingbudgets.googleapis.com \
+  compute.googleapis.com \
+  iap.googleapis.com \
+  serviceusage.googleapis.com
 
 gcloud storage buckets create gs://<unique-tf-state-bucket> \
   --project=<gcp-project-id> \
@@ -52,6 +59,19 @@ gcloud projects add-iam-policy-binding <gcp-project-id> \
 ```
 
 Create a JSON key for that service account and store it as the `GCP_SERVICE_ACCOUNT_KEY` GitHub secret.
+
+> Production hardening: replace the JSON key with Workload Identity Federation when you are ready. This avoids long-lived cloud keys in GitHub Secrets.
+
+## Optional budget alert setup
+
+Set these GitHub Variables to let Terraform create a monthly budget alert:
+
+| Variable | Example | Notes |
+|---|---|---|
+| `GCP_BILLING_ACCOUNT_ID` | `ABCDEF-123456-ABCDEF` | Leave empty to skip budget creation. |
+| `GCP_MONTHLY_BUDGET_USD` | `5` | Whole-dollar monthly threshold. Defaults to `5`. |
+
+The deployer also needs budget-management permission on the billing account, not just project IAM. Grant the narrowest role available in your account policy for managing budgets.
 
 ## Required GitHub Variables
 
@@ -102,7 +122,7 @@ Set every runtime variable explicitly even when the value matches `.env.example`
 
 | Secret | Required | Notes |
 |---|---:|---|
-| `GCP_SERVICE_ACCOUNT_KEY` | yes | JSON key for the deployer service account. |
+| `GCP_SERVICE_ACCOUNT_KEY` | yes | JSON key for the deployer service account. Replace with WIF later. |
 | `TELEGRAM_BOT_TOKEN` | yes | Mandatory alerts. |
 | `TELEGRAM_CHAT_ID` | yes | Mandatory alerts. |
 | `FMP_API_KEY` | when `DATA_PROVIDER=fmp` | Leave unset for fixture-only dry runs. |
@@ -117,11 +137,22 @@ Set every runtime variable explicitly even when the value matches `.env.example`
 On apply, GitHub Actions:
 
 1. Renders `.env.deploy` from GitHub Variables and Secrets.
-2. Runs Terraform against `infra/gcp-free-tier`.
-3. Packages the repository without local state, reports, logs, or `.env` files.
-4. Uploads the package and rendered `.env` to the VM through IAP.
-5. Runs `ops/scripts/deploy.sh`.
-6. Installs `ops/cron/poma.cron`.
+2. Validates FMP output when `DATA_PROVIDER=fmp`.
+3. Runs Terraform against `infra/gcp-free-tier`.
+4. Packages the repository without local state, reports, logs, or `.env` files.
+5. Uploads the package and rendered `.env` to the VM through IAP.
+6. Runs `ops/scripts/deploy.sh`, which forces a fixture-backed dry-run rebalance and verifies that a report was created.
+7. Installs `ops/cron/poma.cron`.
+
+## IB Gateway supervision
+
+This Terraform path does not install IB Gateway because setup varies by account, license flow, and whether you use IB Gateway or Trader Workstation. Before paper or live trading:
+
+- Install IB Gateway on the same host.
+- Run it under a supervised service such as `systemd`.
+- Confirm it auto-starts after reboot.
+- Confirm POMA can connect to the configured `IBKR_HOST`, `IBKR_PORT`, and `IBKR_CLIENT_ID`.
+- Confirm paper mode works for at least one full trading week before considering live mode.
 
 ## Manual SSH
 
@@ -138,4 +169,6 @@ gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
 - Keep the boot disk at or below 30 GB and type `pd-standard`.
 - Keep region in `us-west1`, `us-central1`, or `us-east1`.
 - Keep Terraform state in one small US-region GCS bucket.
+- Keep `GCP_BILLING_ACCOUNT_ID` set so budget alerts are managed by Terraform.
+- Watch external IPv4 and outbound network charges after deployment.
 - Do not add Artifact Registry, Secret Manager, Cloud NAT, Cloud Scheduler, Cloud Run, or managed databases unless you intentionally accept their costs.
