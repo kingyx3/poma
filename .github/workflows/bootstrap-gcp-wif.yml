@@ -7,6 +7,10 @@ on:
         description: GCP project id that hosts the POMA deployer identity.
         required: true
         type: string
+      tf_state_bucket:
+        description: Existing GCS bucket for Terraform state.
+        required: true
+        type: string
       github_repository:
         description: GitHub repository allowed to deploy through WIF.
         required: true
@@ -38,6 +42,7 @@ jobs:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       GCP_PROJECT_ID: ${{ inputs.project_id }}
+      TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
       GITHUB_REPOSITORY_ALLOWED: ${{ inputs.github_repository }}
       GH_TOKEN: ${{ github.token }}
 
@@ -50,6 +55,10 @@ jobs:
           set -euo pipefail
           if [ -z "${GCP_PROJECT_ID}" ]; then
             echo "::error::project_id is required"
+            exit 1
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::tf_state_bucket is required"
             exit 1
           fi
           if [ -z "${GITHUB_REPOSITORY_ALLOWED}" ]; then
@@ -86,7 +95,10 @@ jobs:
             --project="${GCP_PROJECT_ID}"
 
       - name: Terraform init
-        run: terraform -chdir=infra/gcp-wif-bootstrap init
+        run: |
+          terraform -chdir=infra/gcp-wif-bootstrap init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="prefix=poma/gcp-wif-bootstrap"
 
       - name: Terraform format check
         run: terraform fmt -check -recursive infra/gcp-wif-bootstrap
@@ -123,6 +135,7 @@ jobs:
           }
 
           upsert_variable GCP_PROJECT_ID "${GCP_PROJECT_ID}"
+          upsert_variable TF_STATE_BUCKET "${TF_STATE_BUCKET}"
           upsert_variable GCP_WORKLOAD_IDENTITY_PROVIDER "${provider}"
           upsert_variable GCP_SERVICE_ACCOUNT_EMAIL "${service_account}"
 
