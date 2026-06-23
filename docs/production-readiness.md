@@ -27,11 +27,11 @@ This repo is designed to be production-ready for paper trading once CI is green 
 
 ## CI/CD deployment
 
+- [ ] Run `infra/gcp-wif-bootstrap` once and store its outputs as GitHub Variables.
 - [ ] Store all non-secret `.env.example` keys as GitHub Variables.
 - [ ] Store `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT` as GitHub Secrets.
-- [ ] Store `GCP_SERVICE_ACCOUNT_KEY` as a GitHub Secret until Workload Identity Federation is configured.
-- [ ] Store `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, and `TF_STATE_BUCKET` as GitHub Variables.
-- [ ] Store `GCP_BILLING_ACCOUNT_ID` and `GCP_MONTHLY_BUDGET_USD` if Terraform should manage the budget alert.
+- [ ] Store `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, `TF_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and `GCP_SERVICE_ACCOUNT_EMAIL` as GitHub Variables.
+- [ ] Do not store `GCP_SERVICE_ACCOUNT_KEY`; use Workload Identity Federation instead.
 - [ ] Keep workflow actions pinned to full commit SHAs.
 - [ ] Keep Terraform formatting enforced with `terraform fmt -check`.
 - [ ] Run the deploy workflow with `terraform_action=plan` before `apply`.
@@ -46,7 +46,7 @@ This repo is designed to be production-ready for paper trading once CI is green 
 - [ ] Keep the boot disk as `pd-standard` and at or below 30 GB.
 - [ ] Keep the region as `us-west1`, `us-central1`, or `us-east1`.
 - [ ] Keep Terraform state in one small US-region GCS bucket.
-- [ ] Keep a monthly budget alert enabled.
+- [ ] Keep a monthly budget alert enabled manually in Cloud Billing.
 - [ ] Review external IPv4 and outbound network charges after the first deploy.
 - [ ] Do not push images to Artifact Registry for this personal deployment.
 - [ ] Do not create recurring Secret Manager versions for this bot.
