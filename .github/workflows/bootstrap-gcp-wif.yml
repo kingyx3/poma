@@ -3,6 +3,15 @@ name: Bootstrap GCP Workload Identity Federation
 on:
   workflow_dispatch:
     inputs:
+      deploy_environment:
+        description: GitHub Environment to bootstrap.
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - prd
+        default: dev
       project_id:
         description: Optional override. Defaults to the project_id inside the bootstrap key.
         required: false
@@ -35,17 +44,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: poma-gcp-wif-bootstrap
+  group: poma-gcp-wif-bootstrap-${{ inputs.deploy_environment }}
   cancel-in-progress: false
 
 jobs:
   bootstrap:
-    name: Bootstrap WIF
+    name: Bootstrap WIF (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ inputs.deploy_environment }}
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       GITHUB_REPOSITORY_ALLOWED: ${{ inputs.github_repository }}
       STATE_BUCKET_LOCATION: ${{ inputs.state_bucket_location }}
       GH_TOKEN: ${{ github.token }}
@@ -58,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GOOGLE_BOOTSTRAP_CREDENTIALS:-}" ]; then
-            echo "::error::Missing GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY secret"
+            echo "::error::Missing GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY secret in GitHub Environment ${DEPLOY_ENVIRONMENT}"
             exit 1
           fi
         env:
@@ -87,7 +97,7 @@ jobs:
           echo "GCP_PROJECT_ID=${project_id}" >> "${GITHUB_ENV}"
           echo "GCP_PROJECT_NUMBER=${project_number}" >> "${GITHUB_ENV}"
           echo "TF_STATE_BUCKET=${state_bucket}" >> "${GITHUB_ENV}"
-          echo "Resolved project_id=${project_id} project_number=${project_number} tf_state_bucket=${state_bucket}"
+          echo "Resolved environment=${DEPLOY_ENVIRONMENT} project_id=${project_id} project_number=${project_number} tf_state_bucket=${state_bucket}"
         env:
           GOOGLE_BOOTSTRAP_CREDENTIALS: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
           INPUT_PROJECT_ID: ${{ inputs.project_id }}
@@ -128,7 +138,7 @@ jobs:
         run: |
           terraform -chdir=infra/gcp-wif-bootstrap init \
             -backend-config="bucket=${TF_STATE_BUCKET}" \
-            -backend-config="prefix=poma/gcp-wif-bootstrap"
+            -backend-config="prefix=poma/${DEPLOY_ENVIRONMENT}/gcp-wif-bootstrap"
 
       - name: Terraform format check
         run: terraform fmt -check -recursive infra/gcp-wif-bootstrap
@@ -140,13 +150,16 @@ jobs:
         run: |
           terraform -chdir=infra/gcp-wif-bootstrap plan -out=tfplan \
             -var="project_id=${GCP_PROJECT_ID}" \
-            -var="github_repository=${GITHUB_REPOSITORY_ALLOWED}"
+            -var="github_repository=${GITHUB_REPOSITORY_ALLOWED}" \
+            -var="pool_id=poma-${DEPLOY_ENVIRONMENT}-github" \
+            -var="provider_id=github" \
+            -var="service_account_id=poma-${DEPLOY_ENVIRONMENT}-github-deployer"
 
       - name: Terraform apply
         if: ${{ inputs.terraform_action == 'apply' }}
         run: terraform -chdir=infra/gcp-wif-bootstrap apply -auto-approve tfplan
 
-      - name: Write generated GitHub Variables
+      - name: Write generated GitHub Environment Variables
         if: ${{ inputs.terraform_action == 'apply' }}
         run: |
           set -euo pipefail
@@ -156,10 +169,10 @@ jobs:
           upsert_variable() {
             local name="$1"
             local value="$2"
-            if gh variable set "${name}" --repo "${GITHUB_REPOSITORY}" --body "${value}"; then
-              echo "Set ${name}"
+            if gh variable set "${name}" --repo "${GITHUB_REPOSITORY}" --env "${DEPLOY_ENVIRONMENT}" --body "${value}"; then
+              echo "Set ${DEPLOY_ENVIRONMENT}/${name}"
             else
-              echo "::error::Failed to set ${name}"
+              echo "::error::Failed to set ${DEPLOY_ENVIRONMENT}/${name}"
               exit 1
             fi
           }
@@ -167,12 +180,12 @@ jobs:
           upsert_variable GCP_PROJECT_ID "${GCP_PROJECT_ID}"
           upsert_variable GCP_REGION "us-west1"
           upsert_variable GCP_ZONE "us-west1-b"
-          upsert_variable GCP_VM_NAME "poma-free-tier"
+          upsert_variable GCP_VM_NAME "poma-${DEPLOY_ENVIRONMENT}-free-tier"
           upsert_variable TF_STATE_BUCKET "${TF_STATE_BUCKET}"
           upsert_variable GCP_WORKLOAD_IDENTITY_PROVIDER "${provider}"
           upsert_variable GCP_SERVICE_ACCOUNT_EMAIL "${service_account}"
 
-          upsert_variable APP_ENV "production"
+          upsert_variable APP_ENV "${DEPLOY_ENVIRONMENT}"
           upsert_variable TRADING_MODE "dry_run"
           upsert_variable ALLOW_LIVE_TRADING "false"
           upsert_variable MARKET_CALENDAR "NASDAQ"
@@ -204,12 +217,12 @@ jobs:
       - name: Print cleanup reminder
         if: ${{ inputs.terraform_action == 'apply' }}
         run: |
-          cat <<'EOF'
-          WIF bootstrap completed.
+          cat <<EOF
+          WIF bootstrap completed for ${DEPLOY_ENVIRONMENT}.
 
           Cleanup now:
-          1. Delete the GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY GitHub Secret.
+          1. Delete the GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY secret from the ${DEPLOY_ENVIRONMENT} GitHub Environment.
           2. Delete or disable the temporary bootstrap service account key in GCP IAM.
-          3. Future deploys use generated WIF variables and do not need a GCP JSON key.
-          4. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID before the first deploy.
+          3. Future deploys use generated ${DEPLOY_ENVIRONMENT} environment variables and do not need a GCP JSON key.
+          4. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to the ${DEPLOY_ENVIRONMENT} GitHub Environment before the first deploy.
           EOF
