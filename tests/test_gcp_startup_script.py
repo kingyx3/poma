@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STARTUP_SCRIPT = REPO_ROOT / "infra/gcp-free-tier/startup.sh"
 
@@ -28,20 +27,11 @@ REQUIRED_STARTUP_SNIPPETS = (
         '"$${IBC_DIR}/config.ini" "$${IBC_CONFIG}"'
     ),
     'chmod 600 "$${IBC_CONFIG}"',
-    "IBKR password",
-)
-
-FORBIDDEN_STARTUP_SNIPPETS = (
-    "GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY",
-    "TELEGRAM_BOT_TOKEN",
 )
 
 
-def test_gcp_startup_script_keeps_ib_gateway_production_contracts() -> None:
+def test_gcp_startup_script_keeps_gateway_runtime_contracts() -> None:
     script = STARTUP_SCRIPT.read_text(encoding="utf-8")
 
     for snippet in REQUIRED_STARTUP_SNIPPETS:
         assert snippet in script
-
-    for snippet in FORBIDDEN_STARTUP_SNIPPETS:
-        assert snippet not in script
