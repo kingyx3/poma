@@ -16,7 +16,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 
 ## Required before live mode
 
-- [ ] Backtest against QQQ/QQM or another explicit benchmark with historical constituents and historical market caps.
+- [ ] Backtest against QQQ/QQQM or another explicit benchmark with historical constituents and historical market caps.
 - [ ] Validate data-provider endpoints and field meanings.
 - [ ] Run at least one full week in `dry_run`.
 - [ ] Run at least one full week in `paper`.
