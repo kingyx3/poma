@@ -3,6 +3,15 @@ name: Deploy GCP e2-micro VM
 on:
   workflow_dispatch:
     inputs:
+      deploy_environment:
+        description: GitHub Environment to deploy.
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - prd
+        default: dev
       terraform_action:
         description: Run Terraform plan only, or apply and deploy.
         required: true
@@ -22,17 +31,18 @@ permissions:
   id-token: write
 
 concurrency:
-  group: poma-gcp-free-tier-deploy
+  group: poma-gcp-free-tier-deploy-${{ inputs.deploy_environment }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Terraform and deploy
+    name: Terraform and deploy (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ inputs.deploy_environment }}
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
 
       # Terraform / GCP configuration from GitHub Variables.
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -63,6 +73,8 @@ jobs:
       LIMIT_OFFSET_BPS: ${{ vars.LIMIT_OFFSET_BPS }}
       MAX_ORDER_NOTIONAL_USD: ${{ vars.MAX_ORDER_NOTIONAL_USD }}
       MAX_DAILY_TRADES: ${{ vars.MAX_DAILY_TRADES }}
+      ORDER_STATUS_TIMEOUT_SECONDS: ${{ vars.ORDER_STATUS_TIMEOUT_SECONDS }}
+      CANCEL_STALE_ORDERS: ${{ vars.CANCEL_STALE_ORDERS }}
       DATA_PROVIDER: ${{ vars.DATA_PROVIDER }}
       FMP_BASE_URL: ${{ vars.FMP_BASE_URL }}
       IBKR_HOST: ${{ vars.IBKR_HOST }}
@@ -95,10 +107,14 @@ jobs:
           )
           for key in "${required[@]}"; do
             if [ -z "${!key}" ]; then
-              echo "::error::Missing GitHub variable: ${key}"
+              echo "::error::Missing GitHub variable for ${DEPLOY_ENVIRONMENT}: ${key}"
               exit 1
             fi
           done
+          if [ "${APP_ENV}" != "${DEPLOY_ENVIRONMENT}" ]; then
+            echo "::error::APP_ENV=${APP_ENV} must match deploy_environment=${DEPLOY_ENVIRONMENT}"
+            exit 1
+          fi
 
       - name: Render .env from GitHub variables and secrets
         run: python ops/scripts/render_env.py --strict-env --output .env.deploy
@@ -130,7 +146,7 @@ jobs:
         run: |
           terraform -chdir=infra/gcp-free-tier init \
             -backend-config="bucket=${TF_STATE_BUCKET}" \
-            -backend-config="prefix=poma/gcp-free-tier"
+            -backend-config="prefix=poma/${DEPLOY_ENVIRONMENT}/gcp-free-tier"
 
       - name: Terraform format check
         run: terraform -chdir=infra/gcp-free-tier fmt -check -recursive
