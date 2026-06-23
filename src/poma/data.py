@@ -8,6 +8,11 @@ import requests
 
 from poma.config import Settings
 
+FMP_UNIVERSE_ENDPOINTS = {
+    "nasdaq100": ("nasdaq-constituent", "historical-nasdaq-constituent"),
+    "sp500": ("sp500-constituent", "historical-sp500-constituent"),
+}
+
 
 class MarketDataClient(Protocol):
     def current_universe_snapshot(self) -> pd.DataFrame:
@@ -28,6 +33,9 @@ class FmpMarketDataClient:
     def __init__(self, settings: Settings) -> None:
         if not settings.fmp_api_key:
             raise ValueError("FMP_API_KEY is required when DATA_PROVIDER=fmp")
+        if settings.universe not in FMP_UNIVERSE_ENDPOINTS:
+            supported = ", ".join(sorted(FMP_UNIVERSE_ENDPOINTS))
+            raise ValueError(f"unsupported FMP universe={settings.universe}; supported={supported}")
         self.settings = settings
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -41,13 +49,15 @@ class FmpMarketDataClient:
         return response.json()
 
     def current_universe_snapshot(self) -> pd.DataFrame:
-        rows = self._get("nasdaq-constituent")
+        current_endpoint, _ = FMP_UNIVERSE_ENDPOINTS[self.settings.universe]
+        rows = self._get(current_endpoint)
         return _normalise_snapshot(rows)
 
     def previous_universe_snapshot(self, days_ago: int) -> pd.DataFrame:
         # Provider-specific historical constituent and market-cap support varies. The default
         # implementation expects a configured endpoint that returns a snapshot from N days ago.
-        rows = self._get("historical-nasdaq-constituent", {"daysAgo": days_ago})
+        _, historical_endpoint = FMP_UNIVERSE_ENDPOINTS[self.settings.universe]
+        rows = self._get(historical_endpoint, {"daysAgo": days_ago})
         return _normalise_snapshot(rows)
 
 
