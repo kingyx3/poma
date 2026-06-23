@@ -17,21 +17,26 @@ This repo is designed to be production-ready for paper trading once CI is green 
 - [ ] Use one small Ubuntu host.
 - [ ] For GCP free-tier deployment, keep Terraform on `e2-micro` with a `pd-standard` boot disk at or below 30 GB.
 - [ ] Run IB Gateway supervised on the host.
+- [ ] Confirm IB Gateway auto-starts after host reboot.
 - [ ] Run `docker compose run --rm poma monitor` every 5 minutes via cron.
 - [ ] Keep `.env` readable only by the service user.
 - [ ] For CI/CD deployment, render `.env` only from GitHub Variables/Secrets.
 - [ ] Rotate IBKR/data-provider/Telegram credentials when needed.
 - [ ] Run `ops/scripts/bootstrap_vps.sh` or use the Terraform startup script.
-- [ ] Run `ops/scripts/deploy.sh` for local build and dry-run smoke test.
+- [ ] Run `ops/scripts/deploy.sh` for local build and forced fixture dry-run smoke test.
 
 ## CI/CD deployment
 
 - [ ] Store all non-secret `.env.example` keys as GitHub Variables.
 - [ ] Store `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT` as GitHub Secrets.
-- [ ] Store `GCP_SERVICE_ACCOUNT_KEY` as a GitHub Secret.
+- [ ] Store `GCP_SERVICE_ACCOUNT_KEY` as a GitHub Secret until Workload Identity Federation is configured.
 - [ ] Store `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, and `TF_STATE_BUCKET` as GitHub Variables.
+- [ ] Store `GCP_BILLING_ACCOUNT_ID` and `GCP_MONTHLY_BUDGET_USD` if Terraform should manage the budget alert.
+- [ ] Keep workflow actions pinned to full commit SHAs.
+- [ ] Keep Terraform formatting enforced with `terraform fmt -check`.
 - [ ] Run the deploy workflow with `terraform_action=plan` before `apply`.
 - [ ] Confirm GitHub Actions uploaded `/opt/poma/.env` and installed `ops/cron/poma.cron`.
+- [ ] Confirm the forced deploy smoke test created a new `reports/rebalance-*.json` file.
 - [ ] Confirm the cron log appears at `/opt/poma/logs/poma-cron.log`.
 
 ## Cost controls
@@ -41,6 +46,8 @@ This repo is designed to be production-ready for paper trading once CI is green 
 - [ ] Keep the boot disk as `pd-standard` and at or below 30 GB.
 - [ ] Keep the region as `us-west1`, `us-central1`, or `us-east1`.
 - [ ] Keep Terraform state in one small US-region GCS bucket.
+- [ ] Keep a monthly budget alert enabled.
+- [ ] Review external IPv4 and outbound network charges after the first deploy.
 - [ ] Do not push images to Artifact Registry for this personal deployment.
 - [ ] Do not create recurring Secret Manager versions for this bot.
 - [ ] Do not add Cloud NAT, Cloud Run, Cloud Scheduler, Pub/Sub, Redis, or managed databases.
