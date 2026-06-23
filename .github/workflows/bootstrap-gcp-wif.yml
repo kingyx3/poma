@@ -165,9 +165,41 @@ jobs:
           }
 
           upsert_variable GCP_PROJECT_ID "${GCP_PROJECT_ID}"
+          upsert_variable GCP_REGION "us-west1"
+          upsert_variable GCP_ZONE "us-west1-b"
+          upsert_variable GCP_VM_NAME "poma-free-tier"
           upsert_variable TF_STATE_BUCKET "${TF_STATE_BUCKET}"
           upsert_variable GCP_WORKLOAD_IDENTITY_PROVIDER "${provider}"
           upsert_variable GCP_SERVICE_ACCOUNT_EMAIL "${service_account}"
+
+          upsert_variable APP_ENV "production"
+          upsert_variable TRADING_MODE "dry_run"
+          upsert_variable ALLOW_LIVE_TRADING "false"
+          upsert_variable MARKET_CALENDAR "NASDAQ"
+          upsert_variable REBALANCE_AFTER_OPEN_MINUTES "10"
+          upsert_variable UNIVERSE "nasdaq100"
+          upsert_variable RANK_LOOKBACK_DAYS "90"
+          upsert_variable MAX_HOLDINGS "30"
+          upsert_variable PORTFOLIO_VALUE_USD "10000"
+          upsert_variable CASH_BUFFER_PCT "0.02"
+          upsert_variable MAX_POSITION_PCT "0.10"
+          upsert_variable MAX_TURNOVER_PCT "0.35"
+          upsert_variable MIN_TRADE_NOTIONAL_USD "25"
+          upsert_variable MIN_WEIGHT_DELTA_PCT "0.01"
+          upsert_variable ORDER_TYPE "limit"
+          upsert_variable ALLOW_MARKET_ORDERS "false"
+          upsert_variable LIMIT_OFFSET_BPS "10"
+          upsert_variable MAX_ORDER_NOTIONAL_USD "2000"
+          upsert_variable MAX_DAILY_TRADES "30"
+          upsert_variable ORDER_STATUS_TIMEOUT_SECONDS "60"
+          upsert_variable CANCEL_STALE_ORDERS "true"
+          upsert_variable DATA_PROVIDER "fixture"
+          upsert_variable FMP_BASE_URL "https://financialmodelingprep.com/stable"
+          upsert_variable IBKR_HOST "127.0.0.1"
+          upsert_variable IBKR_PORT "7497"
+          upsert_variable IBKR_CLIENT_ID "101"
+          upsert_variable STATE_DIR "state"
+          upsert_variable REPORT_DIR "reports"
 
       - name: Print cleanup reminder
         if: ${{ inputs.terraform_action == 'apply' }}
@@ -179,4 +211,5 @@ jobs:
           1. Delete the GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY GitHub Secret.
           2. Delete or disable the temporary bootstrap service account key in GCP IAM.
           3. Future deploys use generated WIF variables and do not need a GCP JSON key.
+          4. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID before the first deploy.
           EOF
