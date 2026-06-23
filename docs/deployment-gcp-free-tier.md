@@ -11,6 +11,7 @@ Terraform creates only the minimum GCP resources needed for the bot:
 - One small dedicated VPC/subnet.
 - One firewall rule that allows SSH only through IAP TCP forwarding.
 - A generated GCS Terraform state bucket during bootstrap.
+- A supervised IB Gateway service with optional IBC automation on the VM.
 - No Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, or managed database.
 
 Keep `GCP_REGION` set to one of the Compute Engine free-tier regions: `us-west1`, `us-central1`, or `us-east1`.
@@ -33,6 +34,8 @@ After bootstrap succeeds, add only the runtime secrets that cannot be generated:
 | `TELEGRAM_CHAT_ID` | Always | Mandatory alerts. |
 | `FMP_API_KEY` | When `DATA_PROVIDER=fmp` | Leave unset for fixture-only dry runs. |
 | `IBKR_ACCOUNT` | When `TRADING_MODE=paper` or `live` | Required by the deploy renderer for broker modes. |
+
+Do not store broker login material in GitHub. Configure IBC on the VM after bootstrap and deploy.
 
 ## One-time WIF bootstrap
 
@@ -63,6 +66,7 @@ Generated GitHub Variables include:
 
 - Re-running **Bootstrap GCP Workload Identity Federation** with the same project, state bucket, and GitHub repository should converge against the same Terraform state.
 - Re-running **Deploy GCP e2-micro VM** should converge infrastructure through Terraform, then overwrite `/opt/poma` with the latest package, replace `/opt/poma/.env`, run the fixture dry-run smoke test, and reinstall the same crontab.
+- Recreating the VM reruns the startup script, reinstalls missing host packages, installs IB Gateway and IBC when missing, and reenables the systemd service.
 - Changing bootstrap identifiers such as pool id, provider id, service account id, project id, or state bucket intentionally creates or targets different infrastructure and should be treated as a migration.
 
 ## Manual budget alert setup
@@ -86,15 +90,27 @@ On apply, GitHub Actions:
 7. Runs `ops/scripts/deploy.sh`, which forces a fixture-backed dry-run rebalance and verifies that a report was created.
 8. Installs `ops/cron/poma.cron`.
 
-## IB Gateway supervision
+## IB Gateway and IBC supervision
 
-This Terraform path does not install IB Gateway because setup varies by account, license flow, and whether you use IB Gateway or Trader Workstation. Before paper or live trading:
+The VM startup script installs stable Linux IB Gateway under `/opt/ibgateway`, Linux IBC under `/opt/ibc`, headless display packages, and a `systemd` service named `ibgateway.service`.
 
-- Install IB Gateway on the same host.
-- Run it under a supervised service such as `systemd`.
-- Confirm it auto-starts after reboot.
-- Confirm POMA can connect to the configured `IBKR_HOST`, `IBKR_PORT`, and `IBKR_CLIENT_ID`.
-- Confirm paper mode works for at least one full trading week before considering live mode.
+By default, the service starts raw IB Gateway. Once `/home/poma/ibc/config.ini` exists, the same service starts Gateway through IBC instead.
+
+One-time setup on the VM:
+
+```bash
+gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
+sudo poma-configure-ibc
+sudo systemctl status ibgateway --no-pager
+```
+
+The helper writes `/home/poma/ibc/config.ini` with `0600` permissions and restarts `ibgateway.service`. Use IAP tunnelling to localhost VNC port `5900` if Gateway needs GUI interaction.
+
+Before paper or live trading:
+
+- Confirm `ibgateway.service` is active after reboot.
+- Confirm the Gateway API socket is reachable on `127.0.0.1:7497` unless you changed `IBKR_PORT`.
+- Run paper mode for at least one full trading week before considering live mode.
 
 ## Manual SSH
 
