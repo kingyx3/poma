@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import time
 from typing import Protocol
 
-from ib_insync import IB, LimitOrder, MarketOrder, Stock
+from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
 from poma.config import OrderType, Settings, TradingMode
 from poma.models import CurrentPosition, OrderResult, ProposedTrade
+
+DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 
 
 class Broker(Protocol):
@@ -88,24 +91,48 @@ class IbkrBroker:
                 if self.settings.ibkr_account:
                     order.account = self.settings.ibkr_account
                 submitted = ib.placeOrder(contract, order)
-                ib.sleep(1.0)
-                status = submitted.orderStatus
-                results.append(
-                    OrderResult(
-                        ticker=proposed.ticker,
-                        side=proposed.side,
-                        quantity=proposed.quantity,
-                        notional=proposed.notional,
-                        order_id=getattr(submitted.order, "orderId", None),
-                        status=status.status or "submitted",
-                        filled=float(status.filled or 0.0),
-                        average_fill_price=_none_if_zero(status.avgFillPrice),
-                        message=None,
-                    )
-                )
+                self._wait_for_terminal_status(ib, submitted)
+                results.append(self._order_result(proposed, submitted))
         finally:
             ib.disconnect()
         return results
+
+    def _wait_for_terminal_status(self, ib: IB, trade: Trade) -> None:
+        deadline = time.monotonic() + self.settings.order_status_timeout_seconds
+        while time.monotonic() < deadline:
+            status = trade.orderStatus.status
+            if trade.isDone() or status in DONE_STATUSES:
+                return
+            ib.sleep(1.0)
+
+        if self.settings.cancel_stale_orders:
+            ib.cancelOrder(trade.order)
+            cancel_deadline = time.monotonic() + min(10, self.settings.order_status_timeout_seconds)
+            while time.monotonic() < cancel_deadline:
+                status = trade.orderStatus.status
+                if trade.isDone() or status in DONE_STATUSES:
+                    return
+                ib.sleep(1.0)
+
+    def _order_result(self, proposed: ProposedTrade, trade: Trade) -> OrderResult:
+        status = trade.orderStatus
+        final_status = status.status or "submitted"
+        message = None
+        if final_status not in DONE_STATUSES:
+            message = "order did not reach terminal status before timeout"
+            if self.settings.cancel_stale_orders:
+                message += "; cancel requested"
+        return OrderResult(
+            ticker=proposed.ticker,
+            side=proposed.side,
+            quantity=proposed.quantity,
+            notional=proposed.notional,
+            order_id=getattr(trade.order, "orderId", None),
+            status=final_status,
+            filled=float(status.filled or 0.0),
+            average_fill_price=_none_if_zero(status.avgFillPrice),
+            message=message,
+        )
 
     def _build_order(self, trade: ProposedTrade) -> MarketOrder | LimitOrder:
         if self.settings.order_type == OrderType.MARKET:
