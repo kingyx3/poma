@@ -59,7 +59,7 @@ The deploy workflow does not store secrets in GCP Secret Manager. Instead, it re
 
 Runtime values should be split as follows:
 
-- GitHub Variables: non-secret values such as trading mode, risk limits, calendar, provider mode, and local paths.
+- GitHub Variables: non-secret values such as trading mode, risk limits, calendar, provider mode, local paths, and WIF provider metadata.
 - GitHub Secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT`.
 
 See [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md) for the full GitHub Variables/Secrets list.
@@ -68,8 +68,7 @@ See [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md) for the full Gi
 
 Required for GCP VM deployment:
 
-- `GCP_SERVICE_ACCOUNT_KEY` secret.
-- `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, and `TF_STATE_BUCKET` variables.
+- `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, `TF_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and `GCP_SERVICE_ACCOUNT_EMAIL` variables.
 - Every runtime key from `.env.example`, supplied through GitHub Variables or Secrets.
 
-No Artifact Registry or Secret Manager configuration is required.
+No Artifact Registry, Secret Manager, or long-lived GCP JSON key is required.
