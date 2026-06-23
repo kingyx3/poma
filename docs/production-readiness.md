@@ -1,61 +1,47 @@
 # Production readiness checklist
 
-This repo is designed to be production-ready for paper trading once CI is green and the VPS dry-run works. For live money, complete the live-trading gates below.
+This repo is production-ready for **dry-run deployment** once CI is green and the deploy smoke test passes. Treat **paper trading** as the next validation stage. Do not use live money until the live gates below are complete.
 
-## Before any live trading
+## Required before paper mode
 
-- [ ] Backtest against QQQ/QQQM with historical constituents and historical market caps.
-- [ ] Validate the data-provider endpoints and field meanings.
+- [ ] Bootstrap WIF using only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
+- [ ] Delete the bootstrap secret and disable/delete the temporary GCP key after bootstrap.
+- [ ] Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+- [ ] Deploy with `TRADING_MODE=dry_run` first.
+- [ ] Confirm the deploy smoke test created a new `reports/rebalance-*.json` file.
+- [ ] Run `sudo poma-configure-ibc` on the VM.
+- [ ] Confirm `ibgateway.service` is active after reboot.
+- [ ] Confirm `127.0.0.1:7497` is reachable on the VM.
+- [ ] Add `IBKR_ACCOUNT` before switching to `TRADING_MODE=paper`.
+
+## Required before live mode
+
+- [ ] Backtest against QQQ/QQQM or another explicit benchmark with historical constituents and historical market caps.
+- [ ] Validate data-provider endpoints and field meanings.
 - [ ] Run at least one full week in `dry_run`.
 - [ ] Run at least one full week in `paper`.
-- [ ] Confirm IB Gateway reconnect behavior after VPS reboot.
-- [ ] Confirm order type policy and fractional-share behavior in your IBKR account.
+- [ ] Review IBKR orders/fills against POMA reports.
+- [ ] Confirm order type policy and fractional-share behavior in the IBKR account.
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
-
-## VPS setup
-
-- [ ] Use one small Ubuntu VPS.
-- [ ] Run IB Gateway supervised on the VPS.
-- [ ] Run `docker compose run --rm poma monitor` every 5 minutes via cron.
-- [ ] Keep `.env` local and readable only by the service user.
-- [ ] Rotate IBKR/data-provider credentials when needed.
-- [ ] Run `ops/scripts/bootstrap_vps.sh` or manually perform equivalent setup.
-- [ ] Run `ops/scripts/deploy.sh` for local build and dry-run smoke test.
+- [ ] Set `ALLOW_LIVE_TRADING=true` intentionally.
+- [ ] Manually review the latest rebalance report before the first live run.
 
 ## Cost controls
 
-- [ ] Do not enable cloud deploy workflows unless you deliberately reintroduce cloud infra.
-- [ ] Do not push images to Artifact Registry for this personal deployment.
-- [ ] Do not create recurring Secret Manager versions for this bot.
-- [ ] Keep reports/logs locally and prune them periodically.
-- [ ] Use one VPS and local Docker builds.
+- [ ] Use exactly one VM.
+- [ ] Keep the VM as `e2-micro`.
+- [ ] Keep the boot disk as `pd-standard` and at or below 30 GB.
+- [ ] Keep the region as `us-west1`, `us-central1`, or `us-east1`.
+- [ ] Keep Terraform state in one small US-region GCS bucket.
+- [ ] Keep a monthly Cloud Billing budget alert enabled.
+- [ ] Review external IPv4 and outbound network charges after the first deploy.
+- [ ] Do not add Artifact Registry, Secret Manager, Cloud NAT, Cloud Run, Cloud Scheduler, Pub/Sub, Redis, or managed databases unless intentionally accepting their cost.
 
-## Risk controls
+## Trading safeguards
 
-- [ ] Keep `TRADING_MODE=dry_run` initially.
-- [ ] Move to `paper` before `live`.
-- [ ] Use `ORDER_TYPE=limit` by default.
+- [ ] Keep `ORDER_TYPE=limit` by default.
 - [ ] Keep `ALLOW_MARKET_ORDERS=false` unless explicitly intentional.
-- [ ] Set `ALLOW_LIVE_TRADING=true` only when intentionally going live.
-- [ ] Keep `MAX_ORDER_NOTIONAL_USD` low for early live tests.
-- [ ] Keep `MAX_DAILY_TRADES` below your operational tolerance.
-- [ ] Keep `MAX_POSITION_PCT` below your concentration tolerance.
-- [ ] Keep `MAX_TURNOVER_PCT` low enough to avoid noisy churn.
-- [ ] Keep `MIN_WEIGHT_DELTA_PCT` high enough to avoid unnecessary daily trades.
-- [ ] Review every report before live mode.
+- [ ] Keep `MAX_ORDER_NOTIONAL_USD`, `MAX_DAILY_TRADES`, `MAX_POSITION_PCT`, and `MAX_TURNOVER_PCT` within your operational tolerance.
+- [ ] Review any `failed`, blocked, timed-out, cancelled, or partial execution result manually.
 
-## Alerts and reconciliation
-
-- [ ] Configure Telegram credentials before any run.
-- [ ] Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; the app fails fast without them.
-- [ ] Send a test alert before enabling cron.
-- [ ] Save every rebalance report.
-- [ ] Review IBKR orders/fills after every paper/live run.
-- [ ] Treat any `failed` state as manual-review only.
-- [ ] Compare the report's `execution_results` against IBKR activity before scaling capital.
-
-## Do we need Ansible?
-
-No for this one-VPS setup. A shell bootstrap script plus Docker Compose is simpler and cheaper.
-
-Use Ansible later only if you need repeatable provisioning across multiple VPS hosts, disaster-recovery rebuilds, or stricter configuration drift control.
+No Ansible is needed for this one-host setup. Terraform startup plus Docker Compose is simpler and cheaper.

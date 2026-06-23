@@ -3,12 +3,14 @@
 ## Chosen architecture
 
 ```text
-Ubuntu VPS
+Single Ubuntu host
   -> cron every 5 minutes
   -> POMA monitor command
-  -> IB Gateway on same VPS
+  -> IB Gateway on same host
   -> IBKR
 ```
+
+The host can be any small VPS. The included Terraform path provisions a GCP free-tier-aligned `e2-micro` VM for this same one-host design.
 
 The app checks the Nasdaq/NYSE market calendar on every run and only rebalances when:
 
@@ -18,26 +20,47 @@ The app checks the Nasdaq/NYSE market calendar on every run and only rebalances 
 
 This avoids hardcoding Singapore or New York cron times and handles daylight saving time through the market-calendar library.
 
+## GCP e2-micro deployment path
+
+```text
+GitHub Actions
+  -> render .env from GitHub Variables/Secrets
+  -> Terraform apply for one GCP e2-micro VM
+  -> upload repo package + .env over IAP SSH
+  -> run Docker Compose dry-run smoke test
+  -> install cron
+```
+
+Terraform creates only:
+
+- One `e2-micro` VM.
+- One standard persistent boot disk, capped at 30 GB.
+- One dedicated VPC/subnet.
+- One SSH firewall rule limited to the IAP TCP forwarding range.
+
+The deploy path intentionally does not use Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, Cloud NAT, Redis, or a managed database.
+
 ## Why this is simpler and cheaper
 
-Removed by design:
+The only always-on component is the host you already need for IB Gateway. Docker images are built locally on the host, `.env` is a local file created from GitHub Actions, and cron remains the scheduler.
+
+Removed or avoided by design:
 
 - Cloud Run
 - Cloud Scheduler
 - Artifact Registry
 - Secret Manager
-- Terraform
 - Remote executor API
-- Multi-environment deployment machinery
+- Multi-service deployment machinery
 
-This eliminates the main sources of accidental cloud bill growth. The only always-on component is the VPS you already need for IB Gateway.
+This eliminates the main sources of accidental cloud bill growth for a personal deployment.
 
 ## Runtime files
 
 ```text
 state/rebalance_state.json   # last completed trading session
 reports/*.json               # generated rebalance reports
-.env                         # local secrets/config; never commit
+.env                         # host-local secrets/config; never commit
 ```
 
 ## Failure modes
@@ -49,4 +72,6 @@ reports/*.json               # generated rebalance reports
 | Repeated cron invocations | State file allows only one rebalance per session. |
 | Excess turnover | Turnover guard blocks execution. |
 | Accidental live trading | `ALLOW_LIVE_TRADING=true` required for live mode. |
-| Cloud cost growth | No cloud runtime, registry, scheduler, or secret store. |
+| Missing deploy config | CI/CD `.env` rendering fails before deployment. |
+| Public SSH exposure | Terraform only allows SSH through IAP TCP forwarding. |
+| Cloud cost growth | One VM, no registry, no secret store, no scheduler, no managed database. |

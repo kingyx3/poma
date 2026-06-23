@@ -1,0 +1,215 @@
+name: Bootstrap GCP Workload Identity Federation
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: Optional override. Defaults to the project_id inside the bootstrap key.
+        required: false
+        type: string
+      tf_state_bucket:
+        description: Optional override. Defaults to poma-tf-state-<project-number>.
+        required: false
+        type: string
+      state_bucket_location:
+        description: GCS location for the generated Terraform state bucket.
+        required: false
+        type: string
+        default: us-west1
+      github_repository:
+        description: GitHub repository allowed to deploy through WIF.
+        required: true
+        type: string
+        default: kingyx3/poma
+      terraform_action:
+        description: Run Terraform plan only, or apply and write generated GitHub Variables.
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+        default: plan
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: poma-gcp-wif-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Bootstrap WIF
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      GITHUB_REPOSITORY_ALLOWED: ${{ inputs.github_repository }}
+      STATE_BUCKET_LOCATION: ${{ inputs.state_bucket_location }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Validate bootstrap key
+        run: |
+          set -euo pipefail
+          if [ -z "${GOOGLE_BOOTSTRAP_CREDENTIALS:-}" ]; then
+            echo "::error::Missing GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY secret"
+            exit 1
+          fi
+        env:
+          GOOGLE_BOOTSTRAP_CREDENTIALS: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Authenticate with temporary bootstrap key
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f
+        with:
+          credentials_json: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a
+
+      - name: Resolve generated bootstrap values
+        run: |
+          set -euo pipefail
+          key_project_id="$(python -c 'import json, os; print(json.loads(os.environ["GOOGLE_BOOTSTRAP_CREDENTIALS"])["project_id"])')"
+          project_id="${INPUT_PROJECT_ID:-${key_project_id}}"
+          if [ -z "${project_id}" ]; then
+            echo "::error::Unable to resolve GCP project id"
+            exit 1
+          fi
+          project_number="$(gcloud projects describe "${project_id}" --format='value(projectNumber)')"
+          state_bucket="${INPUT_TF_STATE_BUCKET:-poma-tf-state-${project_number}}"
+
+          echo "GCP_PROJECT_ID=${project_id}" >> "${GITHUB_ENV}"
+          echo "GCP_PROJECT_NUMBER=${project_number}" >> "${GITHUB_ENV}"
+          echo "TF_STATE_BUCKET=${state_bucket}" >> "${GITHUB_ENV}"
+          echo "Resolved project_id=${project_id} project_number=${project_number} tf_state_bucket=${state_bucket}"
+        env:
+          GOOGLE_BOOTSTRAP_CREDENTIALS: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
+          INPUT_PROJECT_ID: ${{ inputs.project_id }}
+          INPUT_TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
+
+      - name: Enable prerequisite APIs
+        run: |
+          gcloud services enable \
+            cloudresourcemanager.googleapis.com \
+            compute.googleapis.com \
+            iam.googleapis.com \
+            iamcredentials.googleapis.com \
+            iap.googleapis.com \
+            serviceusage.googleapis.com \
+            storage.googleapis.com \
+            sts.googleapis.com \
+            --project="${GCP_PROJECT_ID}"
+
+      - name: Create Terraform state bucket
+        run: |
+          set -euo pipefail
+          if gcloud storage buckets describe "gs://${TF_STATE_BUCKET}" --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+            echo "Terraform state bucket already exists: gs://${TF_STATE_BUCKET}"
+          else
+            gcloud storage buckets create "gs://${TF_STATE_BUCKET}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${STATE_BUCKET_LOCATION}" \
+              --uniform-bucket-level-access
+          fi
+          gcloud storage buckets update "gs://${TF_STATE_BUCKET}" --versioning --project="${GCP_PROJECT_ID}"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: |
+          terraform -chdir=infra/gcp-wif-bootstrap init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="prefix=poma/gcp-wif-bootstrap"
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive infra/gcp-wif-bootstrap
+
+      - name: Terraform validate
+        run: terraform -chdir=infra/gcp-wif-bootstrap validate
+
+      - name: Terraform plan
+        run: |
+          terraform -chdir=infra/gcp-wif-bootstrap plan -out=tfplan \
+            -var="project_id=${GCP_PROJECT_ID}" \
+            -var="github_repository=${GITHUB_REPOSITORY_ALLOWED}"
+
+      - name: Terraform apply
+        if: ${{ inputs.terraform_action == 'apply' }}
+        run: terraform -chdir=infra/gcp-wif-bootstrap apply -auto-approve tfplan
+
+      - name: Write generated GitHub Variables
+        if: ${{ inputs.terraform_action == 'apply' }}
+        run: |
+          set -euo pipefail
+          provider="$(terraform -chdir=infra/gcp-wif-bootstrap output -raw workload_identity_provider)"
+          service_account="$(terraform -chdir=infra/gcp-wif-bootstrap output -raw service_account_email)"
+
+          upsert_variable() {
+            local name="$1"
+            local value="$2"
+            if gh variable set "${name}" --repo "${GITHUB_REPOSITORY}" --body "${value}"; then
+              echo "Set ${name}"
+            else
+              echo "::error::Failed to set ${name}"
+              exit 1
+            fi
+          }
+
+          upsert_variable GCP_PROJECT_ID "${GCP_PROJECT_ID}"
+          upsert_variable GCP_REGION "us-west1"
+          upsert_variable GCP_ZONE "us-west1-b"
+          upsert_variable GCP_VM_NAME "poma-free-tier"
+          upsert_variable TF_STATE_BUCKET "${TF_STATE_BUCKET}"
+          upsert_variable GCP_WORKLOAD_IDENTITY_PROVIDER "${provider}"
+          upsert_variable GCP_SERVICE_ACCOUNT_EMAIL "${service_account}"
+
+          upsert_variable APP_ENV "production"
+          upsert_variable TRADING_MODE "dry_run"
+          upsert_variable ALLOW_LIVE_TRADING "false"
+          upsert_variable MARKET_CALENDAR "NASDAQ"
+          upsert_variable REBALANCE_AFTER_OPEN_MINUTES "10"
+          upsert_variable UNIVERSE "nasdaq100"
+          upsert_variable RANK_LOOKBACK_DAYS "90"
+          upsert_variable MAX_HOLDINGS "30"
+          upsert_variable PORTFOLIO_VALUE_USD "10000"
+          upsert_variable CASH_BUFFER_PCT "0.02"
+          upsert_variable MAX_POSITION_PCT "0.10"
+          upsert_variable MAX_TURNOVER_PCT "0.35"
+          upsert_variable MIN_TRADE_NOTIONAL_USD "25"
+          upsert_variable MIN_WEIGHT_DELTA_PCT "0.01"
+          upsert_variable ORDER_TYPE "limit"
+          upsert_variable ALLOW_MARKET_ORDERS "false"
+          upsert_variable LIMIT_OFFSET_BPS "10"
+          upsert_variable MAX_ORDER_NOTIONAL_USD "2000"
+          upsert_variable MAX_DAILY_TRADES "30"
+          upsert_variable ORDER_STATUS_TIMEOUT_SECONDS "60"
+          upsert_variable CANCEL_STALE_ORDERS "true"
+          upsert_variable DATA_PROVIDER "fixture"
+          upsert_variable FMP_BASE_URL "https://financialmodelingprep.com/stable"
+          upsert_variable IBKR_HOST "127.0.0.1"
+          upsert_variable IBKR_PORT "7497"
+          upsert_variable IBKR_CLIENT_ID "101"
+          upsert_variable STATE_DIR "state"
+          upsert_variable REPORT_DIR "reports"
+
+      - name: Print cleanup reminder
+        if: ${{ inputs.terraform_action == 'apply' }}
+        run: |
+          cat <<'EOF'
+          WIF bootstrap completed.
+
+          Cleanup now:
+          1. Delete the GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY GitHub Secret.
+          2. Delete or disable the temporary bootstrap service account key in GCP IAM.
+          3. Future deploys use generated WIF variables and do not need a GCP JSON key.
+          4. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID before the first deploy.
+          EOF
