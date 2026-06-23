@@ -32,22 +32,33 @@ gcloud storage buckets create gs://<unique-tf-state-bucket> \
   --uniform-bucket-level-access
 ```
 
+The bootstrap and VM deployment workflows both use this state bucket with separate prefixes:
+
+- `poma/gcp-wif-bootstrap`
+- `poma/gcp-free-tier`
+
 ## One-time WIF bootstrap
 
 The recommended path is the manual GitHub Actions workflow:
 
-1. Create a temporary GCP bootstrap service account key with permissions to manage IAM, service accounts, Workload Identity Federation, Service Usage, and project IAM bindings.
+1. Create a temporary GCP bootstrap service account key with the permissions listed in [`../infra/gcp-wif-bootstrap/README.md`](../infra/gcp-wif-bootstrap/README.md).
 2. Add it as the `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Secret.
 3. Open **Actions** → **Bootstrap GCP Workload Identity Federation**.
-4. Run with `terraform_action=plan` first.
+4. Run with `terraform_action=plan` first, passing `project_id`, `tf_state_bucket`, and `github_repository`.
 5. Rerun with `terraform_action=apply` after reviewing the plan.
-6. The workflow writes `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and `GCP_SERVICE_ACCOUNT_EMAIL` into GitHub Variables.
+6. The workflow writes `GCP_PROJECT_ID`, `TF_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and `GCP_SERVICE_ACCOUNT_EMAIL` into GitHub Variables.
 7. Delete the `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Secret.
 8. Delete or disable the temporary bootstrap key in GCP IAM.
 
 This creates the GitHub deployer service account, grants its deployment roles, and lets future GitHub Actions runs authenticate through OIDC instead of a long-lived JSON key.
 
 Cloud Shell/local Terraform is still supported; see [`../infra/gcp-wif-bootstrap/README.md`](../infra/gcp-wif-bootstrap/README.md).
+
+## Idempotency expectations
+
+- Re-running **Bootstrap GCP Workload Identity Federation** with the same `project_id`, `tf_state_bucket`, and `github_repository` should converge against the same Terraform state.
+- Re-running **Deploy GCP e2-micro VM** should converge infrastructure through Terraform, then overwrite `/opt/poma` with the latest package, replace `/opt/poma/.env`, run the fixture dry-run smoke test, and reinstall the same crontab.
+- Changing bootstrap identifiers such as pool id, provider id, service account id, project id, or state bucket intentionally creates or targets different infrastructure and should be treated as a migration.
 
 ## Manual budget alert setup
 
@@ -63,7 +74,7 @@ Terraform and deployment variables:
 | `GCP_REGION` | `us-west1` | Must be `us-west1`, `us-central1`, or `us-east1`. |
 | `GCP_ZONE` | `us-west1-b` | Must be in `GCP_REGION`. |
 | `GCP_VM_NAME` | `poma-free-tier` | Compute Engine instance name. |
-| `TF_STATE_BUCKET` | `my-poma-tf-state` | Existing GCS bucket for Terraform state. |
+| `TF_STATE_BUCKET` | `my-poma-tf-state` | Existing GCS bucket for Terraform state. The WIF bootstrap workflow can write this automatically. |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Terraform output | Full WIF provider resource name. The WIF bootstrap workflow can write this automatically. |
 | `GCP_SERVICE_ACCOUNT_EMAIL` | Terraform output | Deployer service account email. The WIF bootstrap workflow can write this automatically. |
 
