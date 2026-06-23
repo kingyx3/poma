@@ -137,7 +137,7 @@ jobs:
             -var="instance_name=${GCP_VM_NAME}"
           )
           if [ -n "${GCP_BILLING_ACCOUNT_ID:-}" ]; then
-            terraform_args+=("-var=billing_account_id=${GCP_BILLING_ACCOUNT_ID}")
+            terraform_args+=("-var=budget_billing_account=${GCP_BILLING_ACCOUNT_ID}")
           fi
           if [ -n "${GCP_MONTHLY_BUDGET_USD:-}" ]; then
             terraform_args+=("-var=monthly_budget_usd=${GCP_MONTHLY_BUDGET_USD}")
