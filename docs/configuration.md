@@ -13,7 +13,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same host.
-- Data-provider subscription that supports Nasdaq-100 constituents, market caps, and prices if using `DATA_PROVIDER=fmp`.
+- Data-provider subscription that supports S&P 500 constituents, market caps, and prices if using `DATA_PROVIDER=fmp`.
 - Telegram bot and chat ID for mandatory run alerts.
 
 ## Environment variables
@@ -28,20 +28,20 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 | `DATA_PROVIDER` | yes | `fixture` | Use `fmp` only after validating endpoint output. |
 | `FMP_API_KEY` | `fmp` only | empty | Store as a GitHub Secret for CI/CD deployment. |
 | `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override if your plan uses different endpoints. |
-| `UNIVERSE` | yes | `nasdaq100` | This scaffold is Nasdaq-100 focused. |
+| `UNIVERSE` | yes | `sp500` | Default strategy ranks S&P 500 constituents. Supported FMP universes: `sp500`, `nasdaq100`. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
-| `MAX_HOLDINGS` | yes | `30` | Hold only the top names by rank improvement score. |
+| `MAX_HOLDINGS` | yes | `100` | Hold only the top names by rank improvement score. |
 | `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. |
 | `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap. |
 | `MAX_TURNOVER_PCT` | yes | `0.35` | Blocks excessive rebalance churn. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Avoids tiny uneconomic trades. |
-| `MIN_WEIGHT_DELTA_PCT` | yes | `0.01` | Avoids churn from tiny target changes. |
+| `MIN_WEIGHT_DELTA_PCT` | yes | `0.0025` | Avoids churn from tiny target changes while allowing smaller top-100 positions. |
 | `ORDER_TYPE` | yes | `limit` | Use `limit` by default. |
 | `ALLOW_MARKET_ORDERS` | live market only | `false` | Explicit opt-in for live market orders. |
 | `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset from reference price. |
 | `MAX_ORDER_NOTIONAL_USD` | yes | `2000` | Blocks unexpectedly large orders. |
-| `MAX_DAILY_TRADES` | yes | `30` | Blocks unexpectedly high trade count. |
+| `MAX_DAILY_TRADES` | yes | `100` | Allows a full top-100 rebalance while still capping trade count. |
 | `ORDER_STATUS_TIMEOUT_SECONDS` | yes | `60` | Time to wait for broker order status before marking follow-up needed. |
 | `CANCEL_STALE_ORDERS` | yes | `true` | Request cancel when an order does not reach a terminal status in time. |
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
