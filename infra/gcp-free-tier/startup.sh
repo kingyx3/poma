@@ -21,6 +21,7 @@ apt-get install -y \
   netcat-openbsd \
   openjdk-17-jre-headless \
   procps \
+  python3 \
   unzip \
   x11vnc \
   xterm \
@@ -59,6 +60,61 @@ if [ ! -x "$${IBC_DIR}/gatewaystart.sh" ]; then
 fi
 chown -R "$${APP_USER}:$${APP_USER}" "$${IBC_DIR}"
 
+configure_ibc_launcher() {
+  local gateway_jars_dir
+  local gateway_major_version
+  local gateway_tws_path
+
+  gateway_jars_dir="$$(find "$${IB_GATEWAY_DIR}" -type d -path '*/ibgateway/[0-9]*/jars' | sort -V | tail -n1)"
+  if [ -z "$${gateway_jars_dir}" ]; then
+    echo "Unable to find installed IB Gateway jars under $${IB_GATEWAY_DIR}" >&2
+    return 1
+  fi
+
+  gateway_major_version="$$(basename "$$(dirname "$${gateway_jars_dir}")")"
+  gateway_tws_path="$$(dirname "$$(dirname "$$(dirname "$${gateway_jars_dir}")")")"
+
+  python3 - "$${IBC_DIR}/gatewaystart.sh" "$${gateway_major_version}" "$${gateway_tws_path}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+major = sys.argv[2]
+tws_path = sys.argv[3]
+replacements = {
+    "TWS_MAJOR_VRSN": major,
+    "IBC_INI": "/home/poma/ibc/config.ini",
+    "TRADING_MODE": "",
+    "TWOFA_TIMEOUT_ACTION": "exit",
+    "IBC_PATH": "/opt/ibc",
+    "TWS_PATH": tws_path,
+    "TWS_SETTINGS_PATH": "/home/poma/Jts",
+    "LOG_PATH": "/home/poma/ibc/logs",
+    "TWSUSERID": "",
+    "TWSPASSWORD": "",
+    "FIXUSERID": "",
+    "FIXPASSWORD": "",
+    "JAVA_PATH": "",
+    "HIDE": "YES",
+}
+text = path.read_text(encoding="utf-8")
+for key, value in replacements.items():
+    lines = text.splitlines()
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            replaced = True
+            break
+    if not replaced:
+        lines.insert(0, f"{key}={value}")
+    text = "\n".join(lines) + "\n"
+path.write_text(text, encoding="utf-8")
+PY
+}
+configure_ibc_launcher
+install -d -m 700 -o "$${APP_USER}" -g "$${APP_USER}" /home/"$${APP_USER}"/ibc/logs
+
 cat >/usr/local/bin/poma-configure-ibc <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -83,7 +139,7 @@ if [ "$${trading_mode}" != "paper" ] && [ "$${trading_mode}" != "live" ]; then
   exit 1
 fi
 
-install -d -m 700 -o poma -g poma "$${IBC_HOME}"
+install -d -m 700 -o poma -g poma "$${IBC_HOME}" "$${IBC_HOME}/logs"
 if [ ! -f "$${IBC_CONFIG}" ]; then
   install -m 600 -o poma -g poma "$${IBC_DIR}/config.ini" "$${IBC_CONFIG}"
 fi
@@ -91,11 +147,16 @@ fi
 set_ini() {
   local key="$1"
   local value="$2"
-  if grep -q "^$${key}=" "$${IBC_CONFIG}"; then
-    sed -i "s|^$${key}=.*|$${key}=$${value}|" "$${IBC_CONFIG}"
-  else
-    printf '%s=%s\n' "$${key}" "$${value}" >> "$${IBC_CONFIG}"
-  fi
+  local tmp
+  tmp="$$(mktemp)"
+  awk -v key="$${key}" -v value="$${value}" '
+    BEGIN { done = 0 }
+    index($0, key "=") == 1 { print key "=" value; done = 1; next }
+    { print }
+    END { if (!done) print key "=" value }
+  ' "$${IBC_CONFIG}" > "$${tmp}"
+  cat "$${tmp}" > "$${IBC_CONFIG}"
+  rm -f "$${tmp}"
 }
 
 set_ini IbLoginId "$${ib_login_id}"
@@ -126,7 +187,7 @@ export IBC_DIR="$${IBC_DIR:-/opt/ibc}"
 export IB_GATEWAY_VNC_PORT="$${IB_GATEWAY_VNC_PORT:-5900}"
 export TWS_SETTINGS_PATH="$${TWS_SETTINGS_PATH:-/home/poma/Jts}"
 
-mkdir -p "$${HOME}/Jts" "$${HOME}/ibc" /tmp/poma-ibgateway
+mkdir -p "$${HOME}/Jts" "$${HOME}/ibc/logs" /tmp/poma-ibgateway
 
 cleanup() {
   jobs -p | xargs -r kill || true
@@ -147,7 +208,7 @@ x11vnc \
 
 if [ -x "$${IBC_DIR}/gatewaystart.sh" ] && [ -s "$${HOME}/ibc/config.ini" ]; then
   cd "$${IBC_DIR}"
-  exec "$${IBC_DIR}/gatewaystart.sh"
+  exec "$${IBC_DIR}/gatewaystart.sh" -inline
 fi
 
 exec "$${IB_GATEWAY_DIR}/ibgateway"
