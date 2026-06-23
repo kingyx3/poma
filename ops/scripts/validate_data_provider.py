@@ -22,10 +22,11 @@ def validate_snapshot(name: str, frame: pd.DataFrame) -> list[str]:
     if len(frame) < MIN_EXPECTED_ROWS:
         errors.append(f"{name} snapshot has only {len(frame)} rows")
 
-    if frame["ticker"].isna().any() or (frame["ticker"].astype(str).str.strip() == "").any():
+    tickers = frame["ticker"].astype(str).str.strip()
+    if frame["ticker"].isna().any() or (tickers == "").any():
         errors.append(f"{name} snapshot has empty tickers")
 
-    if frame["ticker"].duplicated().any():
+    if tickers.duplicated().any():
         errors.append(f"{name} snapshot has duplicate tickers")
 
     for column in ["market_cap", "price"]:
