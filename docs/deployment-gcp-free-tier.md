@@ -10,116 +10,64 @@ Terraform creates only the minimum GCP resources needed for the bot:
 - One 30 GB `pd-standard` boot disk.
 - One small dedicated VPC/subnet.
 - One firewall rule that allows SSH only through IAP TCP forwarding.
+- A generated GCS Terraform state bucket during bootstrap.
 - No Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, or managed database.
 
 Keep `GCP_REGION` set to one of the Compute Engine free-tier regions: `us-west1`, `us-central1`, or `us-east1`.
 
-> Cost note: the VM is free-tier-aligned, not guaranteed zero-cost. External IPv4 addresses and outbound network usage can still create small charges. Keep a budget alert enabled and review the bill after the first deploy.
+> Cost note: the VM is free-tier-aligned, not guaranteed zero-cost. External IPv4 addresses, outbound network usage, and the small Terraform state bucket can still create small charges. Keep a budget alert enabled and review the bill after the first deploy.
 
-## One-time GCP setup
+## Minimal setup model
 
-Enable billing on the project, then create a Terraform state bucket in a US free-tier Cloud Storage region:
+For a new GCP project with billing already enabled, the first GitHub Actions bootstrap run only needs one temporary GitHub Secret:
 
-```bash
-gcloud services enable \
-  compute.googleapis.com \
-  iap.googleapis.com \
-  serviceusage.googleapis.com
+| Secret | When needed | Notes |
+|---|---|---|
+| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | Bootstrap only | Temporary JSON key for the bootstrap service account. Delete after WIF bootstrap succeeds. |
 
-gcloud storage buckets create gs://<unique-tf-state-bucket> \
-  --project=<gcp-project-id> \
-  --location=us-west1 \
-  --uniform-bucket-level-access
-```
+After bootstrap succeeds, add only the runtime secrets that cannot be generated:
 
-The bootstrap and VM deployment workflows both use this state bucket with separate prefixes:
-
-- `poma/gcp-wif-bootstrap`
-- `poma/gcp-free-tier`
+| Secret | When needed | Notes |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Always | Mandatory alerts. |
+| `TELEGRAM_CHAT_ID` | Always | Mandatory alerts. |
+| `FMP_API_KEY` | When `DATA_PROVIDER=fmp` | Leave unset for fixture-only dry runs. |
+| `IBKR_ACCOUNT` | When `TRADING_MODE=paper` or `live` | Required by the deploy renderer for broker modes. |
 
 ## One-time WIF bootstrap
 
 The recommended path is the manual GitHub Actions workflow:
 
 1. Create a temporary GCP bootstrap service account key with the permissions listed in [`../infra/gcp-wif-bootstrap/README.md`](../infra/gcp-wif-bootstrap/README.md).
-2. Add it as the `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Secret.
+2. Add it as `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY`.
 3. Open **Actions** → **Bootstrap GCP Workload Identity Federation**.
-4. Run with `terraform_action=plan` first, passing `project_id`, `tf_state_bucket`, and `github_repository`.
+4. Run with `terraform_action=plan` first. `project_id` and `tf_state_bucket` are optional overrides; by default the workflow derives the project id from the key and creates `poma-tf-state-<project-number>`.
 5. Rerun with `terraform_action=apply` after reviewing the plan.
-6. The workflow writes `GCP_PROJECT_ID`, `TF_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and `GCP_SERVICE_ACCOUNT_EMAIL` into GitHub Variables.
-7. Delete the `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Secret.
-8. Delete or disable the temporary bootstrap key in GCP IAM.
+6. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` and disable or delete the temporary bootstrap key in GCP IAM.
+7. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` before the first deploy.
 
-This creates the GitHub deployer service account, grants its deployment roles, and lets future GitHub Actions runs authenticate through OIDC instead of a long-lived JSON key.
+The bootstrap workflow generates the Terraform state bucket, enables required APIs, creates the deployer service account, configures WIF, and writes the GitHub Variables needed by the deploy workflow.
 
-Cloud Shell/local Terraform is still supported; see [`../infra/gcp-wif-bootstrap/README.md`](../infra/gcp-wif-bootstrap/README.md).
+Generated GitHub Variables include:
+
+- `GCP_PROJECT_ID`
+- `GCP_REGION`
+- `GCP_ZONE`
+- `GCP_VM_NAME`
+- `TF_STATE_BUCKET`
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`
+- `GCP_SERVICE_ACCOUNT_EMAIL`
+- Safe dry-run runtime defaults such as `TRADING_MODE=dry_run`, `DATA_PROVIDER=fixture`, order limits, calendar settings, and local paths.
 
 ## Idempotency expectations
 
-- Re-running **Bootstrap GCP Workload Identity Federation** with the same `project_id`, `tf_state_bucket`, and `github_repository` should converge against the same Terraform state.
+- Re-running **Bootstrap GCP Workload Identity Federation** with the same project, state bucket, and GitHub repository should converge against the same Terraform state.
 - Re-running **Deploy GCP e2-micro VM** should converge infrastructure through Terraform, then overwrite `/opt/poma` with the latest package, replace `/opt/poma/.env`, run the fixture dry-run smoke test, and reinstall the same crontab.
 - Changing bootstrap identifiers such as pool id, provider id, service account id, project id, or state bucket intentionally creates or targets different infrastructure and should be treated as a migration.
 
 ## Manual budget alert setup
 
-Create a monthly Cloud Billing budget alert before the first deploy. Keep the threshold low, such as USD 5, and scope it to the GCP project used for POMA. This is intentionally manual in this template because billing-account IAM differs by account and organization.
-
-## Required GitHub Variables
-
-Terraform and deployment variables:
-
-| Variable | Example | Notes |
-|---|---|---|
-| `GCP_PROJECT_ID` | `my-gcp-project` | Target GCP project. The WIF bootstrap workflow can write this automatically. |
-| `GCP_REGION` | `us-west1` | Must be `us-west1`, `us-central1`, or `us-east1`. |
-| `GCP_ZONE` | `us-west1-b` | Must be in `GCP_REGION`. |
-| `GCP_VM_NAME` | `poma-free-tier` | Compute Engine instance name. |
-| `TF_STATE_BUCKET` | `my-poma-tf-state` | Existing GCS bucket for Terraform state. The WIF bootstrap workflow can write this automatically. |
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Terraform output | Full WIF provider resource name. The WIF bootstrap workflow can write this automatically. |
-| `GCP_SERVICE_ACCOUNT_EMAIL` | Terraform output | Deployer service account email. The WIF bootstrap workflow can write this automatically. |
-
-Runtime `.env` variables from GitHub Variables:
-
-| Variable | Recommended starting value |
-|---|---|
-| `APP_ENV` | `production` |
-| `TRADING_MODE` | `dry_run` |
-| `ALLOW_LIVE_TRADING` | `false` |
-| `MARKET_CALENDAR` | `NASDAQ` |
-| `REBALANCE_AFTER_OPEN_MINUTES` | `10` |
-| `UNIVERSE` | `nasdaq100` |
-| `RANK_LOOKBACK_DAYS` | `90` |
-| `MAX_HOLDINGS` | `30` |
-| `PORTFOLIO_VALUE_USD` | `10000` |
-| `CASH_BUFFER_PCT` | `0.02` |
-| `MAX_POSITION_PCT` | `0.10` |
-| `MAX_TURNOVER_PCT` | `0.35` |
-| `MIN_TRADE_NOTIONAL_USD` | `25` |
-| `MIN_WEIGHT_DELTA_PCT` | `0.01` |
-| `ORDER_TYPE` | `limit` |
-| `ALLOW_MARKET_ORDERS` | `false` |
-| `LIMIT_OFFSET_BPS` | `10` |
-| `MAX_ORDER_NOTIONAL_USD` | `2000` |
-| `MAX_DAILY_TRADES` | `30` |
-| `DATA_PROVIDER` | `fixture` |
-| `FMP_BASE_URL` | `https://financialmodelingprep.com/stable` |
-| `IBKR_HOST` | `127.0.0.1` |
-| `IBKR_PORT` | `7497` |
-| `IBKR_CLIENT_ID` | `101` |
-| `STATE_DIR` | `state` |
-| `REPORT_DIR` | `reports` |
-
-Set every runtime variable explicitly even when the value matches `.env.example`. The deploy workflow renders `.env` in strict mode and fails if a key is missing.
-
-## Required GitHub Secrets
-
-| Secret | Required | Notes |
-|---|---:|---|
-| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | bootstrap only | Temporary JSON key used only by the manual bootstrap workflow. Delete after WIF is configured. |
-| `TELEGRAM_BOT_TOKEN` | yes | Mandatory alerts. |
-| `TELEGRAM_CHAT_ID` | yes | Mandatory alerts. |
-| `FMP_API_KEY` | when `DATA_PROVIDER=fmp` | Leave unset for fixture-only dry runs. |
-| `IBKR_ACCOUNT` | paper/live | Required by the deploy renderer when `TRADING_MODE=paper` or `live`. |
+Create a monthly Cloud Billing budget alert before the first deploy. Keep the threshold low, such as USD 5, and scope it to the GCP project used for POMA. This remains manual because billing-account IAM differs by account and organization.
 
 ## Deploy flow
 
@@ -130,9 +78,9 @@ Set every runtime variable explicitly even when the value matches `.env.example`
 On apply, GitHub Actions:
 
 1. Authenticates to Google Cloud through Workload Identity Federation.
-2. Renders `.env.deploy` from GitHub Variables and Secrets.
+2. Renders `.env.deploy` from generated GitHub Variables and runtime secrets.
 3. Validates FMP output when `DATA_PROVIDER=fmp`.
-4. Runs Terraform against `infra/gcp-free-tier`.
+4. Runs Terraform against `infra/gcp-free-tier` using the generated state bucket.
 5. Packages the repository without local state, reports, logs, or `.env` files.
 6. Uploads the package and rendered `.env` to the VM through IAP.
 7. Runs `ops/scripts/deploy.sh`, which forces a fixture-backed dry-run rebalance and verifies that a report was created.
@@ -165,4 +113,4 @@ gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
 - Keep Terraform state in one small US-region GCS bucket.
 - Keep a manual budget alert enabled for the project.
 - Watch external IPv4 and outbound network charges after deployment.
-- Do not add Artifact Registry, Secret Manager, Cloud NAT, Cloud Scheduler, Cloud Run, or managed databases unless you intentionally accept their costs.
+- Do not add Artifact Registry, Secret Manager, Cloud NAT, Cloud Scheduler, Cloud Run, Pub/Sub, Redis, or managed databases unless you intentionally accept their costs.
