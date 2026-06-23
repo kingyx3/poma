@@ -42,9 +42,9 @@ class Settings(BaseSettings):
         alias="FMP_BASE_URL",
     )
 
-    universe: str = Field(default="nasdaq100", alias="UNIVERSE")
+    universe: str = Field(default="sp500", alias="UNIVERSE")
     rank_lookback_days: PositiveInt = Field(default=90, alias="RANK_LOOKBACK_DAYS")
-    max_holdings: PositiveInt = Field(default=30, alias="MAX_HOLDINGS")
+    max_holdings: PositiveInt = Field(default=100, alias="MAX_HOLDINGS")
 
     portfolio_value_usd: PositiveFloat = Field(default=10_000.0, alias="PORTFOLIO_VALUE_USD")
     cash_buffer_pct: float = Field(default=0.02, alias="CASH_BUFFER_PCT")
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         default=25.0,
         alias="MIN_TRADE_NOTIONAL_USD",
     )
-    min_weight_delta_pct: float = Field(default=0.01, alias="MIN_WEIGHT_DELTA_PCT")
+    min_weight_delta_pct: float = Field(default=0.0025, alias="MIN_WEIGHT_DELTA_PCT")
 
     order_type: OrderType = Field(default=OrderType.LIMIT, alias="ORDER_TYPE")
     allow_market_orders: bool = Field(default=False, alias="ALLOW_MARKET_ORDERS")
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         default=2_000.0,
         alias="MAX_ORDER_NOTIONAL_USD",
     )
-    max_daily_trades: PositiveInt = Field(default=30, alias="MAX_DAILY_TRADES")
+    max_daily_trades: PositiveInt = Field(default=100, alias="MAX_DAILY_TRADES")
     order_status_timeout_seconds: PositiveInt = Field(
         default=60,
         alias="ORDER_STATUS_TIMEOUT_SECONDS",
