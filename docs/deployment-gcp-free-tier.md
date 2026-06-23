@@ -1,16 +1,34 @@
 # GCP free-tier e2-micro deployment
 
-This is the production deployment path for the low-cost single-host setup: one GCP `e2-micro` VM runs POMA, cron, Docker, IB Gateway, and optional IBC automation. It avoids Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, Redis, and managed databases.
+This is the low-cost single-host deployment path: one GCP `e2-micro` VM runs POMA, cron, Docker, IB Gateway, and optional IBC automation. It avoids Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, Redis, and managed databases.
 
-## Minimal required setup
+## GitHub Environments
 
-Before bootstrap, create one temporary GitHub Secret:
+Create three GitHub Environments before deploying:
+
+- `dev`
+- `stg`
+- `prd`
+
+Both deployment workflows require a `deploy_environment` choice and run against the selected GitHub Environment. Variables and secrets are read from that environment, not from one shared repository-wide runtime scope.
+
+Each environment gets isolated Terraform state prefixes:
+
+- `poma/dev/gcp-wif-bootstrap` and `poma/dev/gcp-free-tier`
+- `poma/stg/gcp-wif-bootstrap` and `poma/stg/gcp-free-tier`
+- `poma/prd/gcp-wif-bootstrap` and `poma/prd/gcp-free-tier`
+
+Bootstrap also generates environment-specific VM and deployer names, such as `poma-dev-free-tier`, `poma-stg-free-tier`, and `poma-prd-free-tier`.
+
+## Required setup per environment
+
+Before bootstrapping an environment, add this temporary environment secret only to the environment being bootstrapped:
 
 | Secret | Required for | Notes |
 |---|---|---|
-| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | Bootstrap only | Temporary GCP service-account JSON key. Delete it after WIF bootstrap succeeds. |
+| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | Bootstrap only | Temporary GCP service-account JSON key. Delete it from the environment after WIF bootstrap succeeds. |
 
-After bootstrap, add only the runtime secrets that cannot be generated:
+After bootstrap, add only the runtime secrets needed by that environment:
 
 | Secret | Required for | Notes |
 |---|---|---|
@@ -23,26 +41,29 @@ Do not store IBKR login credentials in GitHub. Configure them locally on the VM 
 
 ## Deploy in order
 
-1. In GitHub Actions, run **Bootstrap GCP Workload Identity Federation** with `terraform_action=plan`.
+For each environment, repeat this sequence with the same `deploy_environment` value:
+
+1. Run **Bootstrap GCP Workload Identity Federation** with `terraform_action=plan`.
 2. Rerun the same workflow with `terraform_action=apply`.
-3. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from GitHub and disable/delete the temporary key in GCP IAM.
-4. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-5. In GitHub Actions, run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
+3. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from that GitHub Environment and disable/delete the temporary key in GCP IAM.
+4. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to that GitHub Environment.
+5. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
 6. Rerun with `terraform_action=apply` and `deploy_app=true`.
 7. Keep `TRADING_MODE=dry_run` until the deploy smoke test and Gateway setup are verified.
 
-The bootstrap workflow derives the project id from the temporary key, creates the Terraform state bucket, enables required APIs, configures Workload Identity Federation, and writes safe GitHub Variables such as project, region, VM name, state bucket, trading defaults, risk limits, and local paths.
+Bootstrap writes safe GitHub Environment Variables such as project, region, VM name, state bucket, trading defaults, risk limits, and local paths.
 
 ## What deploy does
 
 On apply, the deploy workflow:
 
-1. Authenticates to GCP through Workload Identity Federation.
-2. Renders a VM-local `.env` from generated GitHub Variables and runtime secrets.
-3. Runs Terraform for `infra/gcp-free-tier`.
-4. Uploads the app package and `.env` through IAP SSH.
-5. Runs a fixture-backed dry-run smoke test.
-6. Installs the cron schedule.
+1. Uses the selected GitHub Environment.
+2. Authenticates to GCP through that environment's Workload Identity Federation settings.
+3. Renders a VM-local `.env` from that environment's GitHub Variables and Secrets.
+4. Runs Terraform for `infra/gcp-free-tier` using that environment's state prefix.
+5. Uploads the app package and `.env` through IAP SSH.
+6. Runs a fixture-backed dry-run smoke test.
+7. Installs the cron schedule.
 
 The VM startup script installs Docker, cron, IB Gateway, IBC, headless GUI support, and `ibgateway.service`.
 
@@ -60,10 +81,10 @@ Live mode additionally requires `ALLOW_LIVE_TRADING=true` and manual review of r
 
 ## Cost controls
 
-- Keep exactly one VM.
-- Keep the VM as `e2-micro`.
-- Keep the boot disk at or below 30 GB and type `pd-standard`.
+- Keep exactly one VM per active environment.
+- Keep each VM as `e2-micro`.
+- Keep each boot disk at or below 30 GB and type `pd-standard`.
 - Keep region in `us-west1`, `us-central1`, or `us-east1`.
-- Keep Terraform state in one small US-region GCS bucket.
-- Keep a manual Cloud Billing budget alert enabled for the project.
+- Keep Terraform state in one small US-region GCS bucket per GCP project.
+- Keep a manual Cloud Billing budget alert enabled for each GCP project.
 - Watch external IPv4 and outbound network charges after deployment.
