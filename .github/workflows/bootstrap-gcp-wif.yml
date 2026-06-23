@@ -1,0 +1,139 @@
+name: Bootstrap GCP Workload Identity Federation
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: GCP project id that hosts the POMA deployer identity.
+        required: true
+        type: string
+      github_repository:
+        description: GitHub repository allowed to deploy through WIF.
+        required: true
+        type: string
+        default: kingyx3/poma
+      terraform_action:
+        description: Run Terraform plan only, or apply and write GitHub Variables.
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+        default: plan
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: poma-gcp-wif-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Bootstrap WIF
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      GCP_PROJECT_ID: ${{ inputs.project_id }}
+      GITHUB_REPOSITORY_ALLOWED: ${{ inputs.github_repository }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Validate bootstrap settings
+        run: |
+          set -euo pipefail
+          if [ -z "${GCP_PROJECT_ID}" ]; then
+            echo "::error::project_id is required"
+            exit 1
+          fi
+          if [ -z "${GITHUB_REPOSITORY_ALLOWED}" ]; then
+            echo "::error::github_repository is required"
+            exit 1
+          fi
+          if [ -z "${GOOGLE_BOOTSTRAP_CREDENTIALS:-}" ]; then
+            echo "::error::Missing GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY secret"
+            exit 1
+          fi
+        env:
+          GOOGLE_BOOTSTRAP_CREDENTIALS: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Authenticate with temporary bootstrap key
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f
+        with:
+          credentials_json: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_wrapper: false
+
+      - name: Enable prerequisite APIs
+        run: |
+          gcloud services enable \
+            iam.googleapis.com \
+            iamcredentials.googleapis.com \
+            sts.googleapis.com \
+            serviceusage.googleapis.com \
+            --project="${GCP_PROJECT_ID}"
+
+      - name: Terraform init
+        run: terraform -chdir=infra/gcp-wif-bootstrap init
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive infra/gcp-wif-bootstrap
+
+      - name: Terraform validate
+        run: terraform -chdir=infra/gcp-wif-bootstrap validate
+
+      - name: Terraform plan
+        run: |
+          terraform -chdir=infra/gcp-wif-bootstrap plan -out=tfplan \
+            -var="project_id=${GCP_PROJECT_ID}" \
+            -var="github_repository=${GITHUB_REPOSITORY_ALLOWED}"
+
+      - name: Terraform apply
+        if: ${{ inputs.terraform_action == 'apply' }}
+        run: terraform -chdir=infra/gcp-wif-bootstrap apply -auto-approve tfplan
+
+      - name: Write GitHub Variables
+        if: ${{ inputs.terraform_action == 'apply' }}
+        run: |
+          set -euo pipefail
+          provider="$(terraform -chdir=infra/gcp-wif-bootstrap output -raw workload_identity_provider)"
+          service_account="$(terraform -chdir=infra/gcp-wif-bootstrap output -raw service_account_email)"
+
+          upsert_variable() {
+            local name="$1"
+            local value="$2"
+            if gh variable set "${name}" --repo "${GITHUB_REPOSITORY}" --body "${value}"; then
+              echo "Set ${name}"
+            else
+              echo "::error::Failed to set ${name}"
+              exit 1
+            fi
+          }
+
+          upsert_variable GCP_PROJECT_ID "${GCP_PROJECT_ID}"
+          upsert_variable GCP_WORKLOAD_IDENTITY_PROVIDER "${provider}"
+          upsert_variable GCP_SERVICE_ACCOUNT_EMAIL "${service_account}"
+
+      - name: Print cleanup reminder
+        if: ${{ inputs.terraform_action == 'apply' }}
+        run: |
+          cat <<'EOF'
+          WIF bootstrap completed.
+
+          Cleanup now:
+          1. Delete the GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY GitHub Secret.
+          2. Delete or disable the temporary bootstrap service account key in GCP IAM.
+          3. Keep deploys on WIF through GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT_EMAIL.
+          EOF
