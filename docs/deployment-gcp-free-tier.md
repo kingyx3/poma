@@ -10,7 +10,6 @@ Terraform creates only the minimum GCP resources needed for the bot:
 - One 30 GB `pd-standard` boot disk.
 - One small dedicated VPC/subnet.
 - One firewall rule that allows SSH only through IAP TCP forwarding.
-- An optional Cloud Billing budget alert when `GCP_BILLING_ACCOUNT_ID` is set.
 - No Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, or managed database.
 
 Keep `GCP_REGION` set to one of the Compute Engine free-tier regions: `us-west1`, `us-central1`, or `us-east1`.
@@ -23,7 +22,6 @@ Enable billing on the project, then create a Terraform state bucket in a US free
 
 ```bash
 gcloud services enable \
-  billingbudgets.googleapis.com \
   compute.googleapis.com \
   iap.googleapis.com \
   serviceusage.googleapis.com
@@ -62,16 +60,9 @@ Create a JSON key for that service account and store it as the `GCP_SERVICE_ACCO
 
 > Production hardening: replace the JSON key with Workload Identity Federation when you are ready. This avoids long-lived cloud keys in GitHub Secrets.
 
-## Optional budget alert setup
+## Manual budget alert setup
 
-Set these GitHub Variables to let Terraform create a monthly budget alert:
-
-| Variable | Example | Notes |
-|---|---|---|
-| `GCP_BILLING_ACCOUNT_ID` | `ABCDEF-123456-ABCDEF` | Leave empty to skip budget creation. |
-| `GCP_MONTHLY_BUDGET_USD` | `5` | Whole-dollar monthly threshold. Defaults to `5`. |
-
-The deployer also needs budget-management permission on the billing account, not just project IAM. Grant the narrowest role available in your account policy for managing budgets.
+Create a monthly Cloud Billing budget alert before the first deploy. Keep the threshold low, such as USD 5, and scope it to the GCP project used for POMA. This is intentionally manual in this template because billing-account IAM differs by account and organization.
 
 ## Required GitHub Variables
 
@@ -169,6 +160,6 @@ gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
 - Keep the boot disk at or below 30 GB and type `pd-standard`.
 - Keep region in `us-west1`, `us-central1`, or `us-east1`.
 - Keep Terraform state in one small US-region GCS bucket.
-- Keep `GCP_BILLING_ACCOUNT_ID` set so budget alerts are managed by Terraform.
+- Keep a manual budget alert enabled for the project.
 - Watch external IPv4 and outbound network charges after deployment.
 - Do not add Artifact Registry, Secret Manager, Cloud NAT, Cloud Scheduler, Cloud Run, or managed databases unless you intentionally accept their costs.
