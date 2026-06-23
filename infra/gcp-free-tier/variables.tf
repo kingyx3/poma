@@ -52,3 +52,15 @@ variable "network_cidr" {
   type        = string
   default     = "10.50.0.0/24"
 }
+
+variable "budget_billing_account" {
+  description = "Optional Cloud Billing account resource name for a monthly budget alert. Leave empty to skip budget creation."
+  type        = string
+  default     = ""
+}
+
+variable "monthly_budget_usd" {
+  description = "Whole-dollar monthly budget threshold when budget_billing_account is set."
+  type        = number
+  default     = 5
+}
