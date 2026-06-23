@@ -1,16 +1,16 @@
-# POMA — Simple Nasdaq-100 Rebalancer
+# POMA — Simple S&P 500 Rebalancer
 
-POMA is a low-cost Python scaffold for a personal long-only Nasdaq-100 strategy.
+POMA is a low-cost Python scaffold for a personal long-only S&P 500 strategy.
 
 ## Strategy
 
 The default strategy is explicit:
 
 ```text
-Universe: Nasdaq-100
+Universe: S&P 500
 Lookback: 90 days
 Score: previous_rank - current_rank
-Selection: top 30 stocks by rank improvement score
+Selection: top 100 stocks by rank improvement score
 Weighting: market-cap weighted, with risk caps
 ```
 
@@ -86,7 +86,7 @@ Docker Compose is used as a one-shot runner from cron. Do not run the POMA conta
 - Failed runs become manual-review events.
 - Market-calendar timing instead of brittle DST cron logic.
 - Cash buffer.
-- Max 30 holdings by default.
+- Max 100 holdings by default.
 - Max position, turnover, order size, and trade-count limits.
 - Minimum trade notional and minimum weight-delta filters.
 - JSON reports with proposed trades and execution results.
