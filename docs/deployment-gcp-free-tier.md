@@ -34,29 +34,20 @@ gcloud storage buckets create gs://<unique-tf-state-bucket> \
 
 ## One-time WIF bootstrap
 
-Run the WIF bootstrap module once from Cloud Shell or a local terminal. This creates the GitHub deployer service account, grants its deployment roles, and lets GitHub Actions authenticate through OIDC instead of a long-lived JSON key.
+The recommended path is the manual GitHub Actions workflow:
 
-```bash
-gcloud services enable \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  sts.googleapis.com \
-  serviceusage.googleapis.com
+1. Create a temporary GCP bootstrap service account key with permissions to manage IAM, service accounts, Workload Identity Federation, Service Usage, and project IAM bindings.
+2. Add it as the `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Secret.
+3. Open **Actions** → **Bootstrap GCP Workload Identity Federation**.
+4. Run with `terraform_action=plan` first.
+5. Rerun with `terraform_action=apply` after reviewing the plan.
+6. The workflow writes `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and `GCP_SERVICE_ACCOUNT_EMAIL` into GitHub Variables.
+7. Delete the `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Secret.
+8. Delete or disable the temporary bootstrap key in GCP IAM.
 
-terraform -chdir=infra/gcp-wif-bootstrap init
-terraform -chdir=infra/gcp-wif-bootstrap apply \
-  -var="project_id=<gcp-project-id>" \
-  -var="github_repository=kingyx3/poma"
-```
+This creates the GitHub deployer service account, grants its deployment roles, and lets future GitHub Actions runs authenticate through OIDC instead of a long-lived JSON key.
 
-Copy the Terraform outputs into GitHub Variables:
-
-| Terraform output | GitHub Variable |
-|---|---|
-| `workload_identity_provider` | `GCP_WORKLOAD_IDENTITY_PROVIDER` |
-| `service_account_email` | `GCP_SERVICE_ACCOUNT_EMAIL` |
-
-After WIF is configured, do not create or store `GCP_SERVICE_ACCOUNT_KEY`.
+Cloud Shell/local Terraform is still supported; see [`../infra/gcp-wif-bootstrap/README.md`](../infra/gcp-wif-bootstrap/README.md).
 
 ## Manual budget alert setup
 
@@ -68,13 +59,13 @@ Terraform and deployment variables:
 
 | Variable | Example | Notes |
 |---|---|---|
-| `GCP_PROJECT_ID` | `my-gcp-project` | Target GCP project. |
+| `GCP_PROJECT_ID` | `my-gcp-project` | Target GCP project. The WIF bootstrap workflow can write this automatically. |
 | `GCP_REGION` | `us-west1` | Must be `us-west1`, `us-central1`, or `us-east1`. |
 | `GCP_ZONE` | `us-west1-b` | Must be in `GCP_REGION`. |
 | `GCP_VM_NAME` | `poma-free-tier` | Compute Engine instance name. |
 | `TF_STATE_BUCKET` | `my-poma-tf-state` | Existing GCS bucket for Terraform state. |
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Terraform output | Full WIF provider resource name. |
-| `GCP_SERVICE_ACCOUNT_EMAIL` | Terraform output | Deployer service account email. |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Terraform output | Full WIF provider resource name. The WIF bootstrap workflow can write this automatically. |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | Terraform output | Deployer service account email. The WIF bootstrap workflow can write this automatically. |
 
 Runtime `.env` variables from GitHub Variables:
 
@@ -113,6 +104,7 @@ Set every runtime variable explicitly even when the value matches `.env.example`
 
 | Secret | Required | Notes |
 |---|---:|---|
+| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | bootstrap only | Temporary JSON key used only by the manual bootstrap workflow. Delete after WIF is configured. |
 | `TELEGRAM_BOT_TOKEN` | yes | Mandatory alerts. |
 | `TELEGRAM_CHAT_ID` | yes | Mandatory alerts. |
 | `FMP_API_KEY` | when `DATA_PROVIDER=fmp` | Leave unset for fixture-only dry runs. |
