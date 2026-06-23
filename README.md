@@ -59,11 +59,11 @@ crontab ops/cron/poma.cron
 
 ### GCP e2-micro via GitHub Actions + Terraform
 
-1. Run **Actions** → **Bootstrap GCP Workload Identity Federation** with only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
-2. Add the required runtime secrets from [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
-3. Run **Actions** → **Deploy GCP e2-micro VM** with `terraform_action=plan`.
-4. Rerun with `terraform_action=apply` when the plan is expected.
-5. Configure and verify IB Gateway/IBC on the VM using [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md) before switching to `paper` or `live`.
+1. Add only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
+2. Run **Bootstrap GCP Workload Identity Federation** with `terraform_action=plan`, then `apply`.
+3. Delete the bootstrap key and add the runtime secrets from [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
+4. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`, then `apply` with `deploy_app=true`.
+5. Before `paper` or `live`, configure and verify Gateway using [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md).
 
 The deploy workflow renders every key from `.env.example` into a VM-local `.env` file using GitHub Variables/Secrets, uploads the repo package through IAP SSH, runs a dry-run deploy smoke test, and installs the cron schedule.
 
