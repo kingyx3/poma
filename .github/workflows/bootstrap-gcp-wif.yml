@@ -4,20 +4,25 @@ on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: GCP project id that hosts the POMA deployer identity.
-        required: true
+        description: Optional override. Defaults to the project_id inside the bootstrap key.
+        required: false
         type: string
       tf_state_bucket:
-        description: Existing GCS bucket for Terraform state.
-        required: true
+        description: Optional override. Defaults to poma-tf-state-<project-number>.
+        required: false
         type: string
+      state_bucket_location:
+        description: GCS location for the generated Terraform state bucket.
+        required: false
+        type: string
+        default: us-west1
       github_repository:
         description: GitHub repository allowed to deploy through WIF.
         required: true
         type: string
         default: kingyx3/poma
       terraform_action:
-        description: Run Terraform plan only, or apply and write GitHub Variables.
+        description: Run Terraform plan only, or apply and write generated GitHub Variables.
         required: true
         type: choice
         options:
@@ -41,30 +46,17 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
-      GCP_PROJECT_ID: ${{ inputs.project_id }}
-      TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
       GITHUB_REPOSITORY_ALLOWED: ${{ inputs.github_repository }}
+      STATE_BUCKET_LOCATION: ${{ inputs.state_bucket_location }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Validate bootstrap settings
+      - name: Validate bootstrap key
         run: |
           set -euo pipefail
-          if [ -z "${GCP_PROJECT_ID}" ]; then
-            echo "::error::project_id is required"
-            exit 1
-          fi
-          if [ -z "${TF_STATE_BUCKET}" ]; then
-            echo "::error::tf_state_bucket is required"
-            exit 1
-          fi
-          if [ -z "${GITHUB_REPOSITORY_ALLOWED}" ]; then
-            echo "::error::github_repository is required"
-            exit 1
-          fi
           if [ -z "${GOOGLE_BOOTSTRAP_CREDENTIALS:-}" ]; then
             echo "::error::Missing GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY secret"
             exit 1
@@ -80,19 +72,61 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
-        with:
-          terraform_wrapper: false
+      - name: Resolve generated bootstrap values
+        run: |
+          set -euo pipefail
+          key_project_id="$(python - <<'PY'
+          import json, os
+          print(json.loads(os.environ["GOOGLE_BOOTSTRAP_CREDENTIALS"])["project_id"])
+          PY
+          )"
+          project_id="${INPUT_PROJECT_ID:-${key_project_id}}"
+          if [ -z "${project_id}" ]; then
+            echo "::error::Unable to resolve GCP project id"
+            exit 1
+          fi
+          project_number="$(gcloud projects describe "${project_id}" --format='value(projectNumber)')"
+          state_bucket="${INPUT_TF_STATE_BUCKET:-poma-tf-state-${project_number}}"
+
+          echo "GCP_PROJECT_ID=${project_id}" >> "${GITHUB_ENV}"
+          echo "GCP_PROJECT_NUMBER=${project_number}" >> "${GITHUB_ENV}"
+          echo "TF_STATE_BUCKET=${state_bucket}" >> "${GITHUB_ENV}"
+          echo "Resolved project_id=${project_id} project_number=${project_number} tf_state_bucket=${state_bucket}"
+        env:
+          GOOGLE_BOOTSTRAP_CREDENTIALS: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
+          INPUT_PROJECT_ID: ${{ inputs.project_id }}
+          INPUT_TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
 
       - name: Enable prerequisite APIs
         run: |
           gcloud services enable \
+            cloudresourcemanager.googleapis.com \
+            compute.googleapis.com \
             iam.googleapis.com \
             iamcredentials.googleapis.com \
-            sts.googleapis.com \
+            iap.googleapis.com \
             serviceusage.googleapis.com \
+            storage.googleapis.com \
+            sts.googleapis.com \
             --project="${GCP_PROJECT_ID}"
+
+      - name: Create Terraform state bucket
+        run: |
+          set -euo pipefail
+          if gcloud storage buckets describe "gs://${TF_STATE_BUCKET}" --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+            echo "Terraform state bucket already exists: gs://${TF_STATE_BUCKET}"
+          else
+            gcloud storage buckets create "gs://${TF_STATE_BUCKET}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${STATE_BUCKET_LOCATION}" \
+              --uniform-bucket-level-access
+          fi
+          gcloud storage buckets update "gs://${TF_STATE_BUCKET}" --versioning --project="${GCP_PROJECT_ID}"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_wrapper: false
 
       - name: Terraform init
         run: |
@@ -116,7 +150,7 @@ jobs:
         if: ${{ inputs.terraform_action == 'apply' }}
         run: terraform -chdir=infra/gcp-wif-bootstrap apply -auto-approve tfplan
 
-      - name: Write GitHub Variables
+      - name: Write generated GitHub Variables
         if: ${{ inputs.terraform_action == 'apply' }}
         run: |
           set -euo pipefail
@@ -148,5 +182,5 @@ jobs:
           Cleanup now:
           1. Delete the GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY GitHub Secret.
           2. Delete or disable the temporary bootstrap service account key in GCP IAM.
-          3. Keep deploys on WIF through GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT_EMAIL.
+          3. Future deploys use generated WIF variables and do not need a GCP JSON key.
           EOF
