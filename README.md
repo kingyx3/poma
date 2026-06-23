@@ -59,9 +59,11 @@ crontab ops/cron/poma.cron
 
 ### GCP e2-micro via GitHub Actions + Terraform
 
-1. Configure the required GitHub Variables and Secrets from [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
-2. Run **Actions** → **Deploy GCP e2-micro VM** with `terraform_action=plan`.
-3. Rerun with `terraform_action=apply` when the plan is expected.
+1. Run **Actions** → **Bootstrap GCP Workload Identity Federation** with only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
+2. Add the required runtime secrets from [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
+3. Run **Actions** → **Deploy GCP e2-micro VM** with `terraform_action=plan`.
+4. Rerun with `terraform_action=apply` when the plan is expected.
+5. Configure and verify IB Gateway/IBC on the VM using [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md) before switching to `paper` or `live`.
 
 The deploy workflow renders every key from `.env.example` into a VM-local `.env` file using GitHub Variables/Secrets, uploads the repo package through IAP SSH, runs a dry-run deploy smoke test, and installs the cron schedule.
 
@@ -90,4 +92,4 @@ Docker Compose is used as a one-shot runner from cron. Do not run the POMA conta
 - JSON reports with proposed trades and execution results.
 - CI/CD `.env` rendering fails if required GitHub Variables/Secrets are missing.
 
-See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
+See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md), [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
