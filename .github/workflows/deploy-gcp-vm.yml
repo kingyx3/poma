@@ -39,6 +39,8 @@ jobs:
       GCP_ZONE: ${{ vars.GCP_ZONE }}
       GCP_VM_NAME: ${{ vars.GCP_VM_NAME }}
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      GCP_BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      GCP_MONTHLY_BUDGET_USD: ${{ vars.GCP_MONTHLY_BUDGET_USD }}
 
       # POMA runtime .env values from GitHub Variables.
       APP_ENV: ${{ vars.APP_ENV }}
@@ -76,7 +78,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Validate required deployment settings
         run: |
@@ -92,16 +94,24 @@ jobs:
       - name: Render .env from GitHub variables and secrets
         run: python ops/scripts/render_env.py --strict-env --output .env.deploy
 
+      - name: Install app for FMP provider validation
+        if: ${{ env.DATA_PROVIDER == 'fmp' }}
+        run: pip install -e .
+
+      - name: Validate FMP data provider output
+        if: ${{ env.DATA_PROVIDER == 'fmp' }}
+        run: python ops/scripts/validate_data_provider.py
+
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
         with:
           terraform_wrapper: false
 
@@ -111,19 +121,28 @@ jobs:
             -backend-config="bucket=${TF_STATE_BUCKET}" \
             -backend-config="prefix=poma/gcp-free-tier"
 
-      - name: Terraform format
-        run: terraform -chdir=infra/gcp-free-tier fmt
+      - name: Terraform format check
+        run: terraform -chdir=infra/gcp-free-tier fmt -check -recursive
 
       - name: Terraform validate
         run: terraform -chdir=infra/gcp-free-tier validate
 
       - name: Terraform plan
         run: |
-          terraform -chdir=infra/gcp-free-tier plan -out=tfplan \
-            -var="project_id=${GCP_PROJECT_ID}" \
-            -var="region=${GCP_REGION}" \
-            -var="zone=${GCP_ZONE}" \
+          set -euo pipefail
+          terraform_args=(
+            -var="project_id=${GCP_PROJECT_ID}"
+            -var="region=${GCP_REGION}"
+            -var="zone=${GCP_ZONE}"
             -var="instance_name=${GCP_VM_NAME}"
+          )
+          if [ -n "${GCP_BILLING_ACCOUNT_ID:-}" ]; then
+            terraform_args+=("-var=billing_account_id=${GCP_BILLING_ACCOUNT_ID}")
+          fi
+          if [ -n "${GCP_MONTHLY_BUDGET_USD:-}" ]; then
+            terraform_args+=("-var=monthly_budget_usd=${GCP_MONTHLY_BUDGET_USD}")
+          fi
+          terraform -chdir=infra/gcp-free-tier plan -out=tfplan "${terraform_args[@]}"
 
       - name: Terraform apply
         if: ${{ inputs.terraform_action == 'apply' }}
