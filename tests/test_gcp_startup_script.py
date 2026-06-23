@@ -38,4 +38,5 @@ def test_ibc_credentials_remain_vm_local_and_private() -> None:
     assert "install -m 600 -o poma -g poma \"$${IBC_DIR}/config.ini\" \"$${IBC_CONFIG}\"" in script
     assert "chmod 600 \"$${IBC_CONFIG}\"" in script
     assert "IBKR password" in script
-    assert "GITHUB" not in script.upper()
+    assert "GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY" not in script
+    assert "TELEGRAM_BOT_TOKEN" not in script
