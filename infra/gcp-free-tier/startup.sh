@@ -35,7 +35,7 @@ mkdir -p /home/"$${APP_USER}"/Jts
 chown -R "$${APP_USER}:$${APP_USER}" "$${APP_DIR}" /home/"$${APP_USER}"/Jts
 
 if [ ! -x "$${IB_GATEWAY_DIR}/ibgateway" ]; then
-  tmp_installer="$(mktemp /tmp/ibgateway-installer.XXXXXX.sh)"
+  tmp_installer="$$(mktemp /tmp/ibgateway-installer.XXXXXX.sh)"
   curl -fsSL "$${IB_GATEWAY_INSTALLER_URL}" -o "$${tmp_installer}"
   chmod +x "$${tmp_installer}"
   bash "$${tmp_installer}" -q -dir "$${IB_GATEWAY_DIR}"
@@ -48,30 +48,30 @@ cat >/usr/local/bin/poma-run-ib-gateway <<'SCRIPT'
 set -euo pipefail
 
 export HOME="/home/poma"
-export DISPLAY="${DISPLAY:-:99}"
-export IB_GATEWAY_DIR="${IB_GATEWAY_DIR:-/opt/ibgateway}"
-export IB_GATEWAY_VNC_PORT="${IB_GATEWAY_VNC_PORT:-5900}"
+export DISPLAY="$${DISPLAY:-:99}"
+export IB_GATEWAY_DIR="$${IB_GATEWAY_DIR:-/opt/ibgateway}"
+export IB_GATEWAY_VNC_PORT="$${IB_GATEWAY_VNC_PORT:-5900}"
 
-mkdir -p "${HOME}/Jts" /tmp/poma-ibgateway
+mkdir -p "$${HOME}/Jts" /tmp/poma-ibgateway
 
 cleanup() {
   jobs -p | xargs -r kill || true
 }
 trap cleanup EXIT
 
-Xvfb "${DISPLAY}" -screen 0 1280x1024x24 -nolisten tcp >/tmp/poma-ibgateway/xvfb.log 2>&1 &
+Xvfb "$${DISPLAY}" -screen 0 1280x1024x24 -nolisten tcp >/tmp/poma-ibgateway/xvfb.log 2>&1 &
 sleep 2
 fluxbox >/tmp/poma-ibgateway/fluxbox.log 2>&1 &
 x11vnc \
-  -display "${DISPLAY}" \
+  -display "$${DISPLAY}" \
   -localhost \
   -forever \
   -shared \
   -nopw \
-  -rfbport "${IB_GATEWAY_VNC_PORT}" \
+  -rfbport "$${IB_GATEWAY_VNC_PORT}" \
   >/tmp/poma-ibgateway/x11vnc.log 2>&1 &
 
-exec "${IB_GATEWAY_DIR}/ibgateway"
+exec "$${IB_GATEWAY_DIR}/ibgateway"
 SCRIPT
 chmod 0755 /usr/local/bin/poma-run-ib-gateway
 
