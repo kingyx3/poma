@@ -64,6 +64,11 @@ class Settings(BaseSettings):
         alias="MAX_ORDER_NOTIONAL_USD",
     )
     max_daily_trades: PositiveInt = Field(default=30, alias="MAX_DAILY_TRADES")
+    order_status_timeout_seconds: PositiveInt = Field(
+        default=60,
+        alias="ORDER_STATUS_TIMEOUT_SECONDS",
+    )
+    cancel_stale_orders: bool = Field(default=True, alias="CANCEL_STALE_ORDERS")
 
     ibkr_host: str = Field(default="127.0.0.1", alias="IBKR_HOST")
     ibkr_port: int = Field(default=7497, alias="IBKR_PORT")
