@@ -75,11 +75,7 @@ jobs:
       - name: Resolve generated bootstrap values
         run: |
           set -euo pipefail
-          key_project_id="$(python - <<'PY'
-          import json, os
-          print(json.loads(os.environ["GOOGLE_BOOTSTRAP_CREDENTIALS"])["project_id"])
-          PY
-          )"
+          key_project_id="$(python -c 'import json, os; print(json.loads(os.environ["GOOGLE_BOOTSTRAP_CREDENTIALS"])["project_id"])')"
           project_id="${INPUT_PROJECT_ID:-${key_project_id}}"
           if [ -z "${project_id}" ]; then
             echo "::error::Unable to resolve GCP project id"
