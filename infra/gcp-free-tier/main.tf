@@ -9,6 +9,7 @@ locals {
 
 resource "google_project_service" "required" {
   for_each = toset([
+    "billingbudgets.googleapis.com",
     "compute.googleapis.com",
     "iap.googleapis.com",
   ])
@@ -70,7 +71,7 @@ resource "google_compute_instance" "poma" {
 
   metadata = {
     block-project-ssh-keys = "true"
-    startup-script         = templatefile("${path.module}/startup.sh", {
+    startup-script = templatefile("${path.module}/startup.sh", {
       app_user = local.app_user
       app_dir  = local.app_dir
     })
