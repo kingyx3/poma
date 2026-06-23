@@ -1,124 +1,62 @@
 # GCP free-tier e2-micro deployment
 
-This path keeps the existing one-host architecture, but lets GitHub Actions provision and update the host through Terraform.
+This is the production deployment path for the low-cost single-host setup: one GCP `e2-micro` VM runs POMA, cron, Docker, IB Gateway, and optional IBC automation. It avoids Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, Redis, and managed databases.
 
-## What gets created
+## Minimal required setup
 
-Terraform creates only the minimum GCP resources needed for the bot:
+Before bootstrap, create one temporary GitHub Secret:
 
-- One non-preemptible `e2-micro` Compute Engine VM.
-- One 30 GB `pd-standard` boot disk.
-- One small dedicated VPC/subnet.
-- One firewall rule that allows SSH only through IAP TCP forwarding.
-- A generated GCS Terraform state bucket during bootstrap.
-- A supervised IB Gateway service with optional IBC automation on the VM.
-- No Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, or managed database.
-
-Keep `GCP_REGION` set to one of the Compute Engine free-tier regions: `us-west1`, `us-central1`, or `us-east1`.
-
-> Cost note: the VM is free-tier-aligned, not guaranteed zero-cost. External IPv4 addresses, outbound network usage, and the small Terraform state bucket can still create small charges. Keep a budget alert enabled and review the bill after the first deploy.
-
-## Minimal setup model
-
-For a new GCP project with billing already enabled, the first GitHub Actions bootstrap run only needs one temporary GitHub Secret:
-
-| Secret | When needed | Notes |
+| Secret | Required for | Notes |
 |---|---|---|
-| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | Bootstrap only | Temporary JSON key for the bootstrap service account. Delete after WIF bootstrap succeeds. |
+| `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | Bootstrap only | Temporary GCP service-account JSON key. Delete it after WIF bootstrap succeeds. |
 
-After bootstrap succeeds, add only the runtime secrets that cannot be generated:
+After bootstrap, add only the runtime secrets that cannot be generated:
 
-| Secret | When needed | Notes |
+| Secret | Required for | Notes |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | Always | Mandatory alerts. |
-| `TELEGRAM_CHAT_ID` | Always | Mandatory alerts. |
-| `FMP_API_KEY` | When `DATA_PROVIDER=fmp` | Leave unset for fixture-only dry runs. |
-| `IBKR_ACCOUNT` | When `TRADING_MODE=paper` or `live` | Required by the deploy renderer for broker modes. |
+| `TELEGRAM_BOT_TOKEN` | All deployed runs | Mandatory alerts. |
+| `TELEGRAM_CHAT_ID` | All deployed runs | Mandatory alerts. |
+| `FMP_API_KEY` | `DATA_PROVIDER=fmp` | Not needed for fixture dry-runs. |
+| `IBKR_ACCOUNT` | `TRADING_MODE=paper/live` | Not needed for dry-runs. |
 
-Do not store broker login material in GitHub. Configure IBC on the VM after bootstrap and deploy.
+Do not store IBKR login credentials in GitHub. Configure them locally on the VM with [`ibkr-gateway-operations.md`](ibkr-gateway-operations.md).
 
-## One-time WIF bootstrap
+## Deploy in order
 
-The recommended path is the manual GitHub Actions workflow:
+1. In GitHub Actions, run **Bootstrap GCP Workload Identity Federation** with `terraform_action=plan`.
+2. Rerun the same workflow with `terraform_action=apply`.
+3. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from GitHub and disable/delete the temporary key in GCP IAM.
+4. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+5. In GitHub Actions, run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
+6. Rerun with `terraform_action=apply` and `deploy_app=true`.
+7. Keep `TRADING_MODE=dry_run` until the deploy smoke test and Gateway setup are verified.
 
-1. Create a temporary GCP bootstrap service account key with the permissions listed in [`../infra/gcp-wif-bootstrap/README.md`](../infra/gcp-wif-bootstrap/README.md).
-2. Add it as `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY`.
-3. Open **Actions** → **Bootstrap GCP Workload Identity Federation**.
-4. Run with `terraform_action=plan` first. `project_id` and `tf_state_bucket` are optional overrides; by default the workflow derives the project id from the key and creates `poma-tf-state-<project-number>`.
-5. Rerun with `terraform_action=apply` after reviewing the plan.
-6. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` and disable or delete the temporary bootstrap key in GCP IAM.
-7. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` before the first deploy.
+The bootstrap workflow derives the project id from the temporary key, creates the Terraform state bucket, enables required APIs, configures Workload Identity Federation, and writes safe GitHub Variables such as project, region, VM name, state bucket, trading defaults, risk limits, and local paths.
 
-The bootstrap workflow generates the Terraform state bucket, enables required APIs, creates the deployer service account, configures WIF, and writes the GitHub Variables needed by the deploy workflow.
+## What deploy does
 
-Generated GitHub Variables include:
+On apply, the deploy workflow:
 
-- `GCP_PROJECT_ID`
-- `GCP_REGION`
-- `GCP_ZONE`
-- `GCP_VM_NAME`
-- `TF_STATE_BUCKET`
-- `GCP_WORKLOAD_IDENTITY_PROVIDER`
-- `GCP_SERVICE_ACCOUNT_EMAIL`
-- Safe dry-run runtime defaults such as `TRADING_MODE=dry_run`, `DATA_PROVIDER=fixture`, order limits, calendar settings, and local paths.
+1. Authenticates to GCP through Workload Identity Federation.
+2. Renders a VM-local `.env` from generated GitHub Variables and runtime secrets.
+3. Runs Terraform for `infra/gcp-free-tier`.
+4. Uploads the app package and `.env` through IAP SSH.
+5. Runs a fixture-backed dry-run smoke test.
+6. Installs the cron schedule.
 
-## Idempotency expectations
+The VM startup script installs Docker, cron, IB Gateway, IBC, headless GUI support, and `ibgateway.service`.
 
-- Re-running **Bootstrap GCP Workload Identity Federation** with the same project, state bucket, and GitHub repository should converge against the same Terraform state.
-- Re-running **Deploy GCP e2-micro VM** should converge infrastructure through Terraform, then overwrite `/opt/poma` with the latest package, replace `/opt/poma/.env`, run the fixture dry-run smoke test, and reinstall the same crontab.
-- Recreating the VM reruns the startup script, reinstalls missing host packages, installs IB Gateway and IBC when missing, and reenables the systemd service.
-- Changing bootstrap identifiers such as pool id, provider id, service account id, project id, or state bucket intentionally creates or targets different infrastructure and should be treated as a migration.
+## Paper/live setup
 
-## Manual budget alert setup
+After dry-run deploy succeeds:
 
-Create a monthly Cloud Billing budget alert before the first deploy. Keep the threshold low, such as USD 5, and scope it to the GCP project used for POMA. This remains manual because billing-account IAM differs by account and organization.
+1. Follow [`ibkr-gateway-operations.md`](ibkr-gateway-operations.md).
+2. Verify `ibgateway.service` is active.
+3. Verify `127.0.0.1:7497` is reachable on the VM.
+4. Set `TRADING_MODE=paper` and redeploy.
+5. Run paper mode for at least one full trading week before considering live mode.
 
-## Deploy flow
-
-1. Open **Actions** → **Deploy GCP e2-micro VM**.
-2. Run with `terraform_action=plan` first.
-3. If the plan is expected, rerun with `terraform_action=apply` and `deploy_app=true`.
-
-On apply, GitHub Actions:
-
-1. Authenticates to Google Cloud through Workload Identity Federation.
-2. Renders `.env.deploy` from generated GitHub Variables and runtime secrets.
-3. Validates FMP output when `DATA_PROVIDER=fmp`.
-4. Runs Terraform against `infra/gcp-free-tier` using the generated state bucket.
-5. Packages the repository without local state, reports, logs, or `.env` files.
-6. Uploads the package and rendered `.env` to the VM through IAP.
-7. Runs `ops/scripts/deploy.sh`, which forces a fixture-backed dry-run rebalance and verifies that a report was created.
-8. Installs `ops/cron/poma.cron`.
-
-## IB Gateway and IBC supervision
-
-The VM startup script installs stable Linux IB Gateway under `/opt/ibgateway`, Linux IBC under `/opt/ibc`, headless display packages, and a `systemd` service named `ibgateway.service`.
-
-By default, the service starts raw IB Gateway. Once `/home/poma/ibc/config.ini` exists, the same service starts Gateway through IBC instead.
-
-One-time setup on the VM:
-
-```bash
-gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
-sudo poma-configure-ibc
-sudo systemctl status ibgateway --no-pager
-```
-
-The helper writes `/home/poma/ibc/config.ini` with `0600` permissions and restarts `ibgateway.service`. Use IAP tunnelling to localhost VNC port `5900` if Gateway needs GUI interaction.
-
-Before paper or live trading:
-
-- Confirm `ibgateway.service` is active after reboot.
-- Confirm the Gateway API socket is reachable on `127.0.0.1:7497` unless you changed `IBKR_PORT`.
-- Run paper mode for at least one full trading week before considering live mode.
-
-## Manual SSH
-
-Use the Terraform output command:
-
-```bash
-gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
-```
+Live mode additionally requires `ALLOW_LIVE_TRADING=true` and manual review of reports, order limits, turnover limits, and position caps.
 
 ## Cost controls
 
@@ -127,6 +65,5 @@ gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
 - Keep the boot disk at or below 30 GB and type `pd-standard`.
 - Keep region in `us-west1`, `us-central1`, or `us-east1`.
 - Keep Terraform state in one small US-region GCS bucket.
-- Keep a manual budget alert enabled for the project.
+- Keep a manual Cloud Billing budget alert enabled for the project.
 - Watch external IPv4 and outbound network charges after deployment.
-- Do not add Artifact Registry, Secret Manager, Cloud NAT, Cloud Scheduler, Cloud Run, Pub/Sub, Redis, or managed databases unless you intentionally accept their costs.
