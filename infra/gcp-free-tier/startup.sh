@@ -76,6 +76,7 @@ configure_ibc_launcher() {
 
   python3 - "$${IBC_DIR}/gatewaystart.sh" "$${gateway_major_version}" "$${gateway_tws_path}" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 path = Path(sys.argv[1])
@@ -99,16 +100,11 @@ replacements = {
 }
 text = path.read_text(encoding="utf-8")
 for key, value in replacements.items():
-    lines = text.splitlines()
-    replaced = False
-    for i, line in enumerate(lines):
-        if line.startswith(f"{key}="):
-            lines[i] = f"{key}={value}"
-            replaced = True
-            break
-    if not replaced:
-        lines.insert(0, f"{key}={value}")
-    text = "\n".join(lines) + "\n"
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(key)}=[^\s\r\n]*"
+    replacement = f"{key}={value}"
+    text, count = re.subn(pattern, replacement, text, count=1)
+    if count == 0:
+        text = f"{replacement}\n{text}"
 path.write_text(text, encoding="utf-8")
 PY
 }
