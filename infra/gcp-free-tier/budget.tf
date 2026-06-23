@@ -3,6 +3,7 @@ data "google_project" "poma" {
 }
 
 resource "google_billing_budget" "poma" {
+  provider        = google-beta
   count           = var.budget_billing_account == "" ? 0 : 1
   billing_account = var.budget_billing_account
   display_name    = "${var.instance_name}-monthly-budget"
