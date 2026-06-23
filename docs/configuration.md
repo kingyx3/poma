@@ -13,7 +13,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same host.
-- Data-provider subscription that supports Nasdaq-100 constituents, market caps, and prices.
+- Data-provider subscription that supports Nasdaq-100 constituents, market caps, and prices if using `DATA_PROVIDER=fmp`.
 - Telegram bot and chat ID for mandatory run alerts.
 
 ## Environment variables
@@ -42,6 +42,8 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 | `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset from reference price. |
 | `MAX_ORDER_NOTIONAL_USD` | yes | `2000` | Blocks unexpectedly large orders. |
 | `MAX_DAILY_TRADES` | yes | `30` | Blocks unexpectedly high trade count. |
+| `ORDER_STATUS_TIMEOUT_SECONDS` | yes | `60` | Time to wait for broker order status before marking follow-up needed. |
+| `CANCEL_STALE_ORDERS` | yes | `true` | Request cancel when an order does not reach a terminal status in time. |
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
 | `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |
@@ -57,18 +59,17 @@ The deploy workflow does not store secrets in GCP Secret Manager. Instead, it re
 
 `ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects placeholder Telegram values, and writes the output file with `0600` permissions.
 
-Runtime values should be split as follows:
+The bootstrap workflow generates the non-secret GitHub Variables required by the deploy workflow. After bootstrap, the only always-required human-provided runtime secrets are `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
 
-- GitHub Variables: non-secret values such as trading mode, risk limits, calendar, provider mode, local paths, and WIF provider metadata.
-- GitHub Secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT`.
+Optional runtime secrets:
 
-See [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md) for the full GitHub Variables/Secrets list.
+- `FMP_API_KEY` when `DATA_PROVIDER=fmp`.
+- `IBKR_ACCOUNT` when `TRADING_MODE=paper` or `TRADING_MODE=live`.
+
+See [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md) for the full bootstrap and deploy sequence.
 
 ## GitHub secrets and variables
 
-Required for GCP VM deployment:
+First bootstrap requires only `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY`. Delete it after WIF bootstrap succeeds.
 
-- `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, `TF_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and `GCP_SERVICE_ACCOUNT_EMAIL` variables.
-- Every runtime key from `.env.example`, supplied through GitHub Variables or Secrets.
-
-No Artifact Registry, Secret Manager, or long-lived GCP JSON key is required.
+No Artifact Registry, Secret Manager, or long-lived GCP JSON key is required for normal deploys.
