@@ -1,6 +1,7 @@
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 BOOTSTRAP_WORKFLOW = REPO_ROOT / ".github/workflows/bootstrap-gcp-wif.yml"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
 
@@ -13,6 +14,23 @@ REQUIRED_ENVIRONMENT_SNIPPETS = (
     "environment: ${{ inputs.deploy_environment }}",
     "DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}",
 )
+
+OLD_ACTION_SNIPPETS = (
+    "google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f",
+    "google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a",
+    "hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd",
+    "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+)
+
+
+def test_ci_workflow_uses_current_action_versions() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "actions/checkout@v5" in workflow
+    assert "actions/setup-python@v6" in workflow
+    assert "hashicorp/setup-terraform@v4" in workflow
+    for snippet in OLD_ACTION_SNIPPETS:
+        assert snippet not in workflow
 
 
 def test_bootstrap_workflow_is_environment_scoped() -> None:
@@ -30,6 +48,17 @@ def test_bootstrap_workflow_is_environment_scoped() -> None:
     assert 'upsert_variable APP_ENV "${DEPLOY_ENVIRONMENT}"' in workflow
 
 
+def test_bootstrap_workflow_uses_current_action_versions() -> None:
+    workflow = BOOTSTRAP_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "actions/checkout@v5" in workflow
+    assert "google-github-actions/setup-gcloud@v3" in workflow
+    assert "hashicorp/setup-terraform@v4" in workflow
+    assert "google-github-actions/auth@" not in workflow
+    for snippet in OLD_ACTION_SNIPPETS:
+        assert snippet not in workflow
+
+
 def test_deploy_workflow_is_environment_scoped() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
@@ -41,3 +70,14 @@ def test_deploy_workflow_is_environment_scoped() -> None:
     assert "APP_ENV=${APP_ENV} must match deploy_environment=${DEPLOY_ENVIRONMENT}" in workflow
     assert "ORDER_STATUS_TIMEOUT_SECONDS: ${{ vars.ORDER_STATUS_TIMEOUT_SECONDS }}" in workflow
     assert "CANCEL_STALE_ORDERS: ${{ vars.CANCEL_STALE_ORDERS }}" in workflow
+
+
+def test_deploy_workflow_uses_current_action_versions() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "actions/checkout@v5" in workflow
+    assert "google-github-actions/auth@v3" in workflow
+    assert "google-github-actions/setup-gcloud@v3" in workflow
+    assert "hashicorp/setup-terraform@v4" in workflow
+    for snippet in OLD_ACTION_SNIPPETS:
+        assert snippet not in workflow
