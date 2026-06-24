@@ -82,7 +82,7 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a
 
-      - name: Resolve generated bootstrap values
+      - name: Resolve bootstrap project id
         run: |
           set -euo pipefail
           key_project_id="$(python -c 'import json, os; print(json.loads(os.environ["GOOGLE_BOOTSTRAP_CREDENTIALS"])["project_id"])')"
@@ -91,30 +91,38 @@ jobs:
             echo "::error::Unable to resolve GCP project id"
             exit 1
           fi
-          project_number="$(gcloud projects describe "${project_id}" --format='value(projectNumber)')"
-          state_bucket="${INPUT_TF_STATE_BUCKET:-poma-tf-state-${project_number}}"
 
           echo "GCP_PROJECT_ID=${project_id}" >> "${GITHUB_ENV}"
-          echo "GCP_PROJECT_NUMBER=${project_number}" >> "${GITHUB_ENV}"
-          echo "TF_STATE_BUCKET=${state_bucket}" >> "${GITHUB_ENV}"
-          echo "Resolved environment=${DEPLOY_ENVIRONMENT} project_id=${project_id} project_number=${project_number} tf_state_bucket=${state_bucket}"
+          echo "Resolved environment=${DEPLOY_ENVIRONMENT} project_id=${project_id}"
         env:
           GOOGLE_BOOTSTRAP_CREDENTIALS: ${{ secrets.GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY }}
           INPUT_PROJECT_ID: ${{ inputs.project_id }}
-          INPUT_TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
 
       - name: Enable prerequisite APIs
         run: |
+          set -euo pipefail
           gcloud services enable \
+            serviceusage.googleapis.com \
             cloudresourcemanager.googleapis.com \
             compute.googleapis.com \
             iam.googleapis.com \
             iamcredentials.googleapis.com \
             iap.googleapis.com \
-            serviceusage.googleapis.com \
             storage.googleapis.com \
             sts.googleapis.com \
             --project="${GCP_PROJECT_ID}"
+
+      - name: Resolve generated bootstrap values
+        run: |
+          set -euo pipefail
+          project_number="$(gcloud projects describe "${GCP_PROJECT_ID}" --format='value(projectNumber)')"
+          state_bucket="${INPUT_TF_STATE_BUCKET:-poma-tf-state-${project_number}}"
+
+          echo "GCP_PROJECT_NUMBER=${project_number}" >> "${GITHUB_ENV}"
+          echo "TF_STATE_BUCKET=${state_bucket}" >> "${GITHUB_ENV}"
+          echo "Resolved environment=${DEPLOY_ENVIRONMENT} project_id=${GCP_PROJECT_ID} project_number=${project_number} tf_state_bucket=${state_bucket}"
+        env:
+          INPUT_TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
 
       - name: Create Terraform state bucket
         run: |

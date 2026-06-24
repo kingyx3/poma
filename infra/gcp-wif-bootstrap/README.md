@@ -11,16 +11,18 @@ Workload Identity Federation avoids storing a long-lived `GCP_SERVICE_ACCOUNT_KE
 
 ## Idempotency model
 
-The GitHub Actions bootstrap workflow uses a GCS Terraform backend with the prefix `poma/gcp-wif-bootstrap`. Re-running the workflow with the same `project_id`, `tf_state_bucket`, and `github_repository` should converge against the same Terraform state instead of trying to recreate existing WIF resources.
+The GitHub Actions bootstrap workflow uses a GCS Terraform backend with an environment-specific prefix such as `poma/dev/gcp-wif-bootstrap`. Re-running the workflow with the same `deploy_environment`, `project_id`, `tf_state_bucket`, and `github_repository` should converge against the same Terraform state instead of trying to recreate existing WIF resources.
 
 Use the same state bucket as the VM deployment module, but keep the bootstrap and VM states under different prefixes:
 
-- `poma/gcp-wif-bootstrap`
-- `poma/gcp-free-tier`
+- `poma/<environment>/gcp-wif-bootstrap`
+- `poma/<environment>/gcp-free-tier`
 
 ## Recommended bootstrap through GitHub Actions
 
 The first bootstrap cannot be fully keyless because GitHub needs WIF to already exist before it can authenticate keylessly. Use a temporary bootstrap key once, then delete it immediately after the workflow succeeds.
+
+Terraform should manage the durable bootstrap resources, including the deployer service account, IAM bindings, Workload Identity Pool, provider, and required project services. The workflow still performs two small pre-Terraform actions because Terraform cannot use a GCS backend before the state bucket exists, and the Google provider/data sources cannot read the project until prerequisite APIs such as Cloud Resource Manager are enabled.
 
 1. Create a temporary GCP bootstrap service account key with the permissions listed below.
 2. Store that JSON key temporarily as the `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Secret.
@@ -41,7 +43,7 @@ Grant the temporary bootstrap service account these roles on the target project:
 
 | Role | Why it is needed |
 |---|---|
-| `roles/serviceusage.serviceUsageAdmin` | Enable IAM, Service Account Credentials, STS, and Service Usage APIs. |
+| `roles/serviceusage.serviceUsageAdmin` | Enable Service Usage, Cloud Resource Manager, IAM, Service Account Credentials, STS, Compute, IAP, and Storage APIs. |
 | `roles/iam.workloadIdentityPoolAdmin` | Create and manage the WIF pool and GitHub OIDC provider. |
 | `roles/iam.serviceAccountAdmin` | Create and manage the GitHub deployer service account. |
 | `roles/iam.serviceAccountIamAdmin` | Grant `roles/iam.workloadIdentityUser` on the deployer service account to the GitHub repository principal. |
@@ -61,10 +63,14 @@ Run this once from Cloud Shell or a local terminal authenticated as a user that 
 
 ```bash
 gcloud services enable \
+  serviceusage.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  compute.googleapis.com \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
-  sts.googleapis.com \
-  serviceusage.googleapis.com
+  iap.googleapis.com \
+  storage.googleapis.com \
+  sts.googleapis.com
 
 terraform -chdir=infra/gcp-wif-bootstrap init \
   -backend-config="bucket=<unique-tf-state-bucket>" \
