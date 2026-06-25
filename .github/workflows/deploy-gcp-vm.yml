@@ -45,6 +45,7 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
 
       # Terraform / GCP configuration from GitHub Variables.
+      # GCP_PROJECT_ID is optional when it can be inferred from the WIF service account email.
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       GCP_ZONE: ${{ vars.GCP_ZONE }}
@@ -93,6 +94,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Resolve WIF-derived deployment settings
+        run: |
+          set -euo pipefail
+          if [ -z "${GCP_PROJECT_ID:-}" ]; then
+            if [[ "${GCP_SERVICE_ACCOUNT_EMAIL:-}" =~ @([a-z0-9-]+)\.iam\.gserviceaccount\.com$ ]]; then
+              resolved_project_id="${BASH_REMATCH[1]}"
+              echo "GCP_PROJECT_ID=${resolved_project_id}" >> "${GITHUB_ENV}"
+              export GCP_PROJECT_ID="${resolved_project_id}"
+              echo "Resolved GCP_PROJECT_ID from GCP_SERVICE_ACCOUNT_EMAIL for ${DEPLOY_ENVIRONMENT}"
+            else
+              echo "::error::Missing GitHub variable for ${DEPLOY_ENVIRONMENT}: GCP_PROJECT_ID, and unable to infer it from GCP_SERVICE_ACCOUNT_EMAIL"
+              exit 1
+            fi
+          fi
+
       - name: Validate required deployment settings
         run: |
           set -euo pipefail
@@ -136,6 +152,9 @@ jobs:
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure gcloud project
+        run: gcloud config set project "${GCP_PROJECT_ID}"
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4
