@@ -9,7 +9,6 @@ from pathlib import Path
 
 ENV_LINE_RE = re.compile(r"^([A-Z][A-Z0-9_]*)=(.*)$")
 
-ALLOW_EMPTY = {"FMP_API_KEY", "IBKR_ACCOUNT"}
 PLACEHOLDER_VALUES = {"replace_me", "changeme", "todo"}
 
 
@@ -57,18 +56,10 @@ def build_env_lines(entries: list[tuple[str | None, str]], strict_env: bool) -> 
         errors.append("missing environment variables: " + ", ".join(sorted(missing)))
 
     for key, value in resolved.items():
-        if key in ALLOW_EMPTY:
-            continue
         if value.strip() == "":
             errors.append(f"{key} must not be empty")
         if value.strip().lower() in PLACEHOLDER_VALUES:
             errors.append(f"{key} still uses placeholder value {value!r}")
-
-    if resolved.get("DATA_PROVIDER") == "fmp" and not resolved.get("FMP_API_KEY"):
-        errors.append("FMP_API_KEY is required when DATA_PROVIDER=fmp")
-
-    if resolved.get("TRADING_MODE") in {"paper", "live"} and not resolved.get("IBKR_ACCOUNT"):
-        errors.append("IBKR_ACCOUNT is required when TRADING_MODE is paper or live")
 
     if errors:
         raise SystemExit("; ".join(errors))
