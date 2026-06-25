@@ -25,6 +25,11 @@ on:
         required: true
         type: boolean
         default: true
+      tailscale_enabled:
+        description: Join the VPS to Tailscale after Terraform apply.
+        required: true
+        type: boolean
+        default: true
       trading_mode:
         description: Runtime mode for the rendered VM .env.
         required: true
@@ -65,6 +70,8 @@ jobs:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      INPUT_TERRAFORM_ACTION: ${{ inputs.terraform_action }}
+      INPUT_TAILSCALE_ENABLED: ${{ inputs.tailscale_enabled }}
       INPUT_TRADING_MODE: ${{ inputs.trading_mode }}
       INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
       INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
@@ -72,6 +79,7 @@ jobs:
       # Minimal runtime secrets. Telegram is mandatory; FMP/IBKR are only required by selected modes.
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -188,8 +196,12 @@ jobs:
             echo "::error::trading_mode=live requires allow_live_trading=true"
             exit 1
           fi
+          if [ "${INPUT_TAILSCALE_ENABLED}" = "true" ] && [ "${INPUT_TERRAFORM_ACTION}" = "apply" ] && [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
+            echo "::error::TAILSCALE_AUTHKEY GitHub Environment secret is required when tailscale_enabled=true and terraform_action=apply"
+            exit 1
+          fi
 
-          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}"
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}, tailscale_enabled=${INPUT_TAILSCALE_ENABLED}"
 
       - name: Render .env from CI defaults and GitHub secrets
         run: python ops/scripts/render_env.py --strict-env --output .env.deploy
@@ -245,6 +257,51 @@ jobs:
       - name: Terraform apply
         if: ${{ inputs.terraform_action == 'apply' }}
         run: terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan
+
+      - name: Configure Tailscale on VM
+        if: ${{ inputs.terraform_action == 'apply' && inputs.tailscale_enabled }}
+        run: |
+          set -euo pipefail
+
+          instance_name="$(terraform -chdir=infra/gcp-free-tier output -raw instance_name)"
+          zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
+          tailscale_hostname="${instance_name}"
+          ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+
+          auth_key_file="$(mktemp)"
+          remote_script="$(mktemp)"
+          cleanup() {
+            rm -f "${auth_key_file}" "${remote_script}"
+          }
+          trap cleanup EXIT
+
+          printf '%s' "${TAILSCALE_AUTHKEY}" > "${auth_key_file}"
+          chmod 600 "${auth_key_file}"
+          cat > "${remote_script}" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cleanup() {
+            rm -f /tmp/poma-tailscale-authkey /run/poma-tailscale-authkey /tmp/poma-configure-tailscale.sh
+          }
+          trap cleanup EXIT
+
+          if ! command -v tailscale >/dev/null 2>&1; then
+            curl -fsSL https://tailscale.com/install.sh | sh
+          fi
+
+          systemctl enable --now tailscaled
+          install -m 600 -o root -g root /tmp/poma-tailscale-authkey /run/poma-tailscale-authkey
+          auth_key="$(cat /run/poma-tailscale-authkey)"
+          tailscale up --auth-key="${auth_key}" --hostname="${TAILSCALE_HOSTNAME}" --accept-dns=false
+          tailscale status
+          SCRIPT
+
+          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
+            'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
+          gcloud compute scp "${auth_key_file}" "${instance_name}:/tmp/poma-tailscale-authkey" "${ssh_common[@]}"
+          gcloud compute scp "${remote_script}" "${instance_name}:/tmp/poma-configure-tailscale.sh" "${ssh_common[@]}"
+          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
+            "sudo env TAILSCALE_HOSTNAME='${tailscale_hostname}' bash /tmp/poma-configure-tailscale.sh"
 
       - name: Package application
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
