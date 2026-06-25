@@ -42,11 +42,17 @@ def test_bootstrap_workflow_is_environment_scoped() -> None:
     assert "poma-gcp-wif-bootstrap-${{ inputs.deploy_environment }}" in workflow
     assert "poma/${DEPLOY_ENVIRONMENT}/gcp-wif-bootstrap" in workflow
     assert "WIF_POOL_ID: poma-${{ inputs.deploy_environment }}-github" in workflow
-    assert "WIF_SERVICE_ACCOUNT_ID: poma-${{ inputs.deploy_environment }}-github-deployer" in workflow
+    assert (
+        "WIF_SERVICE_ACCOUNT_ID: "
+        "poma-${{ inputs.deploy_environment }}-github-deployer"
+    ) in workflow
     assert '--pool-id "${WIF_POOL_ID}"' in workflow
     assert '-var="pool_id=${WIF_POOL_ID}"' in workflow
     assert 'config_path="${config_dir}/${DEPLOY_ENVIRONMENT}.env"' in workflow
-    assert "Deploy reads this file directly; bootstrap no longer writes GitHub Variables." in workflow
+    assert (
+        "Deploy reads this file directly; bootstrap no longer writes "
+        "GitHub Variables."
+    ) in workflow
 
 
 def test_bootstrap_workflow_uses_current_action_versions() -> None:
