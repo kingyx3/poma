@@ -152,6 +152,10 @@ jobs:
           set_default TF_STATE_BUCKET "poma-tf-state-${project_number}"
 
           set_env APP_ENV "${DEPLOY_ENVIRONMENT}"
+          if [ "${APP_ENV}" != "${DEPLOY_ENVIRONMENT}" ]; then
+            echo "::error::APP_ENV=${APP_ENV} must match deploy_environment=${DEPLOY_ENVIRONMENT}"
+            exit 1
+          fi
           set_env TRADING_MODE "${INPUT_TRADING_MODE}"
           set_env ALLOW_LIVE_TRADING "${INPUT_ALLOW_LIVE_TRADING}"
           set_default MARKET_CALENDAR "NASDAQ"
