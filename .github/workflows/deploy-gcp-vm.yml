@@ -25,6 +25,28 @@ on:
         required: true
         type: boolean
         default: true
+      trading_mode:
+        description: Runtime mode for the rendered VM .env.
+        required: true
+        type: choice
+        options:
+          - dry_run
+          - paper
+          - live
+        default: dry_run
+      data_provider:
+        description: Market-data provider for the rendered VM .env.
+        required: true
+        type: choice
+        options:
+          - fixture
+          - fmp
+        default: fixture
+      allow_live_trading:
+        description: Must be true when trading_mode=live.
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,45 +65,9 @@ jobs:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
-
-      # Required bootstrap-generated GitHub Environment Variables.
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-      GCP_SERVICE_ACCOUNT_EMAIL: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
-
-      # Optional GitHub Environment Variable overrides. Leave unset to use CI defaults.
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_REGION: ${{ vars.GCP_REGION }}
-      GCP_ZONE: ${{ vars.GCP_ZONE }}
-      GCP_VM_NAME: ${{ vars.GCP_VM_NAME }}
-      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-      APP_ENV: ${{ vars.APP_ENV }}
-      TRADING_MODE: ${{ vars.TRADING_MODE }}
-      ALLOW_LIVE_TRADING: ${{ vars.ALLOW_LIVE_TRADING }}
-      MARKET_CALENDAR: ${{ vars.MARKET_CALENDAR }}
-      REBALANCE_AFTER_OPEN_MINUTES: ${{ vars.REBALANCE_AFTER_OPEN_MINUTES }}
-      UNIVERSE: ${{ vars.UNIVERSE }}
-      RANK_LOOKBACK_DAYS: ${{ vars.RANK_LOOKBACK_DAYS }}
-      MAX_HOLDINGS: ${{ vars.MAX_HOLDINGS }}
-      PORTFOLIO_VALUE_USD: ${{ vars.PORTFOLIO_VALUE_USD }}
-      CASH_BUFFER_PCT: ${{ vars.CASH_BUFFER_PCT }}
-      MAX_POSITION_PCT: ${{ vars.MAX_POSITION_PCT }}
-      MAX_TURNOVER_PCT: ${{ vars.MAX_TURNOVER_PCT }}
-      MIN_TRADE_NOTIONAL_USD: ${{ vars.MIN_TRADE_NOTIONAL_USD }}
-      MIN_WEIGHT_DELTA_PCT: ${{ vars.MIN_WEIGHT_DELTA_PCT }}
-      ORDER_TYPE: ${{ vars.ORDER_TYPE }}
-      ALLOW_MARKET_ORDERS: ${{ vars.ALLOW_MARKET_ORDERS }}
-      LIMIT_OFFSET_BPS: ${{ vars.LIMIT_OFFSET_BPS }}
-      MAX_ORDER_NOTIONAL_USD: ${{ vars.MAX_ORDER_NOTIONAL_USD }}
-      MAX_DAILY_TRADES: ${{ vars.MAX_DAILY_TRADES }}
-      ORDER_STATUS_TIMEOUT_SECONDS: ${{ vars.ORDER_STATUS_TIMEOUT_SECONDS }}
-      CANCEL_STALE_ORDERS: ${{ vars.CANCEL_STALE_ORDERS }}
-      DATA_PROVIDER: ${{ vars.DATA_PROVIDER }}
-      FMP_BASE_URL: ${{ vars.FMP_BASE_URL }}
-      IBKR_HOST: ${{ vars.IBKR_HOST }}
-      IBKR_PORT: ${{ vars.IBKR_PORT }}
-      IBKR_CLIENT_ID: ${{ vars.IBKR_CLIENT_ID }}
-      STATE_DIR: ${{ vars.STATE_DIR }}
-      REPORT_DIR: ${{ vars.REPORT_DIR }}
+      INPUT_TRADING_MODE: ${{ inputs.trading_mode }}
+      INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
+      INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
 
       # Minimal runtime secrets. Telegram is mandatory; FMP/IBKR are only required by selected modes.
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
@@ -93,14 +79,25 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Resolve CI defaults and derived deployment settings
+      - name: Resolve generated deployment config and CI defaults
         run: |
           set -euo pipefail
+
+          config_path="ops/deploy/environments/${DEPLOY_ENVIRONMENT}.env"
+          if [ ! -f "${config_path}" ]; then
+            echo "::error::Missing generated deployment config: ${config_path}. Run Bootstrap GCP Workload Identity Federation with terraform_action=apply first."
+            exit 1
+          fi
+
+          set -a
+          # shellcheck source=/dev/null
+          . "${config_path}"
+          set +a
 
           require_non_empty() {
             local key="$1"
             if [ -z "${!key:-}" ]; then
-              echo "::error::Missing required GitHub Environment setting for ${DEPLOY_ENVIRONMENT}: ${key}"
+              echo "::error::Missing required generated deployment setting for ${DEPLOY_ENVIRONMENT}: ${key}"
               exit 1
             fi
           }
@@ -126,22 +123,19 @@ jobs:
           require_non_empty GCP_SERVICE_ACCOUNT_EMAIL
 
           if [[ ! "${GCP_WORKLOAD_IDENTITY_PROVIDER}" =~ ^projects/([0-9]+)/locations/global/workloadIdentityPools/.+/providers/.+$ ]]; then
-            echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER must use the projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider> format"
+            echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER in ${config_path} must use the projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider> format"
             exit 1
           fi
           project_number="${BASH_REMATCH[1]}"
 
           if [[ ! "${GCP_SERVICE_ACCOUNT_EMAIL}" =~ @([a-z0-9-]+)\.iam\.gserviceaccount\.com$ ]]; then
-            echo "::error::GCP_SERVICE_ACCOUNT_EMAIL must be a Google service account email"
+            echo "::error::GCP_SERVICE_ACCOUNT_EMAIL in ${config_path} must be a Google service account email"
             exit 1
           fi
           derived_project_id="${BASH_REMATCH[1]}"
 
-          if [ -n "${GCP_PROJECT_ID:-}" ] && [ "${GCP_PROJECT_ID}" != "${derived_project_id}" ]; then
-            echo "::error::GCP_PROJECT_ID=${GCP_PROJECT_ID} does not match project id derived from GCP_SERVICE_ACCOUNT_EMAIL=${derived_project_id}"
-            exit 1
-          fi
-
+          set_env GCP_WORKLOAD_IDENTITY_PROVIDER "${GCP_WORKLOAD_IDENTITY_PROVIDER}"
+          set_env GCP_SERVICE_ACCOUNT_EMAIL "${GCP_SERVICE_ACCOUNT_EMAIL}"
           set_env GCP_PROJECT_ID "${derived_project_id}"
           set_env GCP_PROJECT_NUMBER "${project_number}"
           set_default GCP_REGION "us-west1"
@@ -149,9 +143,9 @@ jobs:
           set_default GCP_VM_NAME "poma-${DEPLOY_ENVIRONMENT}-free-tier"
           set_default TF_STATE_BUCKET "poma-tf-state-${project_number}"
 
-          set_default APP_ENV "${DEPLOY_ENVIRONMENT}"
-          set_default TRADING_MODE "dry_run"
-          set_default ALLOW_LIVE_TRADING "false"
+          set_env APP_ENV "${DEPLOY_ENVIRONMENT}"
+          set_env TRADING_MODE "${INPUT_TRADING_MODE}"
+          set_env ALLOW_LIVE_TRADING "${INPUT_ALLOW_LIVE_TRADING}"
           set_default MARKET_CALENDAR "NASDAQ"
           set_default REBALANCE_AFTER_OPEN_MINUTES "10"
           set_default UNIVERSE "sp500"
@@ -170,18 +164,13 @@ jobs:
           set_default MAX_DAILY_TRADES "100"
           set_default ORDER_STATUS_TIMEOUT_SECONDS "60"
           set_default CANCEL_STALE_ORDERS "true"
-          set_default DATA_PROVIDER "fixture"
+          set_env DATA_PROVIDER "${INPUT_DATA_PROVIDER}"
           set_default FMP_BASE_URL "https://financialmodelingprep.com/stable"
           set_default IBKR_HOST "127.0.0.1"
           set_default IBKR_PORT "7497"
           set_default IBKR_CLIENT_ID "101"
           set_default STATE_DIR "state"
           set_default REPORT_DIR "reports"
-
-          if [ "${APP_ENV}" != "${DEPLOY_ENVIRONMENT}" ]; then
-            echo "::error::APP_ENV=${APP_ENV} must match deploy_environment=${DEPLOY_ENVIRONMENT}"
-            exit 1
-          fi
 
           if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
             echo "::error::TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID GitHub Environment secrets are required"
@@ -195,8 +184,12 @@ jobs:
             echo "::error::IBKR_ACCOUNT GitHub Environment secret is required when TRADING_MODE is paper or live"
             exit 1
           fi
+          if [ "${TRADING_MODE}" = "live" ] && [ "${ALLOW_LIVE_TRADING}" != "true" ]; then
+            echo "::error::trading_mode=live requires allow_live_trading=true"
+            exit 1
+          fi
 
-          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}"
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}"
 
       - name: Render .env from CI defaults and GitHub secrets
         run: python ops/scripts/render_env.py --strict-env --output .env.deploy
