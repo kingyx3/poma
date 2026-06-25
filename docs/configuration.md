@@ -15,6 +15,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 - IB Gateway running on the same host.
 - Data-provider subscription that supports S&P 500 constituents, market caps, and prices if using `data_provider=fmp` in the deploy workflow.
 - Telegram bot and chat ID for mandatory run alerts.
+- Tailscale tailnet and reusable or ephemeral auth key for secure VPS access.
 
 ## Environment variables
 
@@ -83,14 +84,17 @@ GitHub Environment Variables required for normal production deploys: **none**.
 
 First bootstrap requires only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Environment secret. Delete it after WIF bootstrap succeeds.
 
-Always-required runtime secrets:
+Always-required runtime/deploy secrets:
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+- `TAILSCALE_AUTHKEY` when deploy input `tailscale_enabled=true`.
+- `TELEGRAM_BOT_TOKEN`.
+- `TELEGRAM_CHAT_ID`.
 
 Optional runtime secrets:
 
 - `FMP_API_KEY` when `data_provider=fmp`.
 - `IBKR_ACCOUNT` when `trading_mode=paper` or `trading_mode=live`.
+
+`TAILSCALE_AUTHKEY` is used only during deploy apply. It is copied to the VM over IAP, consumed by `tailscale up`, then deleted from both the runner and VM. It is not written to Terraform state, VM metadata, or the app `.env`.
 
 No Artifact Registry, Secret Manager, or long-lived GCP JSON key is required for normal deploys. Manually delete any old GitHub Environment Variables left over from earlier bootstrap runs; the current workflows no longer read or manage them.
