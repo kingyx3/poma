@@ -14,7 +14,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same host.
 - Data-provider subscription that supports S&P 500 constituents, market caps, and prices if using `data_provider=fmp` in the deploy workflow.
-- Telegram bot and chat ID for mandatory run alerts.
+- Telegram bot token and chat ID for mandatory run alerts.
 - Tailscale tailnet and reusable or ephemeral auth key for secure VPS access.
 
 ## Environment variables
@@ -27,7 +27,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 | `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars`. |
 | `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
 | `DATA_PROVIDER` | yes | `fixture` | Set by deploy workflow input. Use `fmp` only after validating endpoint output. |
-| `FMP_API_KEY` | `fmp` only | empty | Store as a GitHub Secret for CI/CD deployment only when needed. |
+| `FMP_API_KEY` | yes | none | Mandatory deploy secret. Required even for fixture deploys so production can switch safely. |
 | `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override in code/config if your plan uses different endpoints. |
 | `UNIVERSE` | yes | `sp500` | Default strategy ranks S&P 500 constituents. Supported FMP universes: `sp500`, `nasdaq100`. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
@@ -48,17 +48,21 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
 | `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |
-| `IBKR_ACCOUNT` | paper/live | empty | Store as a GitHub Secret for CI/CD deployment only when needed. |
+| `IBKR_ACCOUNT` | yes | none | Mandatory deploy secret. Required even for dry-runs so production points at the intended account before mode changes. |
 | `STATE_DIR` | yes | `state` | Local state directory. |
 | `REPORT_DIR` | yes | `reports` | Local report directory. |
-| `TELEGRAM_BOT_TOKEN` | yes | none | Required for startup; store as a GitHub Secret for CI/CD deployment. |
-| `TELEGRAM_CHAT_ID` | yes | none | Required for startup; store as a GitHub Secret for CI/CD deployment. |
+| `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
+| `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Required unless a future chat-discovery flow is added. |
+
+## Telegram alert config
+
+`TELEGRAM_BOT_TOKEN` is necessary but not sufficient for outbound alerts. The bot token authenticates the bot to Telegram. `TELEGRAM_CHAT_ID` tells Telegram where to send the message. The current implementation calls Telegram `sendMessage` with both values, so both are required for reliable deploy-time and runtime alerts.
 
 ## CI/CD `.env` rendering
 
 The deploy workflow does not store secrets in GCP Secret Manager. Instead, it renders a VM-local `.env` file from CI defaults plus the selected GitHub Environment's required secrets, then uploads it to `/opt/poma/.env` over IAP SSH.
 
-`ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects placeholder Telegram values, and writes the output file with `0600` permissions.
+`ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects empty/placeholder values, and writes the output file with `0600` permissions. This makes `FMP_API_KEY`, `IBKR_ACCOUNT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` mandatory for production deploys.
 
 The deploy workflow supplies deterministic defaults for every non-secret `.env.example` key. Do not create GitHub Environment Variables for the normal production path.
 
@@ -87,13 +91,10 @@ First bootstrap requires only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` 
 Always-required runtime/deploy secrets:
 
 - `TAILSCALE_AUTHKEY` when deploy input `tailscale_enabled=true`.
+- `FMP_API_KEY`.
+- `IBKR_ACCOUNT`.
 - `TELEGRAM_BOT_TOKEN`.
 - `TELEGRAM_CHAT_ID`.
-
-Optional runtime secrets:
-
-- `FMP_API_KEY` when `data_provider=fmp`.
-- `IBKR_ACCOUNT` when `trading_mode=paper` or `trading_mode=live`.
 
 `TAILSCALE_AUTHKEY` is used only during deploy apply. It is copied to the VM over IAP, consumed by `tailscale up`, then deleted from both the runner and VM. It is not written to Terraform state, VM metadata, or the app `.env`.
 
