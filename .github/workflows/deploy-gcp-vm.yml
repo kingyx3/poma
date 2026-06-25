@@ -44,17 +44,16 @@ jobs:
       TF_INPUT: "false"
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
 
-      # Terraform / GCP configuration from GitHub Variables.
-      # GCP_PROJECT_ID is optional when it can be inferred from the WIF service account email.
+      # Required bootstrap-generated GitHub Environment Variables.
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT_EMAIL: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      # Optional GitHub Environment Variable overrides. Leave unset to use CI defaults.
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       GCP_ZONE: ${{ vars.GCP_ZONE }}
       GCP_VM_NAME: ${{ vars.GCP_VM_NAME }}
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-      GCP_SERVICE_ACCOUNT_EMAIL: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
-
-      # POMA runtime .env values from GitHub Variables.
       APP_ENV: ${{ vars.APP_ENV }}
       TRADING_MODE: ${{ vars.TRADING_MODE }}
       ALLOW_LIVE_TRADING: ${{ vars.ALLOW_LIVE_TRADING }}
@@ -84,7 +83,7 @@ jobs:
       STATE_DIR: ${{ vars.STATE_DIR }}
       REPORT_DIR: ${{ vars.REPORT_DIR }}
 
-      # POMA runtime .env secrets from GitHub Secrets.
+      # Minimal runtime secrets. Telegram is mandatory; FMP/IBKR are only required by selected modes.
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -94,54 +93,123 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Resolve WIF-derived deployment settings
+      - name: Resolve CI defaults and derived deployment settings
         run: |
           set -euo pipefail
-          if [ -z "${GCP_PROJECT_ID:-}" ]; then
-            if [[ "${GCP_SERVICE_ACCOUNT_EMAIL:-}" =~ @([a-z0-9-]+)\.iam\.gserviceaccount\.com$ ]]; then
-              resolved_project_id="${BASH_REMATCH[1]}"
-              echo "GCP_PROJECT_ID=${resolved_project_id}" >> "${GITHUB_ENV}"
-              export GCP_PROJECT_ID="${resolved_project_id}"
-              echo "Resolved GCP_PROJECT_ID from GCP_SERVICE_ACCOUNT_EMAIL for ${DEPLOY_ENVIRONMENT}"
-            else
-              echo "::error::Missing GitHub variable for ${DEPLOY_ENVIRONMENT}: GCP_PROJECT_ID, and unable to infer it from GCP_SERVICE_ACCOUNT_EMAIL"
+
+          require_non_empty() {
+            local key="$1"
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing required GitHub Environment setting for ${DEPLOY_ENVIRONMENT}: ${key}"
               exit 1
             fi
+          }
+
+          set_env() {
+            local key="$1"
+            local value="$2"
+            echo "${key}=${value}" >> "${GITHUB_ENV}"
+            export "${key}=${value}"
+          }
+
+          set_default() {
+            local key="$1"
+            local default_value="$2"
+            local value="${!key:-}"
+            if [ -z "${value}" ]; then
+              value="${default_value}"
+            fi
+            set_env "${key}" "${value}"
+          }
+
+          require_non_empty GCP_WORKLOAD_IDENTITY_PROVIDER
+          require_non_empty GCP_SERVICE_ACCOUNT_EMAIL
+
+          if [[ ! "${GCP_WORKLOAD_IDENTITY_PROVIDER}" =~ ^projects/([0-9]+)/locations/global/workloadIdentityPools/.+/providers/.+$ ]]; then
+            echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER must use the projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider> format"
+            exit 1
+          fi
+          project_number="${BASH_REMATCH[1]}"
+
+          if [[ ! "${GCP_SERVICE_ACCOUNT_EMAIL}" =~ @([a-z0-9-]+)\.iam\.gserviceaccount\.com$ ]]; then
+            echo "::error::GCP_SERVICE_ACCOUNT_EMAIL must be a Google service account email"
+            exit 1
+          fi
+          derived_project_id="${BASH_REMATCH[1]}"
+
+          if [ -n "${GCP_PROJECT_ID:-}" ] && [ "${GCP_PROJECT_ID}" != "${derived_project_id}" ]; then
+            echo "::error::GCP_PROJECT_ID=${GCP_PROJECT_ID} does not match project id derived from GCP_SERVICE_ACCOUNT_EMAIL=${derived_project_id}"
+            exit 1
           fi
 
-      - name: Validate required deployment settings
-        run: |
-          set -euo pipefail
-          required=(
-            GCP_PROJECT_ID
-            GCP_REGION
-            GCP_ZONE
-            GCP_VM_NAME
-            TF_STATE_BUCKET
-            GCP_WORKLOAD_IDENTITY_PROVIDER
-            GCP_SERVICE_ACCOUNT_EMAIL
-          )
-          for key in "${required[@]}"; do
-            if [ -z "${!key}" ]; then
-              echo "::error::Missing GitHub variable for ${DEPLOY_ENVIRONMENT}: ${key}"
-              exit 1
-            fi
-          done
+          set_env GCP_PROJECT_ID "${derived_project_id}"
+          set_env GCP_PROJECT_NUMBER "${project_number}"
+          set_default GCP_REGION "us-west1"
+          set_default GCP_ZONE "us-west1-b"
+          set_default GCP_VM_NAME "poma-${DEPLOY_ENVIRONMENT}-free-tier"
+          set_default TF_STATE_BUCKET "poma-tf-state-${project_number}"
+
+          set_default APP_ENV "${DEPLOY_ENVIRONMENT}"
+          set_default TRADING_MODE "dry_run"
+          set_default ALLOW_LIVE_TRADING "false"
+          set_default MARKET_CALENDAR "NASDAQ"
+          set_default REBALANCE_AFTER_OPEN_MINUTES "10"
+          set_default UNIVERSE "sp500"
+          set_default RANK_LOOKBACK_DAYS "90"
+          set_default MAX_HOLDINGS "100"
+          set_default PORTFOLIO_VALUE_USD "10000"
+          set_default CASH_BUFFER_PCT "0.02"
+          set_default MAX_POSITION_PCT "0.10"
+          set_default MAX_TURNOVER_PCT "0.35"
+          set_default MIN_TRADE_NOTIONAL_USD "25"
+          set_default MIN_WEIGHT_DELTA_PCT "0.0025"
+          set_default ORDER_TYPE "limit"
+          set_default ALLOW_MARKET_ORDERS "false"
+          set_default LIMIT_OFFSET_BPS "10"
+          set_default MAX_ORDER_NOTIONAL_USD "2000"
+          set_default MAX_DAILY_TRADES "100"
+          set_default ORDER_STATUS_TIMEOUT_SECONDS "60"
+          set_default CANCEL_STALE_ORDERS "true"
+          set_default DATA_PROVIDER "fixture"
+          set_default FMP_BASE_URL "https://financialmodelingprep.com/stable"
+          set_default IBKR_HOST "127.0.0.1"
+          set_default IBKR_PORT "7497"
+          set_default IBKR_CLIENT_ID "101"
+          set_default STATE_DIR "state"
+          set_default REPORT_DIR "reports"
+
           if [ "${APP_ENV}" != "${DEPLOY_ENVIRONMENT}" ]; then
             echo "::error::APP_ENV=${APP_ENV} must match deploy_environment=${DEPLOY_ENVIRONMENT}"
             exit 1
           fi
 
-      - name: Render .env from GitHub variables and secrets
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "::error::TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID GitHub Environment secrets are required"
+            exit 1
+          fi
+          if [ "${DATA_PROVIDER}" = "fmp" ] && [ -z "${FMP_API_KEY:-}" ]; then
+            echo "::error::FMP_API_KEY GitHub Environment secret is required when DATA_PROVIDER=fmp"
+            exit 1
+          fi
+          if [[ "${TRADING_MODE}" =~ ^(paper|live)$ ]] && [ -z "${IBKR_ACCOUNT:-}" ]; then
+            echo "::error::IBKR_ACCOUNT GitHub Environment secret is required when TRADING_MODE is paper or live"
+            exit 1
+          fi
+
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}"
+
+      - name: Render .env from CI defaults and GitHub secrets
         run: python ops/scripts/render_env.py --strict-env --output .env.deploy
 
-      - name: Install app for FMP provider validation
-        if: ${{ env.DATA_PROVIDER == 'fmp' }}
-        run: pip install -e .
-
       - name: Validate FMP data provider output
-        if: ${{ env.DATA_PROVIDER == 'fmp' }}
-        run: python ops/scripts/validate_data_provider.py
+        run: |
+          set -euo pipefail
+          if [ "${DATA_PROVIDER}" != "fmp" ]; then
+            echo "Skipping FMP validation because DATA_PROVIDER=${DATA_PROVIDER}"
+            exit 0
+          fi
+          pip install -e .
+          python ops/scripts/validate_data_provider.py
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
