@@ -57,6 +57,9 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       GITHUB_REPOSITORY_ALLOWED: ${{ inputs.github_repository }}
       STATE_BUCKET_LOCATION: ${{ inputs.state_bucket_location }}
+      WIF_POOL_ID: poma-${{ inputs.deploy_environment }}-github
+      WIF_PROVIDER_ID: github
+      WIF_SERVICE_ACCOUNT_ID: poma-${{ inputs.deploy_environment }}-github-deployer
 
     steps:
       - name: Check out repository
@@ -191,14 +194,23 @@ jobs:
       - name: Terraform validate
         run: terraform -chdir=infra/gcp-wif-bootstrap validate
 
+      - name: Import existing bootstrap resources into state
+        run: |
+          set -euo pipefail
+          bash ops/scripts/import_gcp_wif_bootstrap_state.sh \
+            --project-id "${GCP_PROJECT_ID}" \
+            --pool-id "${WIF_POOL_ID}" \
+            --provider-id "${WIF_PROVIDER_ID}" \
+            --service-account-id "${WIF_SERVICE_ACCOUNT_ID}"
+
       - name: Terraform plan
         run: |
           terraform -chdir=infra/gcp-wif-bootstrap plan -out=tfplan \
             -var="project_id=${GCP_PROJECT_ID}" \
             -var="github_repository=${GITHUB_REPOSITORY_ALLOWED}" \
-            -var="pool_id=poma-${DEPLOY_ENVIRONMENT}-github" \
-            -var="provider_id=github" \
-            -var="service_account_id=poma-${DEPLOY_ENVIRONMENT}-github-deployer"
+            -var="pool_id=${WIF_POOL_ID}" \
+            -var="provider_id=${WIF_PROVIDER_ID}" \
+            -var="service_account_id=${WIF_SERVICE_ACCOUNT_ID}"
 
       - name: Terraform apply
         if: ${{ inputs.terraform_action == 'apply' }}
