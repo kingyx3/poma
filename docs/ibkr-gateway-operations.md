@@ -12,7 +12,7 @@ ssh poma@<tailscale-ip-or-hostname>
 ```
 
 ```bash
-gcloud compute ssh poma-free-tier --zone us-west1-b --tunnel-through-iap
+gcloud compute ssh poma-<env>-free-tier --zone us-west1-b --tunnel-through-iap
 ```
 
 3. Configure VM-local IBC credentials:
@@ -62,7 +62,7 @@ ssh poma@<tailscale-ip-or-hostname> -L 5900:127.0.0.1:5900
 Use IAP as the break-glass tunnel:
 
 ```bash
-gcloud compute ssh poma-free-tier \
+gcloud compute ssh poma-<env>-free-tier \
   --zone us-west1-b \
   --tunnel-through-iap \
   -- -L 5900:127.0.0.1:5900
