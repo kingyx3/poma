@@ -67,7 +67,8 @@ def main() -> None:
     if not seen:
         print(
             "No chat IDs found. Message the bot first, or add it to the target group/channel, "
-            "then run this again. If a webhook is configured, temporarily remove it before using getUpdates.",
+            "then run this again. If a webhook is configured, temporarily remove it before "
+            "using getUpdates.",
             file=sys.stderr,
         )
         raise SystemExit(1)
