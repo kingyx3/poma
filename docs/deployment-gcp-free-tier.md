@@ -96,6 +96,12 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 
 The deploy workflow supplies safe defaults for project-derived settings, region, zone, VM name, app mode, trading defaults, risk limits, provider defaults, and local paths. Do not create GitHub Environment Variables for these defaults.
 
+## Bootstrap state recovery
+
+If bootstrap fails with `already exists` for the GitHub deployer service account or Workload Identity Pool, the resource exists in GCP but is missing from the selected Terraform state. Common causes are a previous failed partial bootstrap, using a different `deploy_environment`, changing the Terraform backend bucket/prefix, or creating the resource manually.
+
+The bootstrap workflow runs `ops/scripts/import_gcp_wif_bootstrap_state.sh` after `terraform init` and before `terraform plan`. The helper imports existing bootstrap resources into the configured remote state and skips anything already managed. Rerun the same environment with the same `tf_state_bucket` and `project_id` so Terraform adopts the existing resources instead of trying to create duplicates.
+
 ## What deploy does
 
 On apply, the deploy workflow:
