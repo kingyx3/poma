@@ -20,6 +20,31 @@ Each environment gets isolated Terraform state prefixes:
 
 Bootstrap also generates environment-specific VM and deployer names, such as `poma-dev-free-tier`, `poma-stg-free-tier`, and `poma-prd-free-tier`.
 
+## Workflow input shapes
+
+### Bootstrap GCP Workload Identity Federation
+
+| Input | Type | Required | Allowed/default | Notes |
+|---|---|---:|---|---|
+| `deploy_environment` | choice | yes | `dev`, `stg`, `prd`; default `dev` | Selects the GitHub Environment and generated config file. |
+| `project_id` | string | no | default from bootstrap key | Override only when the bootstrap key project differs from the target project. |
+| `tf_state_bucket` | string | no | `poma-tf-state-<project-number>` | Optional custom GCS bucket name. |
+| `state_bucket_location` | string | no | `us-west1` | GCS bucket location. |
+| `github_repository` | string | yes | `kingyx3/poma` | Repository allowed to deploy through WIF. |
+| `terraform_action` | choice | yes | `plan`, `apply`; default `plan` | `apply` creates WIF and commits generated deploy config. |
+
+### Deploy GCP e2-micro VM
+
+| Input | Type | Required | Allowed/default | Notes |
+|---|---|---:|---|---|
+| `deploy_environment` | choice | yes | `dev`, `stg`, `prd`; default `dev` | Selects `ops/deploy/environments/<env>.env` and GitHub Environment secrets. |
+| `terraform_action` | choice | yes | `plan`, `apply`; default `plan` | `apply` provisions/updates the VM and can deploy the app. |
+| `deploy_app` | boolean | yes | default `true` | Uploads app package and rendered `.env` after Terraform apply. |
+| `tailscale_enabled` | boolean | yes | default `true` | Joins the VM to Tailscale after Terraform apply. Requires `TAILSCALE_AUTHKEY`. |
+| `trading_mode` | choice | yes | `dry_run`, `paper`, `live`; default `dry_run` | Rendered into the VM-local `.env`. |
+| `data_provider` | choice | yes | `fixture`, `fmp`; default `fixture` | Rendered into the VM-local `.env`. `FMP_API_KEY` is mandatory even for fixture deploys so production can switch safely. |
+| `allow_live_trading` | boolean | yes | default `false` | Must be `true` when `trading_mode=live`. |
+
 ## Required setup per environment
 
 Before bootstrapping an environment, add this temporary environment secret only to the environment being bootstrapped:
@@ -49,10 +74,10 @@ After bootstrap, add only the runtime secrets needed by that environment:
 | Secret | Required for | Notes |
 |---|---|---|
 | `TAILSCALE_AUTHKEY` | Deploy apply when `tailscale_enabled=true` | Use an ephemeral/pre-approved auth key where possible. It is uploaded to the VM over IAP, used once by `tailscale up`, then deleted from the runner and VM. |
-| `TELEGRAM_BOT_TOKEN` | All deployed runs | Mandatory alerts. |
-| `TELEGRAM_CHAT_ID` | All deployed runs | Mandatory alerts. |
-| `FMP_API_KEY` | `data_provider=fmp` | Not needed for fixture dry-runs. |
-| `IBKR_ACCOUNT` | `trading_mode=paper/live` | Not needed for dry-runs. |
+| `TELEGRAM_BOT_TOKEN` | All deployed runs | Authenticates the Telegram bot. |
+| `TELEGRAM_CHAT_ID` | All deployed runs | Destination chat/channel/user for alerts. Required unless a future chat-discovery flow is added. |
+| `FMP_API_KEY` | All deploys | Mandatory production secret, even when `data_provider=fixture`, so the VM has the real provider key before switching modes. |
+| `IBKR_ACCOUNT` | All deploys | Mandatory production secret, even when `trading_mode=dry_run`, so the VM has the intended account before switching modes. |
 
 Do not store IBKR login credentials in GitHub. Configure them locally on the VM with [`ibkr-gateway-operations.md`](ibkr-gateway-operations.md).
 
@@ -64,7 +89,7 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 2. Rerun the same workflow with `terraform_action=apply`.
 3. Confirm the generated config file for the selected environment was committed to `ops/deploy/environments/<env>.env`.
 4. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from that GitHub Environment and disable/delete the temporary key in GCP IAM.
-5. Add `TAILSCALE_AUTHKEY`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` to that GitHub Environment.
+5. Add `TAILSCALE_AUTHKEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT` to that GitHub Environment.
 6. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
 7. Rerun with `terraform_action=apply`, `tailscale_enabled=true`, and `deploy_app=true`.
 8. Keep `trading_mode=dry_run` until the deploy smoke test and Gateway setup are verified.
