@@ -13,21 +13,21 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same host.
-- Data-provider subscription that supports S&P 500 constituents, market caps, and prices if using `DATA_PROVIDER=fmp`.
+- Data-provider subscription that supports S&P 500 constituents, market caps, and prices if using `data_provider=fmp` in the deploy workflow.
 - Telegram bot and chat ID for mandatory run alerts.
 
 ## Environment variables
 
 | Variable | Required | Default | Notes |
 |---|---:|---|---|
-| `APP_ENV` | yes | `development` locally; selected GitHub Environment in CI | Label only. CI sets this to `dev`, `stg`, or `prd`. |
-| `TRADING_MODE` | yes | `dry_run` | `dry_run`, `paper`, or `live`. |
-| `ALLOW_LIVE_TRADING` | live only | `false` | Must be true for live trading. |
+| `APP_ENV` | yes | selected GitHub Environment in CI | Label only. CI sets this to `dev`, `stg`, or `prd`. |
+| `TRADING_MODE` | yes | `dry_run` | Set by deploy workflow input: `dry_run`, `paper`, or `live`. |
+| `ALLOW_LIVE_TRADING` | live only | `false` | Set by deploy workflow input. Must be true for live trading. |
 | `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars`. |
 | `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
-| `DATA_PROVIDER` | yes | `fixture` | Use `fmp` only after validating endpoint output. |
+| `DATA_PROVIDER` | yes | `fixture` | Set by deploy workflow input. Use `fmp` only after validating endpoint output. |
 | `FMP_API_KEY` | `fmp` only | empty | Store as a GitHub Secret for CI/CD deployment only when needed. |
-| `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override if your plan uses different endpoints. |
+| `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override in code/config if your plan uses different endpoints. |
 | `UNIVERSE` | yes | `sp500` | Default strategy ranks S&P 500 constituents. Supported FMP universes: `sp500`, `nasdaq100`. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
 | `MAX_HOLDINGS` | yes | `100` | Hold only the top names by rank improvement score. |
@@ -59,18 +59,29 @@ The deploy workflow does not store secrets in GCP Secret Manager. Instead, it re
 
 `ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects placeholder Telegram values, and writes the output file with `0600` permissions.
 
-The deploy workflow supplies deterministic defaults for every non-secret `.env.example` key. Use GitHub Environment Variables only for intentional overrides, not for the normal happy path.
+The deploy workflow supplies deterministic defaults for every non-secret `.env.example` key. Do not create GitHub Environment Variables for the normal production path.
 
-## Minimal GitHub secrets and variables
+## Generated deploy config
 
-First bootstrap requires only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Environment secret. Delete it after WIF bootstrap succeeds.
+Bootstrap apply commits non-secret GCP deploy identifiers to:
 
-Bootstrap apply generates the only always-required GitHub Environment Variables for normal deploys:
+```text
+ops/deploy/environments/<env>.env
+```
+
+The generated file contains:
 
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`
 - `GCP_SERVICE_ACCOUNT_EMAIL`
+- `TF_STATE_BUCKET`
 
-`TF_STATE_BUCKET` is only stored if a custom state bucket input is used. With the default state bucket name, deploy derives it from the WIF provider's project number.
+Deploy reads this file and derives `GCP_PROJECT_ID` from `GCP_SERVICE_ACCOUNT_EMAIL`. These values are not secrets and should not be duplicated as GitHub Environment Variables.
+
+## Minimal GitHub secrets and variables
+
+GitHub Environment Variables required for normal production deploys: **none**.
+
+First bootstrap requires only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Environment secret. Delete it after WIF bootstrap succeeds.
 
 Always-required runtime secrets:
 
@@ -79,7 +90,7 @@ Always-required runtime secrets:
 
 Optional runtime secrets:
 
-- `FMP_API_KEY` when `DATA_PROVIDER=fmp`.
-- `IBKR_ACCOUNT` when `TRADING_MODE=paper` or `TRADING_MODE=live`.
+- `FMP_API_KEY` when `data_provider=fmp`.
+- `IBKR_ACCOUNT` when `trading_mode=paper` or `trading_mode=live`.
 
-No Artifact Registry, Secret Manager, or long-lived GCP JSON key is required for normal deploys.
+No Artifact Registry, Secret Manager, or long-lived GCP JSON key is required for normal deploys. Manually delete any old GitHub Environment Variables left over from earlier bootstrap runs; the current workflows no longer read or manage them.
