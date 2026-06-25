@@ -52,11 +52,13 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 | `STATE_DIR` | yes | `state` | Local state directory. |
 | `REPORT_DIR` | yes | `reports` | Local report directory. |
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
-| `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Required unless a future chat-discovery flow is added. |
+| `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 
 ## Telegram alert config
 
 `TELEGRAM_BOT_TOKEN` is necessary but not sufficient for outbound alerts. The bot token authenticates the bot to Telegram. `TELEGRAM_CHAT_ID` tells Telegram where to send the message. The current implementation calls Telegram `sendMessage` with both values, so both are required for reliable deploy-time and runtime alerts.
+
+Use **Discover Telegram chat ID** in GitHub Actions to read the chat ID. Start the workflow first, then send a fresh `/start` or message to the bot or target group/channel while the workflow is polling. Messages sent before the helper starts may already have been consumed by Telegram and may not appear in `getUpdates`.
 
 ## CI/CD `.env` rendering
 

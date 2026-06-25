@@ -10,19 +10,22 @@ Recommended GitHub workflow:
 
 1. Create the bot and copy its token.
 2. Save the token as the `TELEGRAM_BOT_TOKEN` GitHub Environment secret for `dev`, `stg`, or `prd`.
-3. Message the bot from the target account, or add the bot to the target group/channel and send a message there.
-4. Run **Discover Telegram chat ID** from GitHub Actions.
-5. Select the same `deploy_environment`.
-6. Copy the first column from the matching log row into the `TELEGRAM_CHAT_ID` GitHub Environment secret.
+3. Run **Discover Telegram chat ID** from GitHub Actions.
+4. Select the same `deploy_environment`.
+5. Keep the workflow log open, then send a fresh `/start` or any message to the bot from the target account.
+6. For a group/channel, add the bot to the target group/channel and send a fresh message there while the workflow is running.
+7. Copy the first column from the matching log row into the `TELEGRAM_CHAT_ID` GitHub Environment secret.
+
+Important timing detail: a message sent before the workflow starts might not be returned by `getUpdates` anymore, especially if a previous helper run, webhook, or bot consumer already consumed it. The workflow now polls for a fresh update, so the reliable path is to send a new message after the workflow has started.
 
 Local fallback:
 
 ```bash
 export TELEGRAM_BOT_TOKEN='your-bot-token'
-python ops/scripts/get_telegram_chat_id.py
+python ops/scripts/get_telegram_chat_id.py --timeout-seconds 120
 ```
 
-If the bot already uses a webhook, remove the webhook before using this helper because Telegram long polling does not work while a webhook is active.
+If the bot already uses a webhook, `getUpdates` cannot read updates until the webhook is removed. In GitHub Actions, set `delete_webhook=true` for this helper run, or remove the webhook temporarily yourself. The helper uses `drop_pending_updates=false` when deleting the webhook so pending messages are not intentionally discarded.
 
 ## Tailscale node registration
 

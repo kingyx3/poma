@@ -13,10 +13,20 @@ on:
           - prd
         default: dev
       limit:
-        description: Maximum recent Telegram updates to inspect.
+        description: Maximum Telegram updates to inspect per poll.
         required: true
         type: number
-        default: 20
+        default: 100
+      timeout_seconds:
+        description: Seconds to wait for a fresh bot/group/channel message after the run starts.
+        required: true
+        type: number
+        default: 120
+      delete_webhook:
+        description: Temporarily delete an existing Telegram webhook before using getUpdates.
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,8 +57,25 @@ jobs:
             echo "::error::Missing TELEGRAM_BOT_TOKEN secret in GitHub Environment ${DEPLOY_ENVIRONMENT}"
             exit 1
           fi
-          echo "Message the bot or target group/channel first, then read the chat ID from the first column below."
-          python ops/scripts/get_telegram_chat_id.py --limit "${LIMIT}"
+
+          delete_webhook_flag=()
+          if [ "${DELETE_WEBHOOK}" = "true" ]; then
+            delete_webhook_flag+=(--delete-webhook)
+          fi
+
+          cat <<'EOF'
+          Keep this workflow open, then send a fresh /start or any message to the bot.
+          For a group/channel, add the bot there and send a fresh message in that group/channel.
+          Existing messages sent before this run may already have been consumed by Telegram.
+          Copy the matching chat ID from the first column below into TELEGRAM_CHAT_ID.
+          EOF
+
+          python ops/scripts/get_telegram_chat_id.py \
+            --limit "${LIMIT}" \
+            --timeout-seconds "${TIMEOUT_SECONDS}" \
+            "${delete_webhook_flag[@]}"
         env:
           DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
           LIMIT: ${{ inputs.limit }}
+          TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+          DELETE_WEBHOOK: ${{ inputs.delete_webhook }}
