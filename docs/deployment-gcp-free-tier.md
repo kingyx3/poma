@@ -48,6 +48,7 @@ After bootstrap, add only the runtime secrets needed by that environment:
 
 | Secret | Required for | Notes |
 |---|---|---|
+| `TAILSCALE_AUTHKEY` | Deploy apply when `tailscale_enabled=true` | Use an ephemeral/pre-approved auth key where possible. It is uploaded to the VM over IAP, used once by `tailscale up`, then deleted from the runner and VM. |
 | `TELEGRAM_BOT_TOKEN` | All deployed runs | Mandatory alerts. |
 | `TELEGRAM_CHAT_ID` | All deployed runs | Mandatory alerts. |
 | `FMP_API_KEY` | `data_provider=fmp` | Not needed for fixture dry-runs. |
@@ -63,9 +64,9 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 2. Rerun the same workflow with `terraform_action=apply`.
 3. Confirm the generated config file for the selected environment was committed to `ops/deploy/environments/<env>.env`.
 4. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from that GitHub Environment and disable/delete the temporary key in GCP IAM.
-5. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to that GitHub Environment.
+5. Add `TAILSCALE_AUTHKEY`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` to that GitHub Environment.
 6. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
-7. Rerun with `terraform_action=apply` and `deploy_app=true`.
+7. Rerun with `terraform_action=apply`, `tailscale_enabled=true`, and `deploy_app=true`.
 8. Keep `trading_mode=dry_run` until the deploy smoke test and Gateway setup are verified.
 
 The deploy workflow supplies safe defaults for project-derived settings, region, zone, VM name, app mode, trading defaults, risk limits, provider defaults, and local paths. Do not create GitHub Environment Variables for these defaults.
@@ -80,11 +81,14 @@ On apply, the deploy workflow:
 4. Authenticates to GCP through the generated Workload Identity Federation settings.
 5. Renders a VM-local `.env` from CI defaults plus the selected environment's GitHub secrets.
 6. Runs Terraform for `infra/gcp-free-tier` using that environment's state prefix.
-7. Uploads the app package and `.env` through IAP SSH.
-8. Runs a fixture-backed dry-run smoke test.
-9. Installs the cron schedule.
+7. Configures Tailscale over IAP SSH when `tailscale_enabled=true`.
+8. Uploads the app package and `.env` through IAP SSH.
+9. Runs a fixture-backed dry-run smoke test.
+10. Installs the cron schedule.
 
-The VM startup script installs Docker, cron, IB Gateway, IBC, headless GUI support, and `ibgateway.service`.
+The VM keeps Google Cloud ingress limited to IAP SSH. Tailscale gives operator access through the tailnet without opening broad public SSH/VNC firewall rules. The VM still keeps an ephemeral public IP for low-cost outbound package installs and broker/data-provider traffic.
+
+The VM startup script installs Docker, cron, IB Gateway, IBC, headless GUI support, and `ibgateway.service`. Tailscale is installed/configured during deploy apply so the auth key is not stored in Terraform state or VM metadata.
 
 ## Paper/live setup
 
