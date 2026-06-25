@@ -41,11 +41,12 @@ def test_bootstrap_workflow_is_environment_scoped() -> None:
 
     assert "poma-gcp-wif-bootstrap-${{ inputs.deploy_environment }}" in workflow
     assert "poma/${DEPLOY_ENVIRONMENT}/gcp-wif-bootstrap" in workflow
-    assert "poma-${DEPLOY_ENVIRONMENT}-github" in workflow
-    assert "poma-${DEPLOY_ENVIRONMENT}-github-deployer" in workflow
-    assert "--env \"${DEPLOY_ENVIRONMENT}\"" in workflow
-    assert "poma-${DEPLOY_ENVIRONMENT}-free-tier" in workflow
-    assert 'upsert_variable APP_ENV "${DEPLOY_ENVIRONMENT}"' in workflow
+    assert "WIF_POOL_ID: poma-${{ inputs.deploy_environment }}-github" in workflow
+    assert "WIF_SERVICE_ACCOUNT_ID: poma-${{ inputs.deploy_environment }}-github-deployer" in workflow
+    assert '--pool-id "${WIF_POOL_ID}"' in workflow
+    assert '-var="pool_id=${WIF_POOL_ID}"' in workflow
+    assert 'config_path="${config_dir}/${DEPLOY_ENVIRONMENT}.env"' in workflow
+    assert "Deploy reads this file directly; bootstrap no longer writes GitHub Variables." in workflow
 
 
 def test_bootstrap_workflow_uses_current_action_versions() -> None:
@@ -67,9 +68,10 @@ def test_deploy_workflow_is_environment_scoped() -> None:
 
     assert "poma-gcp-free-tier-deploy-${{ inputs.deploy_environment }}" in workflow
     assert "poma/${DEPLOY_ENVIRONMENT}/gcp-free-tier" in workflow
+    assert 'set_env APP_ENV "${DEPLOY_ENVIRONMENT}"' in workflow
     assert "APP_ENV=${APP_ENV} must match deploy_environment=${DEPLOY_ENVIRONMENT}" in workflow
-    assert "ORDER_STATUS_TIMEOUT_SECONDS: ${{ vars.ORDER_STATUS_TIMEOUT_SECONDS }}" in workflow
-    assert "CANCEL_STALE_ORDERS: ${{ vars.CANCEL_STALE_ORDERS }}" in workflow
+    assert 'set_default ORDER_STATUS_TIMEOUT_SECONDS "60"' in workflow
+    assert 'set_default CANCEL_STALE_ORDERS "true"' in workflow
 
 
 def test_deploy_workflow_uses_current_action_versions() -> None:
