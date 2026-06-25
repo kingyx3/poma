@@ -1,0 +1,54 @@
+name: Discover Telegram chat ID
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: GitHub Environment containing TELEGRAM_BOT_TOKEN.
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - prd
+        default: dev
+      limit:
+        description: Maximum recent Telegram updates to inspect.
+        required: true
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Discover chat ID (${{ inputs.deploy_environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.deploy_environment }}
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install helper dependency
+        run: python -m pip install requests
+
+      - name: Discover Telegram chat IDs
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+            echo "::error::Missing TELEGRAM_BOT_TOKEN secret in GitHub Environment ${DEPLOY_ENVIRONMENT}"
+            exit 1
+          fi
+          echo "Message the bot or target group/channel first, then read the chat ID from the first column below."
+          python ops/scripts/get_telegram_chat_id.py --limit "${LIMIT}"
+        env:
+          DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+          LIMIT: ${{ inputs.limit }}
