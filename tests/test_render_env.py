@@ -45,6 +45,8 @@ def test_render_env_writes_all_example_keys_from_environment(tmp_path: Path) -> 
     values.update(
         {
             "APP_ENV": "production",
+            "FMP_API_KEY": "fmp-key",
+            "IBKR_ACCOUNT": "U1234567",
             "TELEGRAM_BOT_TOKEN": "123456:telegram-token",
             "TELEGRAM_CHAT_ID": "-1001234567890",
         }
@@ -71,6 +73,8 @@ def test_render_env_writes_all_example_keys_from_environment(tmp_path: Path) -> 
 
     rendered = output_path.read_text(encoding="utf-8")
     assert "APP_ENV=production" in rendered
+    assert "FMP_API_KEY=fmp-key" in rendered
+    assert "IBKR_ACCOUNT=U1234567" in rendered
     assert "TELEGRAM_BOT_TOKEN=123456:telegram-token" in rendered
     assert "TELEGRAM_CHAT_ID=-1001234567890" in rendered
     assert stat.S_IMODE(output_path.stat().st_mode) == 0o600
