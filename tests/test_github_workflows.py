@@ -81,6 +81,16 @@ def test_deploy_workflow_is_environment_scoped() -> None:
     assert 'set_default CANCEL_STALE_ORDERS "true"' in workflow
 
 
+def test_deploy_workflow_routes_paper_to_paper_account() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}" in workflow
+    assert 'case "${TRADING_MODE}" in' in workflow
+    assert 'set_env IBKR_ACCOUNT "${IBKR_ACCOUNT_PAPER}"' in workflow
+    assert "IBKR_ACCOUNT_PAPER GitHub Environment secret is required" in workflow
+    assert "IBKR_ACCOUNT GitHub Environment secret is required when TRADING_MODE=live" in workflow
+
+
 def test_deploy_workflow_uses_current_action_versions() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
