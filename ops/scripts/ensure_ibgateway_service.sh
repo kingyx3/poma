@@ -23,10 +23,22 @@ export TWS_SETTINGS_PATH="${TWS_SETTINGS_PATH:-/home/poma/Jts}"
 
 mkdir -p "${HOME}/Jts" "${HOME}/ibc/logs" /tmp/poma-ibgateway
 
+require_command() {
+  local command="$1"
+  if ! command -v "${command}" >/dev/null 2>&1; then
+    echo "Missing required command: ${command}. Re-run Deploy GCP e2-micro VM to repair the VM bootstrap." >&2
+    exit 127
+  fi
+}
+
 cleanup() {
   jobs -p | xargs -r kill || true
 }
 trap cleanup EXIT
+
+require_command Xvfb
+require_command fluxbox
+require_command x11vnc
 
 Xvfb "${DISPLAY}" -screen 0 1280x1024x24 -nolisten tcp >/tmp/poma-ibgateway/xvfb.log 2>&1 &
 sleep 2
@@ -45,7 +57,14 @@ if [ -x "${IBC_DIR}/gatewaystart.sh" ] && [ -s "${HOME}/ibc/config.ini" ]; then
   exec "${IBC_DIR}/gatewaystart.sh" -inline
 fi
 
-exec "${IB_GATEWAY_DIR}/ibgateway"
+gateway_executable="$(find "${IB_GATEWAY_DIR}" -type f -name ibgateway -perm -111 2>/dev/null | sort -V | tail -n1 || true)"
+if [ -z "${gateway_executable}" ]; then
+  echo "Unable to find an executable IB Gateway binary under ${IB_GATEWAY_DIR}." >&2
+  echo "Re-run Deploy GCP e2-micro VM so the VM startup script installs IB Gateway." >&2
+  exit 127
+fi
+
+exec "${gateway_executable}"
 SCRIPT
 chmod 0755 /usr/local/bin/poma-run-ib-gateway
 
