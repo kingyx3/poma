@@ -227,6 +227,33 @@ def find_gateway_jars_dirs() -> list[Path]:
     )
 
 
+def find_numeric_ancestor(path: Path) -> Path | None:
+    for ancestor in (path.parent, *path.parents):
+        if ancestor.name.isdigit():
+            return ancestor
+    return None
+
+
+def gateway_version_from_jars_dir(jars_dir: Path) -> str:
+    version_dir = find_numeric_ancestor(jars_dir)
+    if version_dir is None:
+        raise RuntimeError(
+            "Unable to determine numeric IB Gateway version from jars path: "
+            f"{jars_dir}"
+        )
+    return version_dir.name
+
+
+def gateway_tws_path_from_jars_dir(jars_dir: Path) -> Path:
+    version_dir = find_numeric_ancestor(jars_dir)
+    if version_dir is None:
+        raise RuntimeError(
+            "Unable to determine IB Gateway TWS path from jars path: "
+            f"{jars_dir}"
+        )
+    return version_dir.parent
+
+
 def configure_ibc_launcher() -> None:
     gatewaystart = IBC_DIR / "gatewaystart.sh"
     if not gatewaystart.exists():
@@ -238,8 +265,8 @@ def configure_ibc_launcher() -> None:
         print(f"Skipping IBC launcher repair because no Gateway jars exist under {IB_GATEWAY_DIR}")
         return
     gateway_jars_dir = jars_dirs[-1]
-    gateway_major_version = gateway_jars_dir.parent.name
-    gateway_tws_path = gateway_jars_dir.parent.parent
+    gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir)
+    gateway_tws_path = gateway_tws_path_from_jars_dir(gateway_jars_dir)
     replacements = {
         "TWS_MAJOR_VRSN": gateway_major_version,
         "IBC_INI": "/home/poma/ibc/config.ini",
