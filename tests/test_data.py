@@ -64,7 +64,7 @@ def test_previous_snapshot_uses_latest_historical_market_cap(monkeypatch) -> Non
     def router(path, params):
         if path == "sp500-constituent":
             return [{"symbol": "AAPL"}, {"symbol": "MSFT"}]
-        if path == "historical-market-cap":
+        if path == "historical-market-capitalization":
             base = 100 if params["symbol"] == "AAPL" else 50
             return [
                 {"date": "2026-03-20", "marketCap": base},

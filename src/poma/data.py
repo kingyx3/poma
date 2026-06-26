@@ -104,17 +104,30 @@ class FmpMarketDataClient:
         target = datetime.now(UTC).date() - timedelta(days=days_ago)
         start = target - timedelta(days=FMP_PREVIOUS_WINDOW_DAYS)
         records: list[dict[str, Any]] = []
+        last_error: Exception | None = None
         for symbol in symbols:
             try:
                 rows = self._get(
-                    "historical-market-cap",
-                    {"symbol": symbol, "from": start.isoformat(), "to": target.isoformat()},
+                    "historical-market-capitalization",
+                    {
+                        "symbol": symbol,
+                        "from": start.isoformat(),
+                        "to": target.isoformat(),
+                        "limit": FMP_PREVIOUS_WINDOW_DAYS,
+                    },
                 )
-            except requests.RequestException:
+            except requests.RequestException as exc:
+                last_error = exc
                 continue
             cap = _latest_market_cap(rows)
             if cap is not None:
                 records.append({"ticker": symbol, "market_cap": cap})
+        if not records and last_error is not None:
+            # Surface the real cause instead of a generic "no rows" from _normalise_snapshot.
+            raise ValueError(
+                "FMP historical-market-capitalization returned no usable rows; "
+                f"last request error: {last_error}"
+            )
         return _normalise_snapshot(records)
 
 
