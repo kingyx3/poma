@@ -4,6 +4,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SERVICE_SCRIPT = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
 INSTALL_HELPER = REPO_ROOT / "ops/scripts/install_ibc_config_helper.py"
 REPAIR_HELPER = REPO_ROOT / "ops/scripts/repair_ib_gateway_runtime.py"
+OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 RUNNER_MARKER = "cat >/usr/local/bin/poma-run-ib-gateway"
 
 
@@ -82,3 +83,23 @@ def test_runtime_repair_accepts_gateway_jars_as_installed_artifacts() -> None:
     assert "def has_gateway_artifacts" in script
     assert "find_gateway_executable() is not None or bool(find_gateway_jars_dirs())" in script
     assert "no executable or jars were found" in script
+
+
+def test_ibc_launcher_uses_numeric_gateway_version() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
+
+    assert "def find_numeric_ancestor" in script
+    assert "def gateway_version_from_jars_dir" in script
+    assert "ancestor.name.isdigit()" in script
+    assert "gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir)" in script
+    assert "gateway_major_version = gateway_jars_dir.parent.name" not in script
+
+
+def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
+    workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "/home/poma/ibc/logs/*.txt" in workflow
+    assert "IbPassword" in workflow
+    assert "TWSPASSWORD" in workflow
+    assert "IbLoginId" in workflow
+    assert "TWSUSERID" in workflow
