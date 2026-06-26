@@ -119,12 +119,8 @@ jobs:
             gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "${command}"
           }
 
-          ensure_config_helper() {
-            if run_remote "command -v poma-configure-ibc >/dev/null 2>&1"; then
-              return 0
-            fi
-
-            echo "poma-configure-ibc is missing on the VM; installing it from the deployed startup script."
+          repair_gateway_runtime() {
+            echo "Repairing IB Gateway runtime helpers on the VM."
             gcloud compute scp \
               ops/scripts/install_ibc_config_helper.py \
               "${GCP_VM_NAME}:/tmp/install_ibc_config_helper.py" \
@@ -132,8 +128,21 @@ jobs:
             run_remote "sudo python3 /tmp/install_ibc_config_helper.py && rm -f /tmp/install_ibc_config_helper.py"
           }
 
+          diagnose_gateway_failure() {
+            run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
+            run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true"
+            run_remote 'for log in /tmp/poma-ibgateway/*.log /home/poma/ibc/logs/*.log; do if [ -f "${log}" ]; then echo "===== ${log} ====="; sudo tail -n 120 "${log}" || true; fi; done'
+          }
+
           verify_socket() {
-            run_remote 'if nc -z 127.0.0.1 7497; then echo "IB Gateway API socket is reachable on 127.0.0.1:7497."; else echo "IB Gateway API socket is not reachable on 127.0.0.1:7497." >&2; sudo systemctl status ibgateway --no-pager --lines=80 || true; exit 1; fi'
+            if run_remote 'nc -z 127.0.0.1 7497'; then
+              echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
+              return 0
+            fi
+
+            echo "IB Gateway API socket is not reachable on 127.0.0.1:7497." >&2
+            diagnose_gateway_failure
+            exit 1
           }
 
           case "${INPUT_ACTION}" in
@@ -141,12 +150,15 @@ jobs:
               run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
               ;;
             restart)
+              repair_gateway_runtime
               run_remote "sudo systemctl restart ibgateway && sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
               ;;
             logs)
               run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager"
               ;;
             verify-socket)
+              repair_gateway_runtime
+              run_remote "sudo systemctl restart ibgateway || true"
               verify_socket
               ;;
             configure-paper|configure-live)
@@ -155,7 +167,7 @@ jobs:
                 exit 1
               fi
 
-              ensure_config_helper
+              repair_gateway_runtime
               mode="${INPUT_ACTION#configure-}"
               input_file="$(mktemp)"
               cleanup() {
