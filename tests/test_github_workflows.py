@@ -126,6 +126,14 @@ def test_gateway_ops_workflow_can_configure_gateway_from_environment_secrets() -
     assert "printf '%s\\n%s\\n%s\\n'" in workflow
 
 
+def test_gateway_ops_workflow_bootstraps_missing_config_helper() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "ensure_config_helper" in workflow
+    assert "install_ibc_config_helper.py" in workflow
+    assert "poma-configure-ibc is missing on the VM" in workflow
+
+
 def test_gateway_ops_workflow_uses_current_action_versions() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
