@@ -289,8 +289,50 @@ jobs:
           }
           trap cleanup EXIT
 
+          apt_locks_busy() {
+            if command -v fuser >/dev/null 2>&1; then
+              fuser /var/lib/dpkg/lock-frontend \
+                /var/lib/dpkg/lock \
+                /var/lib/apt/lists/lock \
+                /var/cache/apt/archives/lock >/dev/null 2>&1
+              return $?
+            fi
+
+            pgrep -f '(apt-get|apt.systemd.daily|dpkg|unattended-upgrade)' >/dev/null 2>&1
+          }
+
+          wait_for_apt() {
+            local waited_seconds=0
+            local max_wait_seconds=1200
+
+            while apt_locks_busy; do
+              if [ "${waited_seconds}" -ge "${max_wait_seconds}" ]; then
+                echo "Timed out waiting for apt/dpkg locks to be released." >&2
+                exit 1
+              fi
+
+              echo "Waiting for apt/dpkg locks to be released before installing Tailscale..."
+              sleep 10
+              waited_seconds=$((waited_seconds + 10))
+            done
+          }
+
+          install_tailscale() {
+            install -d -m 0755 /usr/share/keyrings
+            curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg \
+              -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+            chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
+            curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list \
+              -o /etc/apt/sources.list.d/tailscale.list
+            chmod 0644 /etc/apt/sources.list.d/tailscale.list
+            apt-get update
+            apt-get install -y tailscale
+          }
+
+          wait_for_apt
+
           if ! command -v tailscale >/dev/null 2>&1; then
-            curl -fsSL https://tailscale.com/install.sh | sh
+            install_tailscale
           fi
 
           systemctl enable --now tailscaled
