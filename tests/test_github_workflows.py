@@ -6,7 +6,6 @@ BOOTSTRAP_WORKFLOW = REPO_ROOT / ".github/workflows/bootstrap-gcp-wif.yml"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 
-
 REQUIRED_ENVIRONMENT_SNIPPETS = (
     "deploy_environment:",
     "- dev",
@@ -130,9 +129,13 @@ def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
     assert "repair_gateway_runtime" in workflow
-    assert "Repairing IB Gateway runtime helpers on the VM." in workflow
+    assert "Repairing IB Gateway runtime helpers and installers on the VM." in workflow
+    assert "repair_ib_gateway_runtime.py" in workflow
     assert "install_ibc_config_helper.py" in workflow
+    assert "ensure_ibgateway_service.sh" in workflow
+    assert "sudo python3 /tmp/repair_ib_gateway_runtime.py" in workflow
     assert "sudo python3 /tmp/install_ibc_config_helper.py" in workflow
+    assert "sudo sh /tmp/ensure_ibgateway_service.sh" in workflow
 
 
 def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
@@ -140,6 +143,7 @@ def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
 
     assert "diagnose_gateway_failure" in workflow
     assert "sudo journalctl -u ibgateway" in workflow
+    assert "/var/log/poma/ibgateway/*.log" in workflow
     assert "/tmp/poma-ibgateway/*.log" in workflow
     assert "/home/poma/ibc/logs/*.log" in workflow
 
