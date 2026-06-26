@@ -12,6 +12,7 @@ START = "cat >/usr/local/bin/poma-configure-ibc <<'SCRIPT'"
 END = "SCRIPT"
 
 
+# Installer used by the Gateway ops workflow to repair older VMs.
 def main() -> int:
     if not SOURCE.exists():
         print(f"Missing source startup script: {SOURCE}", file=sys.stderr)
