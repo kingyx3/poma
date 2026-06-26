@@ -47,6 +47,8 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
+      IB_GATEWAY_SOCKET_TIMEOUT_SECONDS: 900
+      IB_GATEWAY_SOCKET_POLL_SECONDS: 10
       IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
       IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
 
@@ -137,12 +139,34 @@ jobs:
           }
 
           verify_socket() {
-            if run_remote 'nc -z 127.0.0.1 7497'; then
-              echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
-              return 0
-            fi
+            local timeout_seconds="${IB_GATEWAY_SOCKET_TIMEOUT_SECONDS:-900}"
+            local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-10}"
+            local deadline=$((SECONDS + timeout_seconds))
+            local attempt=1
 
-            echo "IB Gateway API socket is not reachable on 127.0.0.1:7497." >&2
+            echo "Waiting up to ${timeout_seconds}s for IB Gateway API socket on 127.0.0.1:7497."
+            while [ "${SECONDS}" -lt "${deadline}" ]; do
+              if run_remote 'nc -z 127.0.0.1 7497'; then
+                echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
+                return 0
+              fi
+
+              if ! run_remote 'systemctl is-active --quiet ibgateway'; then
+                echo "IB Gateway service stopped before the API socket became reachable." >&2
+                diagnose_gateway_failure
+                exit 1
+              fi
+
+              if [ $((attempt % 6)) -eq 0 ]; then
+                echo "Still waiting for IB Gateway API socket after $((attempt * poll_seconds))s."
+                run_remote "sudo systemctl status ibgateway --no-pager --lines=30 || true"
+              fi
+
+              sleep "${poll_seconds}"
+              attempt=$((attempt + 1))
+            done
+
+            echo "IB Gateway API socket did not become reachable on 127.0.0.1:7497 within ${timeout_seconds}s." >&2
             diagnose_gateway_failure
             exit 1
           }
