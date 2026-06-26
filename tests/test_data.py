@@ -53,7 +53,10 @@ def test_current_snapshot_merges_constituents_caps_and_prices(monkeypatch) -> No
                 {"symbol": "NOPRICE", "marketCap": 1000},
             ]
         if path == "batch-quote-short":
-            return [{"symbol": "AAPL", "price": 195.0}, {"symbol": "MSFT", "price": 410.0}]
+            return [
+                {"symbol": "AAPL", "price": 195.0},
+                {"symbol": "MSFT", "price": 410.0},
+            ]
         raise AssertionError(f"unexpected path {path}")
 
     client = _client(monkeypatch, router)
@@ -86,7 +89,7 @@ def test_fmp_universe_selects_constituent_endpoint(monkeypatch) -> None:
 def test_fmp_constituents_fall_back_to_legacy_endpoint(monkeypatch) -> None:
     def router(path, params):
         if path == "sp500-constituent":
-            return FakeResponse({"error": "payment required"}, status_code=402)
+            return FakeResponse({"error": "gated"}, status_code=402)
         if path == "sp500_constituent":
             return [{"symbol": "AAPL"}]
         if path == "market-capitalization-batch":
@@ -98,5 +101,8 @@ def test_fmp_constituents_fall_back_to_legacy_endpoint(monkeypatch) -> None:
     client = _client(monkeypatch, router)
     frame = client.current_universe_snapshot()
 
-    assert client.calls[:2] == ["sp500-constituent", "sp500_constituent"]  # type: ignore[attr-defined]
+    assert client.calls[:2] == [  # type: ignore[attr-defined]
+        "sp500-constituent",
+        "sp500_constituent",
+    ]
     assert frame["ticker"].tolist() == ["AAPL"]
