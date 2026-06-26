@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-TERMINAL_STATUSES = {"completed", "completed_with_warnings", "dry_run", "blocked", "failed"}
+TERMINAL_STATUSES = {"completed", "dry_run", "blocked", "failed"}
 ACTIVE_STATUSES = TERMINAL_STATUSES | {"running"}
 
 
@@ -34,10 +34,6 @@ class LocalState:
         status = self.session_status(session_date)
         return status in ACTIVE_STATUSES
 
-    def has_rebalanced(self, session_date: str) -> bool:
-        status = self.session_status(session_date)
-        return status in TERMINAL_STATUSES
-
     def begin_session(self, session_date: str, run_id: str) -> None:
         payload = self._read()
         payload["last_rebalance_session"] = session_date
@@ -64,9 +60,6 @@ class LocalState:
         if error:
             payload["last_rebalance_error"] = error
         self._write(payload)
-
-    def mark_rebalanced(self, session_date: str, run_id: str) -> None:
-        self.mark_session(session_date, run_id, "completed")
 
 
 def _utc_now() -> str:

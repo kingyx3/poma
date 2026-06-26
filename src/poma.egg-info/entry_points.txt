@@ -1,2 +1,0 @@
-[console_scripts]
-poma = poma.cli:app

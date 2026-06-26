@@ -11,3 +11,4 @@ reports/
 state/
 var/
 logs/
+*.egg-info/
