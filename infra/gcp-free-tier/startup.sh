@@ -40,7 +40,7 @@ mkdir -p "$${APP_DIR}" "$${APP_DIR}/reports" "$${APP_DIR}/state" "$${APP_DIR}/lo
 mkdir -p /home/"$${APP_USER}"/Jts /home/"$${APP_USER}"/ibc
 chown -R "$${APP_USER}:$${APP_USER}" "$${APP_DIR}" /home/"$${APP_USER}"/Jts /home/"$${APP_USER}"/ibc
 
-if [ ! -x "$${IB_GATEWAY_DIR}/ibgateway" ]; then
+if ! find "$${IB_GATEWAY_DIR}" -type f -name ibgateway -perm -111 2>/dev/null | grep -q .; then
   tmp_installer="$$(mktemp /tmp/ibgateway-installer.XXXXXX.sh)"
   curl -fsSL "$${IB_GATEWAY_INSTALLER_URL}" -o "$${tmp_installer}"
   chmod +x "$${tmp_installer}"
@@ -119,11 +119,6 @@ IBC_DIR="/opt/ibc"
 IBC_HOME="/home/poma/ibc"
 IBC_CONFIG="$${IBC_HOME}/config.ini"
 
-if [ ! -f "$${IBC_DIR}/config.ini" ]; then
-  echo "Missing IBC sample config at $${IBC_DIR}/config.ini" >&2
-  exit 1
-fi
-
 read -r -p "IBKR login id: " ib_login_id
 read -r -s -p "IBKR password: " ib_password
 echo
@@ -137,7 +132,13 @@ fi
 
 install -d -m 700 -o poma -g poma "$${IBC_HOME}" "$${IBC_HOME}/logs"
 if [ ! -f "$${IBC_CONFIG}" ]; then
-  install -m 600 -o poma -g poma "$${IBC_DIR}/config.ini" "$${IBC_CONFIG}"
+  if [ -f "$${IBC_DIR}/config.ini" ]; then
+    install -m 600 -o poma -g poma "$${IBC_DIR}/config.ini" "$${IBC_CONFIG}"
+  else
+    : > "$${IBC_CONFIG}"
+    chown poma:poma "$${IBC_CONFIG}"
+    chmod 600 "$${IBC_CONFIG}"
+  fi
 fi
 
 set_ini() {
@@ -185,10 +186,22 @@ export TWS_SETTINGS_PATH="$${TWS_SETTINGS_PATH:-/home/poma/Jts}"
 
 mkdir -p "$${HOME}/Jts" "$${HOME}/ibc/logs" /tmp/poma-ibgateway
 
+require_command() {
+  local command="$1"
+  if ! command -v "$${command}" >/dev/null 2>&1; then
+    echo "Missing required command: $${command}. Re-run Deploy GCP e2-micro VM or IB Gateway Ops to repair the VM bootstrap." >&2
+    exit 127
+  fi
+}
+
 cleanup() {
   jobs -p | xargs -r kill || true
 }
 trap cleanup EXIT
+
+require_command Xvfb
+require_command fluxbox
+require_command x11vnc
 
 Xvfb "$${DISPLAY}" -screen 0 1280x1024x24 -nolisten tcp >/tmp/poma-ibgateway/xvfb.log 2>&1 &
 sleep 2
@@ -207,7 +220,14 @@ if [ -x "$${IBC_DIR}/gatewaystart.sh" ] && [ -s "$${HOME}/ibc/config.ini" ]; the
   exec "$${IBC_DIR}/gatewaystart.sh" -inline
 fi
 
-exec "$${IB_GATEWAY_DIR}/ibgateway"
+gateway_executable="$$(find "$${IB_GATEWAY_DIR}" -type f -name ibgateway -perm -111 2>/dev/null | sort -V | tail -n1 || true)"
+if [ -z "$${gateway_executable}" ]; then
+  echo "Unable to find an executable IB Gateway binary under $${IB_GATEWAY_DIR}." >&2
+  echo "Re-run Deploy GCP e2-micro VM so the VM startup script installs IB Gateway." >&2
+  exit 127
+fi
+
+exec "$${gateway_executable}"
 SCRIPT
 chmod 0755 /usr/local/bin/poma-run-ib-gateway
 

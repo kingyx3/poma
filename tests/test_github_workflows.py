@@ -126,12 +126,22 @@ def test_gateway_ops_workflow_can_configure_gateway_from_environment_secrets() -
     assert "printf '%s\\n%s\\n%s\\n'" in workflow
 
 
-def test_gateway_ops_workflow_bootstraps_missing_config_helper() -> None:
+def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "ensure_config_helper" in workflow
+    assert "repair_gateway_runtime" in workflow
+    assert "Repairing IB Gateway runtime helpers on the VM." in workflow
     assert "install_ibc_config_helper.py" in workflow
-    assert "poma-configure-ibc is missing on the VM" in workflow
+    assert "sudo python3 /tmp/install_ibc_config_helper.py" in workflow
+
+
+def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "diagnose_gateway_failure" in workflow
+    assert "sudo journalctl -u ibgateway" in workflow
+    assert "/tmp/poma-ibgateway/*.log" in workflow
+    assert "/home/poma/ibc/logs/*.log" in workflow
 
 
 def test_gateway_ops_workflow_uses_current_action_versions() -> None:

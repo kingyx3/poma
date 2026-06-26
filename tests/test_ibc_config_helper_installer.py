@@ -14,27 +14,12 @@ def load_helper_module():
     return module
 
 
-def load_patch_helper_text():
-    return load_helper_module().patch_helper_text
+def test_config_helper_text_allows_missing_template() -> None:
+    module = load_helper_module()
 
-
-def test_patch_helper_text_allows_missing_template() -> None:
-    original = """
-if [ ! -f "${IBC_DIR}/config.ini" ]; then
-  echo "Missing IBC sample config at ${IBC_DIR}/config.ini" >&2
-  exit 1
-fi
-
-if [ ! -f "${IBC_CONFIG}" ]; then
-  install -m 600 -o poma -g poma "${IBC_DIR}/config.ini" "${IBC_CONFIG}"
-fi
-""".lstrip()
-
-    rendered = load_patch_helper_text()(original)
-
-    assert "Missing IBC sample config" not in rendered
-    assert 'if [ -f "${IBC_DIR}/config.ini" ]; then' in rendered
-    assert ': > "${IBC_CONFIG}"' in rendered
+    assert "Missing IBC sample config" not in module.CONFIG_HELPER_TEXT
+    assert 'if [ -f "${IBC_DIR}/config.ini" ]; then' in module.CONFIG_HELPER_TEXT
+    assert ': > "${IBC_CONFIG}"' in module.CONFIG_HELPER_TEXT
 
 
 def test_installer_repairs_gateway_runner_and_service() -> None:

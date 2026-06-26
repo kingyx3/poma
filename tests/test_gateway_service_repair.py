@@ -2,6 +2,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SERVICE_SCRIPT = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
+INSTALL_HELPER = REPO_ROOT / "ops/scripts/install_ibc_config_helper.py"
 RUNNER_MARKER = "cat >/usr/local/bin/poma-run-ib-gateway"
 
 
@@ -29,3 +30,13 @@ def test_service_repair_runner_checks_desktop_dependencies() -> None:
     assert "require_command Xvfb" in script
     assert "require_command fluxbox" in script
     assert "require_command x11vnc" in script
+
+
+def test_runtime_repair_helper_is_self_contained() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
+
+    assert "CONFIG_HELPER_TEXT" in script
+    assert "REQUIRED_COMMAND_PACKAGES" in script
+    assert "apt-get" in script
+    assert "SOURCE = Path" not in script
+    assert "extract_config_helper" not in script

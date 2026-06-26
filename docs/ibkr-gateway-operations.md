@@ -51,6 +51,8 @@ The deploy workflow also joins the VM to Tailscale when `tailscale_enabled=true`
 
 The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` from GitHub Environment Secrets only for `configure-paper` and `configure-live`, sends them to `sudo poma-configure-ibc` over IAP SSH stdin, and removes its temporary runner-side input file after use.
 
+The same ops workflow repairs the Gateway runtime wrapper before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. This keeps older VMs aligned with the latest launcher logic even when they were bootstrapped before the current `poma-run-ib-gateway` wrapper existed.
+
 The service starts raw IB Gateway until `/home/poma/ibc/config.ini` exists. After setup, it starts Gateway through IBC as one foreground systemd process.
 
 ## Credential handling rules

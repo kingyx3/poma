@@ -77,10 +77,12 @@ After bootstrap, add only the runtime secrets needed by that environment. See [`
 | `TELEGRAM_BOT_TOKEN` | All deployed runs | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | All deployed runs | Destination chat/channel/user for alerts. Required unless a future chat-discovery flow is added. |
 | `FMP_API_KEY` | All deploys | Mandatory production secret, even when `data_provider=fixture`, so the VM has the real provider key before switching modes. |
+| `IBKR_LOGIN_ID` | IB Gateway Ops configure actions | IBKR username passed to the VM only when `configure-paper` or `configure-live` is manually dispatched. |
+| `IBKR_LOGIN_SECRET` | IB Gateway Ops configure actions | IBKR password passed to the VM only when `configure-paper` or `configure-live` is manually dispatched. |
 | `IBKR_ACCOUNT_PAPER` | Paper deploys, and preferred dry-runs | Paper trading account id. The deploy workflow writes it into the VM-local `.env` as runtime `IBKR_ACCOUNT` when `trading_mode=paper`. |
 | `IBKR_ACCOUNT` | Live deploys | Live account id. Used only when `trading_mode=live`; live still requires `allow_live_trading=true`. |
 
-Do not store IBKR login credentials in GitHub unless you intentionally use the **IB Gateway Ops** configure actions. The account id secrets above are account selectors, not the broker login password.
+IBKR broker login credentials intentionally live in GitHub Environment secrets. Account id secrets are account selectors; they are not the broker login password.
 
 ## Deploy in order
 
@@ -90,7 +92,7 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 2. Rerun the same workflow with `terraform_action=apply`.
 3. Confirm the generated config file for the selected environment was committed to `ops/deploy/environments/<env>.env`.
 4. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from that GitHub Environment and disable/delete the temporary key in GCP IAM.
-5. Add `TAILSCALE_AUTHKEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, and `IBKR_ACCOUNT_PAPER` to that GitHub Environment. Add `IBKR_ACCOUNT` only to environments that are allowed to deploy live mode.
+5. Add `TAILSCALE_AUTHKEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FMP_API_KEY`, `IBKR_LOGIN_ID`, `IBKR_LOGIN_SECRET`, and `IBKR_ACCOUNT_PAPER` to that GitHub Environment. Add `IBKR_ACCOUNT` only to environments that are allowed to deploy live mode.
 6. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
 7. Rerun with `terraform_action=apply`, `tailscale_enabled=true`, and `deploy_app=true`.
 8. Keep `trading_mode=dry_run` until the deploy smoke test and Gateway setup are verified.
