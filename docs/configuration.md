@@ -13,6 +13,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same host.
+- GitHub Environment Secrets for IB Gateway login configuration: `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET`.
 - Data-provider subscription that supports S&P 500 constituents, market caps, and prices if using `data_provider=fmp` in the deploy workflow.
 - Telegram bot token and chat ID for mandatory run alerts.
 - Tailscale tailnet and reusable or ephemeral auth key for secure VPS access.
@@ -61,6 +62,12 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 
 Use **Discover Telegram chat ID** in GitHub Actions to read the chat ID. Start the workflow first, then send a fresh `/start` or message to the bot or target group/channel while the workflow is polling. Messages sent before the helper starts may already have been consumed by Telegram and may not appear in `getUpdates`.
 
+## IBKR Gateway login config
+
+`IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` are GitHub Environment Secrets consumed only by the **IB Gateway Ops** workflow for `configure-paper` and `configure-live`. They are broker login credentials, not app `.env` keys.
+
+The workflow sends these values to `sudo poma-configure-ibc` over IAP SSH stdin so IBC can create VM-local Gateway config. Do not add the broker login credentials to Terraform, VM metadata, `.env`, or repository files. See [`adr/0001-ibkr-credentials-in-github-secrets.md`](adr/0001-ibkr-credentials-in-github-secrets.md).
+
 ## CI/CD `.env` rendering
 
 The deploy workflow does not store secrets in GCP Secret Manager. Instead, it renders a VM-local `.env` file from CI defaults plus the selected GitHub Environment's required secrets, then uploads it to `/opt/poma/.env` over IAP SSH.
@@ -99,6 +106,11 @@ Runtime/deploy secrets:
 - `IBKR_ACCOUNT` for live deploys.
 - `TELEGRAM_BOT_TOKEN`.
 - `TELEGRAM_CHAT_ID`.
+
+Gateway operation secrets:
+
+- `IBKR_LOGIN_ID` for `configure-paper` and `configure-live`.
+- `IBKR_LOGIN_SECRET` for `configure-paper` and `configure-live`.
 
 `TAILSCALE_AUTHKEY` is used only during deploy apply. It is copied to the VM over IAP, consumed by `tailscale up`, then deleted from both the runner and VM. It is not written to Terraform state, VM metadata, or the app `.env`.
 
