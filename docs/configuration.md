@@ -14,7 +14,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same host.
 - GitHub Environment Secrets for IB Gateway login configuration: `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET`.
-- Data-provider subscription that supports S&P 500 constituents, market caps, and prices if using `data_provider=fmp` in the deploy workflow.
+- FMP API key that supports market caps and prices when using `data_provider=fmp` in the deploy workflow.
 - Telegram bot token and chat ID for mandatory run alerts.
 - Tailscale tailnet and reusable or ephemeral auth key for secure VPS access.
 
@@ -29,7 +29,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 | `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
 | `DATA_PROVIDER` | yes | `fixture` | Set by deploy workflow input. Use `fmp` only after validating endpoint output. |
 | `FMP_API_KEY` | yes | none | Mandatory deploy secret. Required even for fixture deploys so production can switch safely. |
-| `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Override in code/config if your plan uses different endpoints. |
+| `FMP_BASE_URL` | no | `https://financialmodelingprep.com/stable` | Stable FMP base for market-cap and quote endpoints. Constituent lookup falls back to FMP legacy v3 when stable constituent endpoints are plan-gated. |
 | `UNIVERSE` | yes | `sp500` | Default strategy ranks S&P 500 constituents. Supported FMP universes: `sp500`, `nasdaq100`. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
 | `MAX_HOLDINGS` | yes | `100` | Hold only the top names by rank improvement score. |
