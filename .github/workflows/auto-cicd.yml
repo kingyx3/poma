@@ -1,0 +1,52 @@
+name: Auto CI/CD
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: poma-auto-cicd-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dev-deploy:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/deploy-gcp-vm.yml
+    with:
+      deploy_environment: dev
+      terraform_action: plan
+      deploy_app: false
+      tailscale_enabled: false
+      trading_mode: paper
+      data_provider: fixture
+      allow_live_trading: false
+      deploy_smoke: false
+    secrets: inherit
+
+  stg-deploy:
+    if: ${{ github.event_name == 'push' }}
+    uses: ./.github/workflows/deploy-gcp-vm.yml
+    with:
+      deploy_environment: stg
+      terraform_action: apply
+      deploy_app: true
+      tailscale_enabled: true
+      trading_mode: paper
+      data_provider: fmp
+      allow_live_trading: false
+    secrets: inherit
+
+  stg-configure-gateway:
+    needs: stg-deploy
+    uses: ./.github/workflows/ib-gateway-ops.yml
+    with:
+      deploy_environment: stg
+      action: configure-paper
+      log_lines: 200
+    secrets: inherit

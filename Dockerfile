@@ -13,10 +13,19 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Install third-party dependencies in a layer keyed only on project metadata, so routine
+# source changes don't reinstall pandas/numpy/etc. (very slow on the free-tier VM). A minimal
+# package stub lets the resolver read dependencies from pyproject without the real source.
 COPY pyproject.toml README.md ./
-COPY src ./src
+RUN pip install --upgrade pip \
+    && mkdir -p src/poma \
+    && : > src/poma/__init__.py \
+    && pip install . \
+    && rm -rf src build ./*.egg-info
 
-RUN pip install --upgrade pip && pip install .
+# Install the real package on top, without re-resolving the cached dependency layer.
+COPY src ./src
+RUN pip install --no-deps --force-reinstall .
 
 RUN groupadd --gid "${APP_GID}" appuser \
     && useradd \

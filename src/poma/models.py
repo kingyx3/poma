@@ -1,21 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 from enum import StrEnum
 
 
 class OrderSide(StrEnum):
     BUY = "BUY"
     SELL = "SELL"
-
-
-@dataclass(frozen=True)
-class EquitySnapshot:
-    ticker: str
-    market_cap: float
-    price: float | None = None
-    as_of: date | None = None
 
 
 @dataclass(frozen=True)

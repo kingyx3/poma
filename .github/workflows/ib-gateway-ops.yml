@@ -29,6 +29,18 @@ on:
         required: true
         type: number
         default: 200
+  workflow_call:
+    inputs:
+      deploy_environment:
+        required: true
+        type: string
+      action:
+        required: true
+        type: string
+      log_lines:
+        required: false
+        type: number
+        default: 200
 
 permissions:
   contents: read
@@ -138,6 +150,24 @@ jobs:
             run_remote 'for log in /var/log/poma/ibgateway/*.log /home/poma/ibc/logs/*.txt /home/poma/ibc/logs/*.log /tmp/poma-ibgateway/*.log; do if [ -f "${log}" ]; then echo "===== ${log} ====="; sudo tail -n 120 "${log}" | sed -E "s/(IbPassword|TWSPASSWORD|Password|password)=.*/\1=***/g; s/(IbLoginId|TWSUSERID)=.*/\1=***/g" || true; fi; done'
           }
 
+          verify_api_handshake() {
+            # A reachable socket only proves a TCP listener. Confirm a real authenticated API
+            # handshake via the deployed POMA container (ib_insync connect + managedAccounts).
+            # Best-effort: skip cleanly when the app is not yet deployed on the VM.
+            if ! run_remote 'test -f /opt/poma/docker-compose.yml || test -f /opt/poma/compose.yaml'; then
+              echo "POMA app not deployed at /opt/poma; skipping ib_insync API handshake (socket check only)."
+              return 0
+            fi
+            echo "Confirming IBKR API handshake via 'poma ibkr-check' (real ib_insync connect)."
+            if run_remote "sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE=paper -e DATA_PROVIDER=fixture poma ibkr-check'"; then
+              echo "IBKR API handshake succeeded; the gateway is authenticated and serving the API."
+              return 0
+            fi
+            echo "IBKR API handshake failed even though the socket is open on 127.0.0.1:7497." >&2
+            diagnose_gateway_failure
+            exit 1
+          }
+
           verify_socket() {
             local timeout_seconds="${IB_GATEWAY_SOCKET_TIMEOUT_SECONDS:-300}"
             local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
@@ -148,6 +178,7 @@ jobs:
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               if run_remote 'nc -z 127.0.0.1 7497'; then
                 echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
+                verify_api_handshake
                 return 0
               fi
 
@@ -215,3 +246,13 @@ jobs:
               exit 2
               ;;
           esac
+
+      - name: Notify Telegram (gateway ops result)
+        if: ${{ always() }}
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: >-
+            POMA[${{ inputs.deploy_environment }}] gateway ${{ inputs.action }}
+            ${{ job.status }}

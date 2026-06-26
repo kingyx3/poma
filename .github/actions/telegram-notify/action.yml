@@ -1,0 +1,33 @@
+name: Telegram notify
+description: Send a best-effort Telegram message (skips cleanly when not configured).
+
+inputs:
+  bot_token:
+    description: Telegram bot token.
+    required: true
+  chat_id:
+    description: Telegram chat id.
+    required: true
+  message:
+    description: Message text (prefix it with POMA[<env>] for reference).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BOT_TOKEN: ${{ inputs.bot_token }}
+        CHAT_ID: ${{ inputs.chat_id }}
+        MESSAGE: ${{ inputs.message }}
+      run: |
+        set -euo pipefail
+        if [ -z "${BOT_TOKEN}" ] || [ -z "${CHAT_ID}" ]; then
+          echo "Telegram not configured (missing bot token or chat id); skipping notification."
+          exit 0
+        fi
+        curl -fsS --max-time 15 \
+          "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          --data-urlencode "chat_id=${CHAT_ID}" \
+          --data-urlencode "text=${MESSAGE}" >/dev/null \
+          || echo "Telegram notification failed (ignored)."

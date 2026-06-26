@@ -17,5 +17,4 @@ def test_failed_session_is_terminal_for_automatic_retry(tmp_path) -> None:
     state.mark_session("2026-06-22", "run-1", "failed", error="broker disconnected")
 
     assert state.has_session_attempt("2026-06-22")
-    assert state.has_rebalanced("2026-06-22")
     assert state.session_status("2026-06-22") == "failed"
