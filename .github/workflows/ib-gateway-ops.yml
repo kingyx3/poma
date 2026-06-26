@@ -133,7 +133,7 @@ jobs:
           diagnose_gateway_failure() {
             run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
             run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true"
-            run_remote 'for log in /var/log/poma/ibgateway/*.log /home/poma/ibc/logs/*.log /tmp/poma-ibgateway/*.log; do if [ -f "${log}" ]; then echo "===== ${log} ====="; sudo tail -n 120 "${log}" || true; fi; done'
+            run_remote 'for log in /var/log/poma/ibgateway/*.log /home/poma/ibc/logs/*.txt /home/poma/ibc/logs/*.log /tmp/poma-ibgateway/*.log; do if [ -f "${log}" ]; then echo "===== ${log} ====="; sudo tail -n 120 "${log}" | sed -E "s/(IbPassword|TWSPASSWORD|Password|password)=.*/\1=***/g; s/(IbLoginId|TWSUSERID)=.*/\1=***/g" || true; fi; done'
           }
 
           verify_socket() {
