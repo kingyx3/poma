@@ -14,6 +14,7 @@ RUNNER_TARGET = Path("/usr/local/bin/poma-run-ib-gateway")
 SERVICE_TARGET = Path("/etc/systemd/system/ibgateway.service")
 APP_USER = "poma"
 IB_GATEWAY_DIR = Path("/opt/ibgateway")
+IB_GATEWAY_LAUNCH_DIR = Path("/opt/ibgateway-launch")
 IBC_DIR = Path("/opt/ibc")
 IB_GATEWAY_RUNTIME_DIR = Path("/run/poma-ibgateway")
 IB_GATEWAY_LOG_DIR = Path("/var/log/poma/ibgateway")
@@ -91,6 +92,11 @@ set_ini ReloginAfterSecondFactorAuthenticationTimeout yes
 set_ini AcceptNonBrokerageAccountWarning yes
 set_ini ExistingSessionDetectedAction primaryoverride
 set_ini AutoRestartTime 23:45
+# Force the API socket onto the port POMA and the ops verification expect (IB
+# Gateway otherwise defaults to 4002 for paper / 4001 for live).
+set_ini OverrideTwsApiPort 7497
+set_ini AcceptIncomingConnectionAction accept
+set_ini AllowBlindTrading yes
 
 chown poma:poma "${IBC_CONFIG}"
 chmod 600 "${IBC_CONFIG}"
@@ -256,11 +262,50 @@ def gateway_version_from_jars_dir(jars_dir: Path, gatewaystart_text: str) -> str
     return DEFAULT_IB_GATEWAY_MAJOR_VERSION
 
 
-def gateway_tws_path_from_jars_dir(jars_dir: Path) -> Path:
-    version_dir = find_numeric_ancestor(jars_dir)
-    if version_dir is not None:
-        return version_dir.parent
-    return IB_GATEWAY_DIR
+def ensure_gateway_vmoptions(program_dir: Path) -> None:
+    """IBC aborts (exit 7) if the gateway vmoptions file is missing; ensure it exists."""
+    vmoptions = program_dir / "ibgateway.vmoptions"
+    if vmoptions.exists():
+        return
+    print(f"Creating missing {vmoptions}")
+    vmoptions.write_text("", encoding="utf-8")
+    subprocess.run(["chown", f"{APP_USER}:{APP_USER}", str(vmoptions)], check=False)
+
+
+def gateway_program_layout(jars_dir: Path, gatewaystart_text: str) -> tuple[Path, str]:
+    """Return (TWS_PATH, TWS_MAJOR_VRSN) so IBC's gateway program path resolves to jars_dir.parent.
+
+    IBC builds the gateway program directory as ``${TWS_PATH}/ibgateway/${TWS_MAJOR_VRSN}`` and,
+    in GATEWAY mode, only keeps the ``ibgateway.vmoptions`` source when that primary path already
+    contains the ``jars`` folder. If it has to fall back to the alternate (TWS) layout it then
+    looks for ``tws.vmoptions``, which a Gateway-only install never ships, so we must make the
+    primary ``ibgateway/<version>`` path the real one.
+
+    The standalone installer used here lays the runtime out flat under ``/opt/ibgateway``
+    (``/opt/ibgateway/jars``), which matches neither path IBC checks. In that case we materialise
+    the expected ``ibgateway/<version>`` tree with a symlink under a dedicated launch root so that
+    ``jars``, ``.install4j`` and ``ibgateway.vmoptions`` all resolve through it.
+    """
+    program_dir = jars_dir.parent
+    if program_dir.parent.name == "ibgateway":
+        # Already laid out as ${TWS_PATH}/ibgateway/<version>; use it directly.
+        return program_dir.parent.parent, program_dir.name
+
+    version = gateway_version_from_jars_dir(jars_dir, gatewaystart_text)
+    link_parent = IB_GATEWAY_LAUNCH_DIR / "ibgateway"
+    link_parent.mkdir(parents=True, exist_ok=True)
+    version_link = link_parent / version
+    if version_link.is_symlink() or version_link.is_file():
+        version_link.unlink()
+    elif version_link.exists():
+        shutil.rmtree(version_link)
+    version_link.symlink_to(program_dir)
+    print(f"Linked {version_link} -> {program_dir} for IBC gateway version layout")
+    subprocess.run(
+        ["chown", "-h", "-R", f"{APP_USER}:{APP_USER}", str(IB_GATEWAY_LAUNCH_DIR)],
+        check=False,
+    )
+    return IB_GATEWAY_LAUNCH_DIR, version
 
 
 def configure_ibc_launcher() -> None:
@@ -274,9 +319,9 @@ def configure_ibc_launcher() -> None:
         print(f"Skipping IBC launcher repair because no Gateway jars exist under {IB_GATEWAY_DIR}")
         return
     gateway_jars_dir = jars_dirs[-1]
+    ensure_gateway_vmoptions(gateway_jars_dir.parent)
     text = gatewaystart.read_text(encoding="utf-8")
-    gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir, text)
-    gateway_tws_path = gateway_tws_path_from_jars_dir(gateway_jars_dir)
+    gateway_tws_path, gateway_major_version = gateway_program_layout(gateway_jars_dir, text)
     replacements = {
         "TWS_MAJOR_VRSN": gateway_major_version,
         "IBC_INI": "/home/poma/ibc/config.ini",
