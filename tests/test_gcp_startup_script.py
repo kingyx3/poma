@@ -3,12 +3,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STARTUP_SCRIPT = REPO_ROOT / "infra/gcp-free-tier/startup.sh"
 
-
 REQUIRED_STARTUP_SNIPPETS = (
     "cat >/etc/systemd/system/ibgateway.service",
     "ExecStart=/usr/local/bin/poma-run-ib-gateway",
     'exec "$${IBC_DIR}/gatewaystart.sh" -inline',
-    'exec "$${IB_GATEWAY_DIR}/ibgateway"',
+    'gateway_executable="$$(find "$${IB_GATEWAY_DIR}" -type f -name ibgateway',
+    'exec "$${gateway_executable}"',
     "Restart=always",
     'IBC_INI": "/home/poma/ibc/config.ini"',
     'TWS_PATH": tws_path',
@@ -18,6 +18,13 @@ REQUIRED_STARTUP_SNIPPETS = (
         "find \"$${IB_GATEWAY_DIR}\" -type d "
         "-path '*/ibgateway/[0-9]*/jars'"
     ),
+    (
+        'if ! find "$${IB_GATEWAY_DIR}" -type f '
+        '-name ibgateway -perm -111'
+    ),
+    'require_command Xvfb',
+    'require_command fluxbox',
+    'require_command x11vnc',
     (
         'install -d -m 700 -o poma -g poma '
         '"$${IBC_HOME}" "$${IBC_HOME}/logs"'
