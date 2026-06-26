@@ -348,6 +348,8 @@ jobs:
             sudo chmod 600 /opt/poma/.env
             sudo chown -R poma:poma /opt/poma
             cd /opt/poma
+            sudo python3 ops/scripts/install_ibc_config_helper.py
+            sudo sh ops/scripts/ensure_ibgateway_service.sh
             sudo -u poma bash ops/scripts/deploy.sh
             sudo -u poma crontab ops/cron/poma.cron
           '
