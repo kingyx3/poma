@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 import pandas as pd
@@ -8,10 +8,15 @@ import requests
 
 from poma.config import Settings
 
-FMP_UNIVERSE_ENDPOINTS = {
-    "nasdaq100": ("nasdaq-constituent", "historical-nasdaq-constituent"),
-    "sp500": ("sp500-constituent", "historical-sp500-constituent"),
+# FMP "stable" constituent endpoints return membership only (symbol/name/sector) — no market
+# cap or price. Market cap and price come from the (batch) market-cap and quote endpoints.
+FMP_CONSTITUENT_ENDPOINTS = {
+    "nasdaq100": "nasdaq-constituent",
+    "sp500": "sp500-constituent",
 }
+FMP_BATCH_SIZE = 100
+FMP_PREVIOUS_WINDOW_DAYS = 12
+_MARKET_CAP_KEYS = ("marketCap", "marketCapitalization", "market_cap")
 
 
 class MarketDataClient(Protocol):
@@ -19,28 +24,42 @@ class MarketDataClient(Protocol):
         """Return columns: ticker, market_cap, price."""
 
     def previous_universe_snapshot(self, days_ago: int) -> pd.DataFrame:
-        """Return columns: ticker, market_cap, price for the comparison date."""
+        """Return columns: ticker, market_cap for the comparison date."""
+
+
+def _chunked(items: list[str], size: int) -> list[list[str]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def _market_cap_value(row: dict[str, Any]) -> Any:
+    for key in _MARKET_CAP_KEYS:
+        value = row.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 class FmpMarketDataClient:
-    """Thin FMP adapter.
+    """FMP "stable" adapter.
 
-    The exact data plan and endpoint availability can differ by subscription. Keep endpoints
-    configurable, validate provider output in dry-run mode, and backfill data before trusting
-    historical backtests.
+    Universe membership comes from the constituent endpoint; market caps and prices come from
+    the batch market-cap and batch quote endpoints (the constituent endpoint carries neither).
+    Historical (comparison-date) market caps come from the per-symbol historical market-cap
+    endpoint, which is the only one FMP exposes for point-in-time market cap.
     """
 
     def __init__(self, settings: Settings) -> None:
         if not settings.fmp_api_key:
             raise ValueError("FMP_API_KEY is required when DATA_PROVIDER=fmp")
-        if settings.universe not in FMP_UNIVERSE_ENDPOINTS:
-            supported = ", ".join(sorted(FMP_UNIVERSE_ENDPOINTS))
+        if settings.universe not in FMP_CONSTITUENT_ENDPOINTS:
+            supported = ", ".join(sorted(FMP_CONSTITUENT_ENDPOINTS))
             raise ValueError(f"unsupported FMP universe={settings.universe}; supported={supported}")
         self.settings = settings
+        self._session = requests.Session()
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         merged = {"apikey": self.settings.fmp_api_key, **(params or {})}
-        response = requests.get(
+        response = self._session.get(
             f"{self.settings.fmp_base_url}/{path.lstrip('/')}",
             params=merged,
             timeout=30,
@@ -48,17 +67,63 @@ class FmpMarketDataClient:
         response.raise_for_status()
         return response.json()
 
+    def _constituent_symbols(self) -> list[str]:
+        rows = self._get(FMP_CONSTITUENT_ENDPOINTS[self.settings.universe])
+        symbols = [str(row.get("symbol", "")).upper().strip() for row in rows or []]
+        symbols = [symbol for symbol in symbols if symbol]
+        if not symbols:
+            raise ValueError("FMP constituent endpoint returned no symbols")
+        return list(dict.fromkeys(symbols))  # de-duplicate, preserve order
+
     def current_universe_snapshot(self) -> pd.DataFrame:
-        current_endpoint, _ = FMP_UNIVERSE_ENDPOINTS[self.settings.universe]
-        rows = self._get(current_endpoint)
-        return _normalise_snapshot(rows)
+        symbols = self._constituent_symbols()
+        caps: dict[str, Any] = {}
+        prices: dict[str, Any] = {}
+        for chunk in _chunked(symbols, FMP_BATCH_SIZE):
+            joined = ",".join(chunk)
+            for row in self._get("market-capitalization-batch", {"symbols": joined}) or []:
+                symbol = str(row.get("symbol", "")).upper().strip()
+                cap = _market_cap_value(row)
+                if symbol and cap is not None:
+                    caps[symbol] = cap
+            for row in self._get("batch-quote-short", {"symbols": joined}) or []:
+                symbol = str(row.get("symbol", "")).upper().strip()
+                price = row.get("price")
+                if symbol and price is not None:
+                    prices[symbol] = price
+
+        records = [
+            {"ticker": symbol, "market_cap": caps[symbol], "price": prices[symbol]}
+            for symbol in symbols
+            if symbol in caps and symbol in prices
+        ]
+        return _normalise_snapshot(records)
 
     def previous_universe_snapshot(self, days_ago: int) -> pd.DataFrame:
-        # Provider-specific historical constituent and market-cap support varies. The default
-        # implementation expects a configured endpoint that returns a snapshot from N days ago.
-        _, historical_endpoint = FMP_UNIVERSE_ENDPOINTS[self.settings.universe]
-        rows = self._get(historical_endpoint, {"daysAgo": days_ago})
-        return _normalise_snapshot(rows)
+        symbols = self._constituent_symbols()
+        target = datetime.now(UTC).date() - timedelta(days=days_ago)
+        start = target - timedelta(days=FMP_PREVIOUS_WINDOW_DAYS)
+        records: list[dict[str, Any]] = []
+        for symbol in symbols:
+            try:
+                rows = self._get(
+                    "historical-market-cap",
+                    {"symbol": symbol, "from": start.isoformat(), "to": target.isoformat()},
+                )
+            except requests.RequestException:
+                continue
+            cap = _latest_market_cap(rows)
+            if cap is not None:
+                records.append({"ticker": symbol, "market_cap": cap})
+        return _normalise_snapshot(records)
+
+
+def _latest_market_cap(rows: Any) -> Any:
+    """Return the market cap from the most recent row of a historical market-cap response."""
+    if not isinstance(rows, list) or not rows:
+        return None
+    latest = max(rows, key=lambda row: str(row.get("date", "")))
+    return _market_cap_value(latest)
 
 
 def _normalise_snapshot(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -70,6 +135,7 @@ def _normalise_snapshot(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "symbol": "ticker",
         "ticker": "ticker",
         "marketCap": "market_cap",
+        "marketCapitalization": "market_cap",
         "market_cap": "market_cap",
         "price": "price",
     }

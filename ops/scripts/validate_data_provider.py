@@ -8,13 +8,16 @@ import pandas as pd
 from poma.config import get_settings
 from poma.data import build_data_client
 
-REQUIRED_COLUMNS = {"ticker", "market_cap", "price"}
 MIN_EXPECTED_ROWS = 50
+# The comparison-date snapshot only needs market caps (used for the previous rank); price is
+# only consumed from the current snapshot for trade sizing.
+CURRENT_REQUIRED_COLUMNS = {"ticker", "market_cap", "price"}
+PREVIOUS_REQUIRED_COLUMNS = {"ticker", "market_cap"}
 
 
-def validate_snapshot(name: str, frame: pd.DataFrame) -> list[str]:
+def validate_snapshot(name: str, frame: pd.DataFrame, required_columns: set[str]) -> list[str]:
     errors: list[str] = []
-    missing = REQUIRED_COLUMNS - set(frame.columns)
+    missing = required_columns - set(frame.columns)
     if missing:
         errors.append(f"{name} snapshot missing required columns: {sorted(missing)}")
         return errors
@@ -29,7 +32,7 @@ def validate_snapshot(name: str, frame: pd.DataFrame) -> list[str]:
     if tickers.duplicated().any():
         errors.append(f"{name} snapshot has duplicate tickers")
 
-    for column in ["market_cap", "price"]:
+    for column in sorted(required_columns - {"ticker"}):
         numeric = pd.to_numeric(frame[column], errors="coerce")
         if numeric.isna().any():
             errors.append(f"{name} snapshot has non-numeric {column} values")
@@ -50,8 +53,8 @@ def main() -> None:
     previous = client.previous_universe_snapshot(settings.rank_lookback_days)
 
     errors = []
-    errors.extend(validate_snapshot("current", current))
-    errors.extend(validate_snapshot("previous", previous))
+    errors.extend(validate_snapshot("current", current, CURRENT_REQUIRED_COLUMNS))
+    errors.extend(validate_snapshot("previous", previous, PREVIOUS_REQUIRED_COLUMNS))
 
     if errors:
         for error in errors:
