@@ -212,6 +212,8 @@ def test_auto_cicd_deploys_dev_on_pr_and_stg_on_merge() -> None:
     assert "deploy_environment: dev" in workflow
     assert "deploy_environment: stg" in workflow
     assert "trading_mode: paper" in workflow
+    # dev PRs use fixture data (no FMP quota burn); stg-on-merge validates the real fmp path.
+    assert "data_provider: fixture" in workflow
     assert "data_provider: fmp" in workflow
     assert "action: configure-paper" in workflow
     assert "deploy_environment: prd" not in workflow

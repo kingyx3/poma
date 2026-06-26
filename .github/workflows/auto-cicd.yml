@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   dev-deploy:
-    # Open/reopen a PR from a branch in this repository (skip forks, which lack secrets).
+    # Open/reopen/update a PR from a branch in this repository (skip forks, which lack secrets).
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     uses: ./.github/workflows/deploy-gcp-vm.yml
     with:
@@ -46,7 +46,9 @@ jobs:
       deploy_app: true
       tailscale_enabled: true
       trading_mode: paper
-      data_provider: fmp
+      # dev PR deploys use fixture data so frequent PR pushes never consume the real FMP
+      # quota; the real fmp data path is validated by stg on merge to main.
+      data_provider: fixture
       allow_live_trading: false
     secrets: inherit
 
