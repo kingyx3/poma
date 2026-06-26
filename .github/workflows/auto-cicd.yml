@@ -1,22 +1,5 @@
 name: Auto CI/CD
 
-# Continuous delivery automation:
-#   - On every push to an open pull request (and when opened/reopened), deploy the
-#     dev VM and configure the IB Gateway (paper). A newer push supersedes and
-#     cancels the previous push's in-progress dev deploy (see concurrency below).
-#   - When a change merges to main, deploy the stg VM and configure its gateway.
-#
-# Notes:
-#   - These deploys run Terraform apply (idempotent) and require the per-environment
-#     GitHub Environment secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TAILSCALE_AUTHKEY,
-#     FMP_API_KEY (data_provider=fmp), IBKR_ACCOUNT_PAPER (trading_mode=paper), and
-#     IBKR_LOGIN_ID / IBKR_LOGIN_SECRET (configure-paper).
-#   - If the dev/stg GitHub Environments have required-reviewer protection rules, the
-#     deploy jobs pause for approval before running.
-#   - prd is never deployed automatically.
-#   - Pull-request-triggered runs use the workflow definition from the base branch
-#     (main), so this automation takes effect once merged.
-
 on:
   pull_request:
     types: [opened, reopened, synchronize]
@@ -27,30 +10,22 @@ permissions:
   contents: read
   id-token: write
 
-# One in-flight run per PR (and a separate one for main). A newer push to the same
-# PR cancels the previous push's in-progress deploy. The group key separates PRs
-# (pull_request.number) from main (github.ref), so PR churn never cancels a
-# stg-on-merge deploy and vice versa.
 concurrency:
   group: poma-auto-cicd-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   dev-deploy:
-    # Open/reopen/update a PR from a branch in this repository (skip forks, which lack secrets).
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     uses: ./.github/workflows/deploy-gcp-vm.yml
     with:
       deploy_environment: dev
       terraform_action: apply
       deploy_app: true
-      tailscale_enabled: true
+      tailscale_enabled: false
       trading_mode: paper
-      # dev PR deploys use fixture data so frequent PR pushes never consume the real FMP
-      # quota; the real fmp data path is validated by stg on merge to main.
       data_provider: fixture
       allow_live_trading: false
-      # Skip the slow on-VM dry-run smoke for fast PR feedback (stg keeps it on merge).
       deploy_smoke: false
     secrets: inherit
 
