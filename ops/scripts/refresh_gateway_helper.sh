@@ -14,10 +14,15 @@ gcloud compute scp \
   ops/scripts/install_ibc_config_helper.py \
   "${GCP_VM_NAME}:/tmp/install_ibc_config_helper.py" \
   "${ssh_common[@]}"
+gcloud compute scp \
+  ops/scripts/ensure_ibgateway_service.sh \
+  "${GCP_VM_NAME}:/tmp/ensure_ibgateway_service.sh" \
+  "${ssh_common[@]}"
 gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command '
   set -euo pipefail
   sudo python3 /tmp/install_ibc_config_helper.py
-  rm -f /tmp/install_ibc_config_helper.py
+  sudo sh /tmp/ensure_ibgateway_service.sh
+  rm -f /tmp/install_ibc_config_helper.py /tmp/ensure_ibgateway_service.sh
   test -s /usr/local/bin/poma-configure-ibc
-  echo "Gateway helper refreshed."
+  echo "Gateway helper and service refreshed."
 '
