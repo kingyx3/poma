@@ -119,6 +119,19 @@ jobs:
             gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "${command}"
           }
 
+          ensure_config_helper() {
+            if run_remote "command -v poma-configure-ibc >/dev/null 2>&1"; then
+              return 0
+            fi
+
+            echo "poma-configure-ibc is missing on the VM; installing it from the deployed startup script."
+            gcloud compute scp \
+              ops/scripts/install_ibc_config_helper.py \
+              "${GCP_VM_NAME}:/tmp/install_ibc_config_helper.py" \
+              "${ssh_common[@]}"
+            run_remote "sudo python3 /tmp/install_ibc_config_helper.py && rm -f /tmp/install_ibc_config_helper.py"
+          }
+
           verify_socket() {
             run_remote 'if nc -z 127.0.0.1 7497; then echo "IB Gateway API socket is reachable on 127.0.0.1:7497."; else echo "IB Gateway API socket is not reachable on 127.0.0.1:7497." >&2; sudo systemctl status ibgateway --no-pager --lines=80 || true; exit 1; fi'
           }
@@ -142,6 +155,7 @@ jobs:
                 exit 1
               fi
 
+              ensure_config_helper
               mode="${INPUT_ACTION#configure-}"
               input_file="$(mktemp)"
               cleanup() {
