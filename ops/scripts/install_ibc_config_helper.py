@@ -12,6 +12,26 @@ START = "cat >/usr/local/bin/poma-configure-ibc <<'SCRIPT'"
 END = "SCRIPT"
 
 
+def patch_helper_text(text: str) -> str:
+    missing_block = (
+        'if [ ! -f "${IBC_DIR}/config.ini" ]; then\n'
+        '  echo "Missing IBC sample config at ${IBC_DIR}/config.ini" >&2\n'
+        '  exit 1\n'
+        'fi\n\n'
+    )
+    text = text.replace(missing_block, '')
+    sample_line = '  install -m 600 -o poma -g poma "${IBC_DIR}/config.ini" "${IBC_CONFIG}"'
+    fallback_lines = (
+        '  if [ -f "${IBC_DIR}/config.ini" ]; then\n'
+        f'{sample_line}\n'
+        '  else\n'
+        '    : > "${IBC_CONFIG}"\n'
+        '  fi'
+    )
+    return text.replace(sample_line, fallback_lines)
+
+
+# Installer used by the Gateway ops workflow to repair older VMs.
 def main() -> int:
     if not SOURCE.exists():
         print(f"Missing source startup script: {SOURCE}", file=sys.stderr)
@@ -33,7 +53,7 @@ def main() -> int:
         print(f"Could not find helper block in {SOURCE}", file=sys.stderr)
         return 1
 
-    TARGET.write_text("\n".join(helper) + "\n", encoding="utf-8")
+    TARGET.write_text(patch_helper_text("\n".join(helper) + "\n"), encoding="utf-8")
     os.chown(TARGET, 0, 0)
     TARGET.chmod(stat.S_IRWXU | stat.S_IXGRP | stat.S_IRGRP)
     print(f"Installed {TARGET}")
