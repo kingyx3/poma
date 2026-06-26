@@ -47,7 +47,10 @@ def _apply_max_weight_cap(weights: pd.Series, max_weight: float) -> pd.Series:
     total = capped.sum()
     if total <= 0:
         raise ValueError("capped weights sum to zero")
-    return capped / total
+    # Only scale down when weights overshoot 1; when the cap binds on every name they sum to
+    # < 1 and the remainder stays in cash. Renormalizing that case up would scale capped
+    # weights back above max_weight and silently violate the cap.
+    return capped / total if total > 1.0 else capped
 
 
 def build_market_cap_targets(

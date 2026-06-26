@@ -69,5 +69,19 @@ def test_order_limits_block_oversized_orders() -> None:
     assert "block execution" in warnings[0]
 
 
+def test_generate_trades_skips_nan_reference_price() -> None:
+    trades, warnings = generate_trades(
+        [TargetPosition("A", 0.5, 500)],
+        [],
+        latest_prices={"A": float("nan")},
+        portfolio_value_usd=1_000,
+        min_trade_notional_usd=1,
+        min_weight_delta_pct=0,
+        limit_offset_bps=10,
+    )
+    assert trades == []
+    assert any("missing valid latest price" in w for w in warnings)
+
+
 def test_validate_targets_warns_empty() -> None:
     assert validate_targets([], max_position_pct=0.1) == ["no target positions generated"]

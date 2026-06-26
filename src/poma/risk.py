@@ -46,7 +46,8 @@ def generate_trades(
             continue
 
         reference_price = latest_prices.get(ticker)
-        if not reference_price or reference_price <= 0:
+        # reference_price != reference_price catches NaN, which is truthy and not <= 0.
+        if reference_price is None or reference_price != reference_price or reference_price <= 0:
             warnings.append(f"missing valid latest price for {ticker}; skipping trade")
             continue
 
