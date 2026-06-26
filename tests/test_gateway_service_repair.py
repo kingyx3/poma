@@ -53,6 +53,17 @@ def test_runtime_repair_helper_is_self_contained() -> None:
     assert "extract_config_helper" not in script
 
 
+def test_runtime_repair_helper_uses_systemd_runtime_logs() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
+
+    assert "RuntimeDirectory=poma-ibgateway" in script
+    assert "LogsDirectory=poma/ibgateway" in script
+    assert "IB_GATEWAY_LOG_DIR" in script
+    assert "/tmp/poma-ibgateway/xvfb.log" not in script
+    assert "/tmp/poma-ibgateway/fluxbox.log" not in script
+    assert "/tmp/poma-ibgateway/x11vnc.log" not in script
+
+
 def test_runtime_repair_installs_missing_gateway_artifacts() -> None:
     script = REPAIR_HELPER.read_text(encoding="utf-8")
 
@@ -62,3 +73,12 @@ def test_runtime_repair_installs_missing_gateway_artifacts() -> None:
     assert "def ensure_ibc_installed" in script
     assert "LEGACY_RUNTIME_DIR" in script
     assert "IB_GATEWAY_LOG_DIR" in script
+
+
+def test_runtime_repair_accepts_gateway_jars_as_installed_artifacts() -> None:
+    script = REPAIR_HELPER.read_text(encoding="utf-8")
+
+    assert "def find_gateway_jars_dirs" in script
+    assert "def has_gateway_artifacts" in script
+    assert "find_gateway_executable() is not None or bool(find_gateway_jars_dirs())" in script
+    assert "no executable or jars were found" in script

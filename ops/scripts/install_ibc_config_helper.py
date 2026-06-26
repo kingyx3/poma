@@ -15,6 +15,9 @@ SERVICE_TARGET = Path("/etc/systemd/system/ibgateway.service")
 APP_USER = "poma"
 IB_GATEWAY_DIR = Path("/opt/ibgateway")
 IBC_DIR = Path("/opt/ibc")
+IB_GATEWAY_RUNTIME_DIR = Path("/run/poma-ibgateway")
+IB_GATEWAY_LOG_DIR = Path("/var/log/poma/ibgateway")
+LEGACY_RUNTIME_DIR = Path("/tmp/poma-ibgateway")
 
 APT_PACKAGES = (
     "ca-certificates",
@@ -105,13 +108,15 @@ export IB_GATEWAY_DIR="${IB_GATEWAY_DIR:-/opt/ibgateway}"
 export IBC_DIR="${IBC_DIR:-/opt/ibc}"
 export IB_GATEWAY_VNC_PORT="${IB_GATEWAY_VNC_PORT:-5900}"
 export TWS_SETTINGS_PATH="${TWS_SETTINGS_PATH:-/home/poma/Jts}"
+export IB_GATEWAY_RUNTIME_DIR="${IB_GATEWAY_RUNTIME_DIR:-/run/poma-ibgateway}"
+export IB_GATEWAY_LOG_DIR="${IB_GATEWAY_LOG_DIR:-/var/log/poma/ibgateway}"
 
-mkdir -p "${HOME}/Jts" "${HOME}/ibc/logs" /tmp/poma-ibgateway
+mkdir -p "${HOME}/Jts" "${HOME}/ibc/logs" "${IB_GATEWAY_RUNTIME_DIR}" "${IB_GATEWAY_LOG_DIR}"
 
 require_command() {
   local command="$1"
   if ! command -v "${command}" >/dev/null 2>&1; then
-    echo "Missing required command: ${command}. Re-run Deploy GCP e2-micro VM or IB Gateway Ops to repair the VM bootstrap." >&2
+    echo "Missing required command: ${command}. Run IB Gateway Ops to repair the VM bootstrap." >&2
     exit 127
   fi
 }
@@ -125,9 +130,9 @@ require_command Xvfb
 require_command fluxbox
 require_command x11vnc
 
-Xvfb "${DISPLAY}" -screen 0 1280x1024x24 -nolisten tcp >/tmp/poma-ibgateway/xvfb.log 2>&1 &
+Xvfb "${DISPLAY}" -screen 0 1280x1024x24 -nolisten tcp >"${IB_GATEWAY_LOG_DIR}/xvfb.log" 2>&1 &
 sleep 2
-fluxbox >/tmp/poma-ibgateway/fluxbox.log 2>&1 &
+fluxbox >"${IB_GATEWAY_LOG_DIR}/fluxbox.log" 2>&1 &
 x11vnc \
   -display "${DISPLAY}" \
   -localhost \
@@ -135,7 +140,7 @@ x11vnc \
   -shared \
   -nopw \
   -rfbport "${IB_GATEWAY_VNC_PORT}" \
-  >/tmp/poma-ibgateway/x11vnc.log 2>&1 &
+  >"${IB_GATEWAY_LOG_DIR}/x11vnc.log" 2>&1 &
 
 if [ -x "${IBC_DIR}/gatewaystart.sh" ] && [ -s "${HOME}/ibc/config.ini" ]; then
   cd "${IBC_DIR}"
@@ -145,7 +150,7 @@ fi
 gateway_executable="$(find "${IB_GATEWAY_DIR}" -type f -name ibgateway -perm -111 2>/dev/null | sort -V | tail -n1 || true)"
 if [ -z "${gateway_executable}" ]; then
   echo "Unable to find an executable IB Gateway binary under ${IB_GATEWAY_DIR}." >&2
-  echo "Re-run Deploy GCP e2-micro VM so the VM startup script installs IB Gateway." >&2
+  echo "Run IB Gateway Ops to repair the VM bootstrap and install IB Gateway." >&2
   exit 127
 fi
 
@@ -166,6 +171,12 @@ Environment=DISPLAY=:99
 Environment=IB_GATEWAY_DIR=/opt/ibgateway
 Environment=IBC_DIR=/opt/ibc
 Environment=IB_GATEWAY_VNC_PORT=5900
+Environment=IB_GATEWAY_RUNTIME_DIR=/run/poma-ibgateway
+Environment=IB_GATEWAY_LOG_DIR=/var/log/poma/ibgateway
+RuntimeDirectory=poma-ibgateway
+RuntimeDirectoryMode=0700
+LogsDirectory=poma/ibgateway
+LogsDirectoryMode=0750
 ExecStart=/usr/local/bin/poma-run-ib-gateway
 Restart=always
 RestartSec=30
@@ -208,20 +219,27 @@ def ensure_app_user() -> None:
     subprocess.run(["useradd", "--create-home", "--shell", "/bin/bash", APP_USER], check=True)
 
 
+def find_gateway_jars_dirs() -> list[Path]:
+    return sorted(
+        path
+        for path in IB_GATEWAY_DIR.glob("**/jars")
+        if path.is_dir() and any(path.glob("*.jar"))
+    )
+
+
 def configure_ibc_launcher() -> None:
     gatewaystart = IBC_DIR / "gatewaystart.sh"
     if not gatewaystart.exists():
         print(f"Skipping IBC launcher repair because {gatewaystart} is missing")
         return
 
-    jars_dirs = sorted(IB_GATEWAY_DIR.glob("**/ibgateway/[0-9]*/jars"))
+    jars_dirs = find_gateway_jars_dirs()
     if not jars_dirs:
         print(f"Skipping IBC launcher repair because no Gateway jars exist under {IB_GATEWAY_DIR}")
         return
-
     gateway_jars_dir = jars_dirs[-1]
     gateway_major_version = gateway_jars_dir.parent.name
-    gateway_tws_path = gateway_jars_dir.parents[2]
+    gateway_tws_path = gateway_jars_dir.parent.parent
     replacements = {
         "TWS_MAJOR_VRSN": gateway_major_version,
         "IBC_INI": "/home/poma/ibc/config.ini",
@@ -251,10 +269,28 @@ def configure_ibc_launcher() -> None:
 def main() -> int:
     ensure_runtime_packages()
     ensure_app_user()
-    Path("/home/poma/Jts").mkdir(parents=True, exist_ok=True)
-    Path("/home/poma/ibc/logs").mkdir(parents=True, exist_ok=True)
-    Path("/tmp/poma-ibgateway").mkdir(parents=True, exist_ok=True)
-    subprocess.run(["chown", "-R", "poma:poma", "/home/poma/Jts", "/home/poma/ibc"], check=True)
+    for path, mode in (
+        (Path("/home/poma/Jts"), 0o700),
+        (Path("/home/poma/ibc/logs"), 0o700),
+        (IB_GATEWAY_RUNTIME_DIR, 0o700),
+        (IB_GATEWAY_LOG_DIR, 0o750),
+        (LEGACY_RUNTIME_DIR, 0o700),
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(mode)
+    subprocess.run(
+        [
+            "chown",
+            "-R",
+            "poma:poma",
+            "/home/poma/Jts",
+            "/home/poma/ibc",
+            str(IB_GATEWAY_RUNTIME_DIR),
+            str(IB_GATEWAY_LOG_DIR),
+            str(LEGACY_RUNTIME_DIR),
+        ],
+        check=True,
+    )
 
     configure_ibc_launcher()
     install_text(HELPER_TARGET, CONFIG_HELPER_TEXT, stat.S_IRWXU | stat.S_IXGRP | stat.S_IRGRP)

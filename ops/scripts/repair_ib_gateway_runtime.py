@@ -104,10 +104,24 @@ def find_gateway_executable() -> Path | None:
     return sorted(candidates)[-1] if candidates else None
 
 
+def find_gateway_jars_dirs() -> list[Path]:
+    return sorted(
+        path
+        for path in IB_GATEWAY_DIR.glob("**/jars")
+        if path.is_dir() and any(path.glob("*.jar"))
+    )
+
+
+def has_gateway_artifacts() -> bool:
+    return find_gateway_executable() is not None or bool(find_gateway_jars_dirs())
+
+
 def ensure_ib_gateway_installed() -> None:
-    if find_gateway_executable() is not None:
+    if has_gateway_artifacts():
         chown_recursive(IB_GATEWAY_DIR)
         return
+    if IB_GATEWAY_DIR.exists():
+        shutil.rmtree(IB_GATEWAY_DIR)
 
     print(f"Installing IB Gateway into {IB_GATEWAY_DIR}")
     IB_GATEWAY_DIR.mkdir(parents=True, exist_ok=True)
@@ -123,9 +137,9 @@ def ensure_ib_gateway_installed() -> None:
     finally:
         installer.unlink(missing_ok=True)
 
-    if find_gateway_executable() is None:
+    if not has_gateway_artifacts():
         raise RuntimeError(
-            "IB Gateway installer completed but no executable was found under "
+            "IB Gateway installer completed but no executable or jars were found under "
             f"{IB_GATEWAY_DIR}"
         )
     chown_recursive(IB_GATEWAY_DIR)
