@@ -4,20 +4,97 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
-SOURCE = Path("/opt/poma/infra/gcp-free-tier/startup.sh")
 HELPER_TARGET = Path("/usr/local/bin/poma-configure-ibc")
 RUNNER_TARGET = Path("/usr/local/bin/poma-run-ib-gateway")
 SERVICE_TARGET = Path("/etc/systemd/system/ibgateway.service")
-START = "cat >/usr/local/bin/poma-configure-ibc <<'SCRIPT'"
-END = "SCRIPT"
 APP_USER = "poma"
 IB_GATEWAY_DIR = Path("/opt/ibgateway")
 IBC_DIR = Path("/opt/ibc")
+
+APT_PACKAGES = (
+    "ca-certificates",
+    "curl",
+    "fluxbox",
+    "netcat-openbsd",
+    "openjdk-17-jre-headless",
+    "procps",
+    "unzip",
+    "x11vnc",
+    "xterm",
+    "xvfb",
+)
+REQUIRED_COMMAND_PACKAGES = {
+    "Xvfb": "xvfb",
+    "fluxbox": "fluxbox",
+    "java": "openjdk-17-jre-headless",
+    "nc": "netcat-openbsd",
+    "x11vnc": "x11vnc",
+}
+
+CONFIG_HELPER_TEXT = r'''#!/usr/bin/env bash
+set -euo pipefail
+
+IBC_DIR="/opt/ibc"
+IBC_HOME="/home/poma/ibc"
+IBC_CONFIG="${IBC_HOME}/config.ini"
+
+read -r -p "IBKR login id: " ib_login_id
+read -r -s -p "IBKR password: " ib_password
+echo
+read -r -p "Trading mode [paper/live] (default paper): " trading_mode
+trading_mode="${trading_mode:-paper}"
+
+if [ "${trading_mode}" != "paper" ] && [ "${trading_mode}" != "live" ]; then
+  echo "Trading mode must be paper or live" >&2
+  exit 1
+fi
+
+install -d -m 700 -o poma -g poma "${IBC_HOME}" "${IBC_HOME}/logs"
+if [ ! -f "${IBC_CONFIG}" ]; then
+  if [ -f "${IBC_DIR}/config.ini" ]; then
+    install -m 600 -o poma -g poma "${IBC_DIR}/config.ini" "${IBC_CONFIG}"
+  else
+    : > "${IBC_CONFIG}"
+    chown poma:poma "${IBC_CONFIG}"
+    chmod 600 "${IBC_CONFIG}"
+  fi
+fi
+
+set_ini() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="${key}" -v value="${value}" '
+    BEGIN { done = 0 }
+    index($0, key "=") == 1 { print key "=" value; done = 1; next }
+    { print }
+    END { if (!done) print key "=" value }
+  ' "${IBC_CONFIG}" > "${tmp}"
+  cat "${tmp}" > "${IBC_CONFIG}"
+  rm -f "${tmp}"
+}
+
+set_ini IbLoginId "${ib_login_id}"
+set_ini IbPassword "${ib_password}"
+set_ini TradingMode "${trading_mode}"
+set_ini ReloginAfterSecondFactorAuthenticationTimeout yes
+set_ini AcceptNonBrokerageAccountWarning yes
+set_ini ExistingSessionDetectedAction primaryoverride
+set_ini AutoRestartTime 23:45
+
+chown poma:poma "${IBC_CONFIG}"
+chmod 600 "${IBC_CONFIG}"
+systemctl restart ibgateway
+
+echo "IBC config written to ${IBC_CONFIG} and ibgateway restarted."
+echo "Approve IBKR Mobile 2FA if prompted."
+'''
 
 RUNNER_TEXT = r'''#!/usr/bin/env bash
 set -euo pipefail
@@ -34,7 +111,7 @@ mkdir -p "${HOME}/Jts" "${HOME}/ibc/logs" /tmp/poma-ibgateway
 require_command() {
   local command="$1"
   if ! command -v "${command}" >/dev/null 2>&1; then
-    echo "Missing required command: ${command}. Re-run Deploy GCP e2-micro VM to repair the VM bootstrap." >&2
+    echo "Missing required command: ${command}. Re-run Deploy GCP e2-micro VM or IB Gateway Ops to repair the VM bootstrap." >&2
     exit 127
   fi
 }
@@ -100,46 +177,23 @@ WantedBy=multi-user.target
 """
 
 
-def patch_helper_text(text: str) -> str:
-    missing_block = (
-        'if [ ! -f "${IBC_DIR}/config.ini" ]; then\n'
-        '  echo "Missing IBC sample config at ${IBC_DIR}/config.ini" >&2\n'
-        "  exit 1\n"
-        "fi\n\n"
+def ensure_runtime_packages() -> None:
+    missing_packages = sorted(
+        {
+            package
+            for command, package in REQUIRED_COMMAND_PACKAGES.items()
+            if shutil.which(command) is None
+        }
     )
-    text = text.replace(missing_block, "")
-    sample_line = '  install -m 600 -o poma -g poma "${IBC_DIR}/config.ini" "${IBC_CONFIG}"'
-    fallback_lines = (
-        '  if [ -f "${IBC_DIR}/config.ini" ]; then\n'
-        f"{sample_line}\n"
-        "  else\n"
-        '    : > "${IBC_CONFIG}"\n'
-        "  fi"
+    if not missing_packages:
+        return
+
+    print(
+        "Installing missing IB Gateway runtime packages: "
+        + ", ".join(missing_packages)
     )
-    return text.replace(sample_line, fallback_lines)
-
-
-def extract_config_helper() -> str:
-    if not SOURCE.exists():
-        print(f"Missing source startup script: {SOURCE}", file=sys.stderr)
-        raise SystemExit(1)
-
-    lines = SOURCE.read_text(encoding="utf-8").splitlines()
-    capture = False
-    helper: list[str] = []
-    for line in lines:
-        if line == START:
-            capture = True
-            continue
-        if capture and line == END:
-            break
-        if capture:
-            helper.append(line.replace("$${", "${"))
-
-    if not helper:
-        print(f"Could not find helper block in {SOURCE}", file=sys.stderr)
-        raise SystemExit(1)
-    return patch_helper_text("\n".join(helper) + "\n")
+    subprocess.run(["apt-get", "update"], check=True)
+    subprocess.run(["apt-get", "install", "-y", *APT_PACKAGES], check=True)
 
 
 def install_text(path: Path, text: str, mode: int) -> None:
@@ -195,6 +249,7 @@ def configure_ibc_launcher() -> None:
 
 
 def main() -> int:
+    ensure_runtime_packages()
     ensure_app_user()
     Path("/home/poma/Jts").mkdir(parents=True, exist_ok=True)
     Path("/home/poma/ibc/logs").mkdir(parents=True, exist_ok=True)
@@ -202,7 +257,7 @@ def main() -> int:
     subprocess.run(["chown", "-R", "poma:poma", "/home/poma/Jts", "/home/poma/ibc"], check=True)
 
     configure_ibc_launcher()
-    install_text(HELPER_TARGET, extract_config_helper(), stat.S_IRWXU | stat.S_IXGRP | stat.S_IRGRP)
+    install_text(HELPER_TARGET, CONFIG_HELPER_TEXT, stat.S_IRWXU | stat.S_IXGRP | stat.S_IRGRP)
     install_text(RUNNER_TARGET, RUNNER_TEXT, 0o755)
     install_text(SERVICE_TARGET, SERVICE_TEXT, 0o644)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
