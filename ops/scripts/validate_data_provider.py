@@ -9,10 +9,7 @@ from poma.config import get_settings
 from poma.data import build_data_client
 
 MIN_EXPECTED_ROWS = 50
-# The comparison-date snapshot only needs market caps (used for the previous rank); price is
-# only consumed from the current snapshot for trade sizing.
 CURRENT_REQUIRED_COLUMNS = {"ticker", "market_cap", "price"}
-PREVIOUS_REQUIRED_COLUMNS = {"ticker", "market_cap"}
 
 
 def validate_snapshot(name: str, frame: pd.DataFrame, required_columns: set[str]) -> list[str]:
@@ -50,21 +47,14 @@ def main() -> None:
 
     client = build_data_client(settings)
     current = client.current_universe_snapshot()
-    previous = client.previous_universe_snapshot(settings.rank_lookback_days)
 
-    errors = []
-    errors.extend(validate_snapshot("current", current, CURRENT_REQUIRED_COLUMNS))
-    errors.extend(validate_snapshot("previous", previous, PREVIOUS_REQUIRED_COLUMNS))
-
+    errors = validate_snapshot("current", current, CURRENT_REQUIRED_COLUMNS)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)
 
-    print(
-        "Data provider validation passed: "
-        f"current_rows={len(current)} previous_rows={len(previous)}"
-    )
+    print(f"Data provider validation passed: current_rows={len(current)}")
 
 
 if __name__ == "__main__":

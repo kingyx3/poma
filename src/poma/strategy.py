@@ -17,24 +17,15 @@ def rank_by_market_cap(snapshot: pd.DataFrame) -> pd.DataFrame:
     return ranked.sort_values("market_cap_rank")
 
 
-def select_top_rank_improvements(
-    current: pd.DataFrame,
-    previous: pd.DataFrame,
-    max_holdings: int,
-) -> pd.DataFrame:
+def select_top_market_cap(current: pd.DataFrame, max_holdings: int) -> pd.DataFrame:
+    """Select the largest `max_holdings` names by current market cap.
+
+    Cap-weighted top-N selection. (A rank-improvement tilt can be layered back later from
+    locally accumulated daily snapshots, without per-run historical API calls.)
+    """
     if max_holdings <= 0:
         raise ValueError("max_holdings must be positive")
-
-    current_ranked = rank_by_market_cap(current)
-    previous_ranked = rank_by_market_cap(previous)[
-        ["ticker", "market_cap_rank"]
-    ].rename(columns={"market_cap_rank": "previous_rank"})
-    joined = current_ranked.merge(previous_ranked, on="ticker", how="inner")
-    joined["rank_improvement_score"] = joined["previous_rank"] - joined["market_cap_rank"]
-    return joined.sort_values(
-        by=["rank_improvement_score", "market_cap"],
-        ascending=[False, False],
-    ).head(max_holdings)
+    return rank_by_market_cap(current).head(max_holdings)
 
 
 def _apply_max_weight_cap(weights: pd.Series, max_weight: float) -> pd.Series:

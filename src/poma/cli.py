@@ -13,6 +13,7 @@ from poma.config import TradingMode, get_settings
 from poma.data import utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
 from poma.health import check_ibkr, run_checks
+from poma.history import CapSnapshotHistory
 from poma.market_calendar import should_rebalance_now
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
@@ -94,7 +95,7 @@ def _run_rebalance(
     if force_dry_run:
         settings = settings.model_copy(update={"trading_mode": TradingMode.DRY_RUN})
 
-    engine = RebalanceEngine(settings)
+    engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.state_dir))
     plan = engine.build_plan(session_date, run_id)
     report_path = _write_report(plan, settings.report_dir)
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 
 from poma.broker import Broker, build_broker
 from poma.config import Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
+from poma.history import CapSnapshotHistory
 from poma.models import RebalancePlan
 from poma.risk import (
     enforce_order_limits,
@@ -12,7 +14,7 @@ from poma.risk import (
     generate_trades,
     validate_targets,
 )
-from poma.strategy import build_market_cap_targets, select_top_rank_improvements
+from poma.strategy import build_market_cap_targets, select_top_market_cap
 
 BLOCK_MARKER = "block execution"
 
@@ -39,20 +41,19 @@ class RebalanceEngine:
         *,
         data_client: MarketDataClient | None = None,
         broker: Broker | None = None,
+        history: CapSnapshotHistory | None = None,
     ) -> None:
         self.settings = settings
         self.data_client = data_client or build_data_client(settings)
         self.broker = broker or build_broker(settings)
+        self.history = history
 
     def build_plan(self, session_date: str, run_id: str) -> RebalancePlan:
         settings = self.settings
         current = self.data_client.current_universe_snapshot()
-        previous = self.data_client.previous_universe_snapshot(settings.rank_lookback_days)
-        selected = select_top_rank_improvements(
-            current=current,
-            previous=previous,
-            max_holdings=settings.max_holdings,
-        )
+        if self.history is not None:
+            self.history.save(current, datetime.now(UTC).date())
+        selected = select_top_market_cap(current, settings.max_holdings)
         targets = build_market_cap_targets(
             selected=selected,
             portfolio_value_usd=settings.portfolio_value_usd,

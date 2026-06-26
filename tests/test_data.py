@@ -10,6 +10,8 @@ from poma.data import FmpMarketDataClient
 class FakeResponse:
     def __init__(self, payload: Any) -> None:
         self._payload = payload
+        self.status_code = 200
+        self.headers: dict[str, str] = {}
 
     def raise_for_status(self) -> None:
         return None
@@ -58,26 +60,6 @@ def test_current_snapshot_merges_constituents_caps_and_prices(monkeypatch) -> No
     assert frame["ticker"].tolist() == ["AAPL", "MSFT"]
     assert frame.set_index("ticker").loc["AAPL", "market_cap"] == 3000
     assert frame.set_index("ticker").loc["MSFT", "price"] == 410.0
-
-
-def test_previous_snapshot_uses_latest_historical_market_cap(monkeypatch) -> None:
-    def router(path, params):
-        if path == "sp500-constituent":
-            return [{"symbol": "AAPL"}, {"symbol": "MSFT"}]
-        if path == "historical-market-capitalization":
-            base = 100 if params["symbol"] == "AAPL" else 50
-            return [
-                {"date": "2026-03-20", "marketCap": base},
-                {"date": "2026-03-27", "marketCap": base + 10},
-            ]
-        raise AssertionError(f"unexpected path {path}")
-
-    client = _client(monkeypatch, router)
-    frame = client.previous_universe_snapshot(90)
-
-    # Latest row by date wins; previous snapshot needs no price column.
-    assert frame.set_index("ticker").loc["AAPL", "market_cap"] == 110
-    assert "price" not in frame.columns
 
 
 def test_fmp_universe_selects_constituent_endpoint(monkeypatch) -> None:
