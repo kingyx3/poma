@@ -15,6 +15,8 @@ def test_refresh_script_uploads_service_repair_helper() -> None:
 def test_service_repair_helper_defines_gateway_unit() -> None:
     script = SERVICE_SCRIPT.read_text(encoding="utf-8")
 
+    assert script.startswith("#!/bin/sh\n")
+    assert "set -euo pipefail" not in script.split("cat >/usr/local/bin/poma-run-ib-gateway", 1)[0]
     assert "ibgateway.service" in script
     assert "poma-run-ib-gateway" in script
     assert "daemon-reload" in script
