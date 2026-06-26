@@ -104,4 +104,4 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable ibgateway
+systemctl enable --now ibgateway
