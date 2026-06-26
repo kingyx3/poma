@@ -7,12 +7,14 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Bootstrap WIF using only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
 - [ ] Delete the bootstrap secret and disable/delete the temporary GCP key after bootstrap.
 - [ ] Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+- [ ] Add `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` as GitHub Environment Secrets.
 - [ ] Deploy with `TRADING_MODE=dry_run` first.
 - [ ] Confirm the deploy smoke test created a new `reports/rebalance-*.json` file.
-- [ ] Run `sudo poma-configure-ibc` on the VM.
+- [ ] Run **IB Gateway Ops** with `action=configure-paper`.
+- [ ] Approve IBKR mobile authentication if prompted.
 - [ ] Confirm `ibgateway.service` is active after reboot.
 - [ ] Confirm `127.0.0.1:7497` is reachable on the VM.
-- [ ] Add `IBKR_ACCOUNT` before switching to `TRADING_MODE=paper`.
+- [ ] Add `IBKR_ACCOUNT_PAPER` before switching to `TRADING_MODE=paper`.
 
 ## Required before live mode
 
@@ -23,6 +25,8 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Review IBKR orders/fills against POMA reports.
 - [ ] Confirm order type policy and fractional-share behavior in the IBKR account.
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
+- [ ] Add `IBKR_ACCOUNT` before switching to `TRADING_MODE=live`.
+- [ ] Run **IB Gateway Ops** with `action=configure-live`.
 - [ ] Set `ALLOW_LIVE_TRADING=true` intentionally.
 - [ ] Manually review the latest rebalance report before the first live run.
 
