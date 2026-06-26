@@ -11,13 +11,23 @@ from poma.config import Settings
 
 FMP_MAX_RETRIES = 4
 FMP_MAX_BACKOFF_SECONDS = 30
+FMP_LEGACY_BASE_URL = "https://financialmodelingprep.com/api/v3"
 
 # FMP "stable" constituent endpoints return membership only (symbol/name/sector) — no market
 # cap or price. Market cap and price come from the (batch) market-cap and quote endpoints.
+# Some FMP plans currently gate the stable constituent endpoints even when the legacy v3
+# constituent endpoints are available, so try stable first and then the legacy path.
 FMP_CONSTITUENT_ENDPOINTS = {
-    "nasdaq100": "nasdaq-constituent",
-    "sp500": "sp500-constituent",
+    "nasdaq100": (
+        "nasdaq-constituent",
+        f"{FMP_LEGACY_BASE_URL}/nasdaq_constituent",
+    ),
+    "sp500": (
+        "sp500-constituent",
+        f"{FMP_LEGACY_BASE_URL}/sp500_constituent",
+    ),
 }
+FMP_CONSTITUENT_FALLBACK_STATUS_CODES = {402, 403, 404}
 FMP_BATCH_SIZE = 100
 _MARKET_CAP_KEYS = ("marketCap", "marketCapitalization", "market_cap")
 
@@ -39,10 +49,15 @@ def _market_cap_value(row: dict[str, Any]) -> Any:
     return None
 
 
-class FmpMarketDataClient:
-    """FMP "stable" adapter.
+def _http_status(error: requests.HTTPError) -> int | None:
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None)
 
-    Universe membership comes from the constituent endpoint; market caps and prices come from
+
+class FmpMarketDataClient:
+    """FMP adapter.
+
+    Universe membership comes from a constituent endpoint; market caps and prices come from
     the batch market-cap and batch quote endpoints (the constituent endpoint carries neither).
     """
 
@@ -55,9 +70,14 @@ class FmpMarketDataClient:
         self.settings = settings
         self._session = requests.Session()
 
+    def _endpoint_url(self, path: str) -> str:
+        if path.startswith(("http://", "https://")):
+            return path
+        return f"{self.settings.fmp_base_url.rstrip('/')}/{path.lstrip('/')}"
+
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         merged = {"apikey": self.settings.fmp_api_key, **(params or {})}
-        url = f"{self.settings.fmp_base_url}/{path.lstrip('/')}"
+        url = self._endpoint_url(path)
         response = None
         for attempt in range(FMP_MAX_RETRIES):
             response = self._session.get(url, params=merged, timeout=30)
@@ -70,8 +90,22 @@ class FmpMarketDataClient:
         response.raise_for_status()
         return response.json()
 
+    def _constituent_rows(self) -> Any:
+        endpoints = FMP_CONSTITUENT_ENDPOINTS[self.settings.universe]
+        for index, endpoint in enumerate(endpoints):
+            try:
+                return self._get(endpoint)
+            except requests.HTTPError as error:
+                status_code = _http_status(error)
+                is_last_endpoint = index == len(endpoints) - 1
+                can_fall_back = status_code in FMP_CONSTITUENT_FALLBACK_STATUS_CODES
+                if can_fall_back and not is_last_endpoint:
+                    continue
+                raise
+        raise ValueError("FMP constituent endpoints returned no response")
+
     def _constituent_symbols(self) -> list[str]:
-        rows = self._get(FMP_CONSTITUENT_ENDPOINTS[self.settings.universe])
+        rows = self._constituent_rows()
         symbols = [str(row.get("symbol", "")).upper().strip() for row in rows or []]
         symbols = [symbol for symbol in symbols if symbol]
         if not symbols:
