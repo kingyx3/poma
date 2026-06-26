@@ -382,3 +382,15 @@ jobs:
             sudo -u poma bash ops/scripts/deploy.sh
             sudo -u poma crontab ops/cron/poma.cron
           '
+
+      - name: Notify Telegram (deployment result)
+        if: ${{ always() }}
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: >-
+            POMA[${{ inputs.deploy_environment }}] deploy ${{ job.status }} —
+            terraform=${{ inputs.terraform_action }}, app=${{ inputs.deploy_app }},
+            mode=${{ inputs.trading_mode }}, provider=${{ inputs.data_provider }}
+            (${{ github.sha }})

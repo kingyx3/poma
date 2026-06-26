@@ -246,3 +246,13 @@ jobs:
               exit 2
               ;;
           esac
+
+      - name: Notify Telegram (gateway ops result)
+        if: ${{ always() }}
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: >-
+            POMA[${{ inputs.deploy_environment }}] gateway ${{ inputs.action }}
+            ${{ job.status }}

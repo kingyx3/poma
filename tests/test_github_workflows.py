@@ -178,6 +178,19 @@ def test_deploy_and_ops_workflows_are_reusable() -> None:
     assert "workflow_dispatch:" in ops and "workflow_call:" in ops
 
 
+def test_workflows_send_env_tagged_telegram_notifications() -> None:
+    action = (REPO_ROOT / ".github/actions/telegram-notify/action.yml").read_text(encoding="utf-8")
+    assert "api.telegram.org" in action
+    assert "using: composite" in action
+
+    for workflow in (DEPLOY_WORKFLOW.read_text(encoding="utf-8"),
+                     GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")):
+        assert "uses: ./.github/actions/telegram-notify" in workflow
+        assert "POMA[${{ inputs.deploy_environment }}]" in workflow
+        assert "if: ${{ always() }}" in workflow
+        assert "${{ secrets.TELEGRAM_BOT_TOKEN }}" in workflow
+
+
 def test_auto_cicd_deploys_dev_on_pr_and_stg_on_merge() -> None:
     workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
 

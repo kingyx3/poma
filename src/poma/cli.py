@@ -14,12 +14,39 @@ from poma.data import utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
 from poma.health import check_ibkr, run_checks
 from poma.market_calendar import should_rebalance_now
-from poma.models import OrderResult, ProposedTrade, RebalancePlan
+from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
 from poma.state import LocalState
 
 app = typer.Typer(no_args_is_help=True, help="POMA market-cap rebalancer.")
 console = Console()
+
+_MAX_SUMMARY_LINES = 15
+
+
+def _portfolio_summary(session_date: str, plan: RebalancePlan, status: str, executed: bool) -> str:
+    """Human-readable Telegram summary of the portfolio change this run made or proposed."""
+    items: list = plan.execution_results if executed else plan.trades
+    buys = sum(1 for item in items if item.side == OrderSide.BUY)
+    sells = sum(1 for item in items if item.side == OrderSide.SELL)
+    verb = "portfolio updated" if executed else f"{status}, no change"
+    lines = [f"{session_date}: {verb} — {len(items)} orders ({buys} BUY / {sells} SELL)"]
+
+    for item in items[:_MAX_SUMMARY_LINES]:
+        if executed and isinstance(item, OrderResult):
+            price = item.average_fill_price or 0.0
+            lines.append(
+                f"{item.side.value} {item.ticker} {item.filled:g}@{price:.2f} "
+                f"(${item.notional:,.0f}) {item.status}"
+            )
+        else:
+            lines.append(f"{item.side.value} {item.ticker} {item.quantity:g} (${item.notional:,.0f})")
+    if len(items) > _MAX_SUMMARY_LINES:
+        lines.append(f"...and {len(items) - _MAX_SUMMARY_LINES} more")
+
+    if status == "blocked":
+        lines.extend(w for w in plan.warnings if "block execution" in w)
+    return "\n".join(lines)
 
 
 def _trade_to_json(trade: ProposedTrade) -> dict[str, object]:
@@ -81,16 +108,13 @@ def _run_rebalance(
         console.print(f"Dry run / blocked. Report written to {report_path}")
         for warning in plan.warnings:
             console.print(f"[yellow]WARNING[/yellow] {warning}")
-        send_alert(
-            settings,
-            f"POMA {session_date}: dry-run/blocked, {len(plan.trades)} proposed trades",
-        )
+        send_alert(settings, _portfolio_summary(session_date, plan, outcome.status, executed=False))
         return outcome, report_path
 
     plan = engine.execute(plan)
     outcome = RebalanceOutcome(plan=plan, executed=True, blocked=False, status="completed")
     report_path = _write_report(plan, settings.report_dir)
-    send_alert(settings, f"POMA {session_date}: submitted {len(plan.trades)} trades")
+    send_alert(settings, _portfolio_summary(session_date, plan, "completed", executed=True))
     console.print(f"Submitted {len(plan.trades)} trades. Report written to {report_path}")
     return outcome, report_path
 
@@ -149,7 +173,7 @@ def monitor(
         state.mark_session(session_date, run_id, outcome.status, report_path=str(report_path))
     except Exception as exc:
         state.mark_session(session_date, run_id, "failed", error=str(exc))
-        send_alert(settings, f"POMA {session_date}: failed: {exc}")
+        send_alert(settings, f"{session_date}: run failed: {exc}")
         raise
 
 
