@@ -52,6 +52,35 @@ on:
         required: true
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      deploy_environment:
+        required: true
+        type: string
+      terraform_action:
+        required: false
+        type: string
+        default: apply
+      deploy_app:
+        required: false
+        type: boolean
+        default: true
+      tailscale_enabled:
+        required: false
+        type: boolean
+        default: true
+      trading_mode:
+        required: false
+        type: string
+        default: dry_run
+      data_provider:
+        required: false
+        type: string
+        default: fixture
+      allow_live_trading:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read

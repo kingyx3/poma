@@ -29,6 +29,18 @@ on:
         required: true
         type: number
         default: 200
+  workflow_call:
+    inputs:
+      deploy_environment:
+        required: true
+        type: string
+      action:
+        required: true
+        type: string
+      log_lines:
+        required: false
+        type: number
+        default: 200
 
 permissions:
   contents: read

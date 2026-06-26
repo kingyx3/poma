@@ -1,0 +1,77 @@
+name: Auto CI/CD
+
+# Continuous delivery automation:
+#   - When a pull request is opened/reopened, deploy the dev VM and configure the
+#     IB Gateway (paper) so the change is exercised end-to-end before merge.
+#   - When a change merges to main, deploy the stg VM and configure its gateway.
+#
+# Notes:
+#   - These deploys run Terraform apply (idempotent) and require the per-environment
+#     GitHub Environment secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TAILSCALE_AUTHKEY,
+#     FMP_API_KEY (data_provider=fmp), IBKR_ACCOUNT_PAPER (trading_mode=paper), and
+#     IBKR_LOGIN_ID / IBKR_LOGIN_SECRET (configure-paper).
+#   - If the dev/stg GitHub Environments have required-reviewer protection rules, the
+#     deploy jobs pause for approval before running.
+#   - prd is never deployed automatically.
+#   - Pull-request-triggered runs use the workflow definition from the base branch
+#     (main), so this automation takes effect once merged.
+
+on:
+  pull_request:
+    types: [opened, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: poma-auto-cicd-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dev-deploy:
+    # Open/reopen a PR from a branch in this repository (skip forks, which lack secrets).
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/deploy-gcp-vm.yml
+    with:
+      deploy_environment: dev
+      terraform_action: apply
+      deploy_app: true
+      tailscale_enabled: true
+      trading_mode: paper
+      data_provider: fmp
+      allow_live_trading: false
+    secrets: inherit
+
+  dev-configure-gateway:
+    needs: dev-deploy
+    uses: ./.github/workflows/ib-gateway-ops.yml
+    with:
+      deploy_environment: dev
+      action: configure-paper
+      log_lines: 200
+    secrets: inherit
+
+  stg-deploy:
+    if: ${{ github.event_name == 'push' }}
+    uses: ./.github/workflows/deploy-gcp-vm.yml
+    with:
+      deploy_environment: stg
+      terraform_action: apply
+      deploy_app: true
+      tailscale_enabled: true
+      trading_mode: paper
+      data_provider: fmp
+      allow_live_trading: false
+    secrets: inherit
+
+  stg-configure-gateway:
+    needs: stg-deploy
+    uses: ./.github/workflows/ib-gateway-ops.yml
+    with:
+      deploy_environment: stg
+      action: configure-paper
+      log_lines: 200
+    secrets: inherit
