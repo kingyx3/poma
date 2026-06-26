@@ -20,8 +20,8 @@ jobs:
     uses: ./.github/workflows/deploy-gcp-vm.yml
     with:
       deploy_environment: dev
-      terraform_action: apply
-      deploy_app: true
+      terraform_action: plan
+      deploy_app: false
       tailscale_enabled: false
       trading_mode: paper
       data_provider: fixture
