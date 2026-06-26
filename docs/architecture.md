@@ -3,7 +3,7 @@
 ## Chosen architecture
 
 ```text
-Single Ubuntu host
+Ubuntu host
   -> cron every 5 minutes
   -> POMA monitor command
   -> IB Gateway on same host
