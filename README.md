@@ -44,6 +44,18 @@ python -m poma.cli monitor
 pytest
 ```
 
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `poma monitor` | Cron entrypoint: rebalances once per session when the market timing and state allow it. |
+| `poma rebalance [--dry-run]` | Run a rebalance now (optionally forced to dry-run). |
+| `poma positions` | Print the broker's current stock portfolio (paper/live). |
+| `poma doctor` | Check config, market-data provider, and IBKR connectivity; exits non-zero on failure. |
+| `poma ibkr-check` | Probe only the IBKR API handshake (ignores the data provider); used by gateway ops. |
+
+On the VM these run through the container, e.g. `cd /opt/poma && docker compose run --rm poma doctor`.
+
 ## VPS deployment
 
 ### Manual VPS

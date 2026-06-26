@@ -138,6 +138,16 @@ def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
     assert "sudo sh /tmp/ensure_ibgateway_service.sh" in workflow
 
 
+def test_gateway_ops_workflow_verifies_real_api_handshake() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    # A reachable socket is not enough; the workflow must confirm a real authenticated
+    # ib_insync handshake through the deployed container.
+    assert "verify_api_handshake" in workflow
+    assert "poma ibkr-check" in workflow
+    assert "nc -z 127.0.0.1 7497" in workflow
+
+
 def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 

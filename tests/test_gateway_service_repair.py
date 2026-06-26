@@ -6,38 +6,47 @@ SERVICE_SCRIPT = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
 INSTALL_HELPER = REPO_ROOT / "ops/scripts/install_ibc_config_helper.py"
 REPAIR_HELPER = REPO_ROOT / "ops/scripts/repair_ib_gateway_runtime.py"
 OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
-RUNNER_MARKER = "cat >/usr/local/bin/poma-run-ib-gateway"
 
 
-def test_service_repair_helper_defines_gateway_unit() -> None:
+def test_service_shim_only_ensures_running_with_single_source_of_truth() -> None:
     script = SERVICE_SCRIPT.read_text(encoding="utf-8")
 
     assert script.startswith("#!/bin/sh\n")
-    assert "set -euo pipefail" not in script.split(RUNNER_MARKER, 1)[0]
-    assert "ibgateway.service" in script
-    assert "poma-run-ib-gateway" in script
-    assert "daemon-reload" in script
+    # The shim must not redefine the runner or unit; that lives in the Python installer.
+    assert "cat >/usr/local/bin/poma-run-ib-gateway" not in script
+    assert "cat >/etc/systemd/system/ibgateway.service" not in script
+    assert "install_ibc_config_helper.py" in script
+    assert "systemctl daemon-reload" in script
+    assert "systemctl enable --now ibgateway" in script
 
 
-def test_service_repair_runner_fails_clearly_for_missing_gateway_binary() -> None:
+def test_service_shim_fails_fast_when_runner_or_unit_missing() -> None:
     script = SERVICE_SCRIPT.read_text(encoding="utf-8")
 
-    assert "find \"${IB_GATEWAY_DIR}\" -type f -name ibgateway" in script
+    assert "/usr/local/bin/poma-run-ib-gateway" in script
+    assert "/etc/systemd/system/ibgateway.service" in script
+    assert "exit 1" in script
+
+
+def test_installer_runner_fails_clearly_for_missing_gateway_binary() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
+
+    assert 'find "${IB_GATEWAY_DIR}" -type f -name ibgateway' in script
     assert "Unable to find an executable IB Gateway binary" in script
     assert "Run IB Gateway Ops to repair the VM bootstrap and install IB Gateway" in script
     assert "exit 127" in script
 
 
-def test_service_repair_runner_checks_desktop_dependencies() -> None:
-    script = SERVICE_SCRIPT.read_text(encoding="utf-8")
+def test_installer_runner_checks_desktop_dependencies() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
 
     assert "require_command Xvfb" in script
     assert "require_command fluxbox" in script
     assert "require_command x11vnc" in script
 
 
-def test_service_repair_uses_systemd_managed_runtime_logs() -> None:
-    script = SERVICE_SCRIPT.read_text(encoding="utf-8")
+def test_installer_uses_systemd_managed_runtime_logs() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
 
     assert "RuntimeDirectory=poma-ibgateway" in script
     assert "LogsDirectory=poma/ibgateway" in script

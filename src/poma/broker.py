@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Protocol
 
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
@@ -9,6 +10,45 @@ from poma.config import OrderType, Settings, TradingMode
 from poma.models import CurrentPosition, OrderResult, ProposedTrade
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
+
+# Health probes use a dedicated client id offset so they never collide with the client id the
+# scheduled trader connects with (a duplicate client id is rejected by the gateway).
+HEALTH_CLIENT_ID_OFFSET = 90
+
+
+@dataclass(frozen=True)
+class IbkrHealth:
+    connected: bool
+    accounts: list[str]
+    server_time: str
+    stock_positions: int
+
+
+def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
+    """Open a short-lived IBKR connection to confirm the API is reachable and authenticated.
+
+    Places no orders. Used by the ``doctor`` command and ops verification.
+    """
+    ib = IB()
+    ib.connect(
+        settings.ibkr_host,
+        settings.ibkr_port,
+        clientId=settings.ibkr_client_id + HEALTH_CLIENT_ID_OFFSET,
+        account=settings.ibkr_account or "",
+        timeout=timeout,
+    )
+    try:
+        accounts = [account for account in ib.managedAccounts() if account]
+        server_time = str(ib.reqCurrentTime())
+        stock_positions = sum(1 for item in ib.portfolio() if item.contract.secType == "STK")
+        return IbkrHealth(
+            connected=ib.isConnected(),
+            accounts=accounts,
+            server_time=server_time,
+            stock_positions=stock_positions,
+        )
+    finally:
+        ib.disconnect()
 
 
 class Broker(Protocol):
