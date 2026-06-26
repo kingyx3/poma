@@ -20,3 +20,19 @@ def test_service_repair_helper_defines_gateway_unit() -> None:
     assert "ibgateway.service" in script
     assert "poma-run-ib-gateway" in script
     assert "daemon-reload" in script
+
+
+def test_service_repair_runner_fails_clearly_for_missing_gateway_binary() -> None:
+    script = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "find \"${IB_GATEWAY_DIR}\" -type f -name ibgateway" in script
+    assert "Unable to find an executable IB Gateway binary" in script
+    assert "exit 127" in script
+
+
+def test_service_repair_runner_checks_desktop_dependencies() -> None:
+    script = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "require_command Xvfb" in script
+    assert "require_command fluxbox" in script
+    assert "require_command x11vnc" in script
