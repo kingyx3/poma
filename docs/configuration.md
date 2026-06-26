@@ -48,7 +48,8 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`.
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
 | `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |
-| `IBKR_ACCOUNT` | yes | none | Mandatory deploy secret. Required even for dry-runs so production points at the intended account before mode changes. |
+| `IBKR_ACCOUNT` | runtime `.env` | none | The app reads this value. CI renders it from `IBKR_ACCOUNT_PAPER` for paper mode and from `IBKR_ACCOUNT` for live mode. |
+| `IBKR_ACCOUNT_PAPER` | paper CI secret | none | Paper trading account id used by the deploy workflow. It is not written as a separate `.env` key. |
 | `STATE_DIR` | yes | `state` | Local state directory. |
 | `REPORT_DIR` | yes | `reports` | Local report directory. |
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
@@ -64,7 +65,7 @@ Use **Discover Telegram chat ID** in GitHub Actions to read the chat ID. Start t
 
 The deploy workflow does not store secrets in GCP Secret Manager. Instead, it renders a VM-local `.env` file from CI defaults plus the selected GitHub Environment's required secrets, then uploads it to `/opt/poma/.env` over IAP SSH.
 
-`ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects empty/placeholder values, and writes the output file with `0600` permissions. This makes `FMP_API_KEY`, `IBKR_ACCOUNT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` mandatory for production deploys.
+`ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects empty/placeholder values, and writes the output file with `0600` permissions. The deploy workflow resolves runtime `IBKR_ACCOUNT` before rendering: paper uses `IBKR_ACCOUNT_PAPER`, live uses `IBKR_ACCOUNT`, and dry-run prefers `IBKR_ACCOUNT_PAPER` before falling back to `IBKR_ACCOUNT`.
 
 The deploy workflow supplies deterministic defaults for every non-secret `.env.example` key. Do not create GitHub Environment Variables for the normal production path.
 
@@ -90,11 +91,12 @@ GitHub Environment Variables required for normal production deploys: **none**.
 
 First bootstrap requires only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` GitHub Environment secret. Delete it after WIF bootstrap succeeds.
 
-Always-required runtime/deploy secrets:
+Runtime/deploy secrets:
 
 - `TAILSCALE_AUTHKEY` when deploy input `tailscale_enabled=true`.
 - `FMP_API_KEY`.
-- `IBKR_ACCOUNT`.
+- `IBKR_ACCOUNT_PAPER` for paper deploys, and preferred for dry-run deploy rendering.
+- `IBKR_ACCOUNT` for live deploys.
 - `TELEGRAM_BOT_TOKEN`.
 - `TELEGRAM_CHAT_ID`.
 
