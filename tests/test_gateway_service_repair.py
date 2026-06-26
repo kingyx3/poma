@@ -113,3 +113,14 @@ def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
     assert "TWSPASSWORD" in workflow
     assert "IbLoginId" in workflow
     assert "TWSUSERID" in workflow
+
+
+def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
+    workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "IB_GATEWAY_SOCKET_TIMEOUT_SECONDS: 900" in workflow
+    assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 10" in workflow
+    assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
+    assert "systemctl is-active --quiet ibgateway" in workflow
+    assert "Still waiting for IB Gateway API socket" in workflow
+    assert "within ${timeout_seconds}s" in workflow
