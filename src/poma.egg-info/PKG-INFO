@@ -1,7 +1,7 @@
 Metadata-Version: 2.4
 Name: poma
 Version: 0.1.0
-Summary: Simple Nasdaq-100 long-only rebalancer for a single VPS with IBKR.
+Summary: Simple S&P 500 top-100 long-only rebalancer for a single VPS with IBKR.
 Requires-Python: >=3.11
 Requires-Dist: ib-insync>=0.9.86
 Requires-Dist: pandas>=2.2.2
