@@ -43,7 +43,7 @@ def test_installer_repairs_gateway_runner_and_service() -> None:
     assert "poma-run-ib-gateway" in module.RUNNER_TARGET.as_posix()
     assert "ibgateway.service" in module.SERVICE_TARGET.as_posix()
     assert "require_command Xvfb" in module.RUNNER_TEXT
-    assert "find \"${IB_GATEWAY_DIR}\" -type f -name ibgateway" in module.RUNNER_TEXT
+    assert 'find "${IB_GATEWAY_DIR}" -type f -name ibgateway' in module.RUNNER_TEXT
     assert "ExecStart=/usr/local/bin/poma-run-ib-gateway" in module.SERVICE_TEXT
 
 
