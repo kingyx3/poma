@@ -79,6 +79,7 @@ jobs:
       # Minimal runtime secrets. Telegram is mandatory; FMP/IBKR are only required by selected modes.
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
+      IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -192,10 +193,29 @@ jobs:
             echo "::error::FMP_API_KEY GitHub Environment secret is required when DATA_PROVIDER=fmp"
             exit 1
           fi
-          if [[ "${TRADING_MODE}" =~ ^(paper|live)$ ]] && [ -z "${IBKR_ACCOUNT:-}" ]; then
-            echo "::error::IBKR_ACCOUNT GitHub Environment secret is required when TRADING_MODE is paper or live"
-            exit 1
-          fi
+          case "${TRADING_MODE}" in
+            paper)
+              if [ -z "${IBKR_ACCOUNT_PAPER:-}" ]; then
+                echo "::error::IBKR_ACCOUNT_PAPER GitHub Environment secret is required when TRADING_MODE=paper"
+                exit 1
+              fi
+              set_env IBKR_ACCOUNT "${IBKR_ACCOUNT_PAPER}"
+              ;;
+            live)
+              if [ -z "${IBKR_ACCOUNT:-}" ]; then
+                echo "::error::IBKR_ACCOUNT GitHub Environment secret is required when TRADING_MODE=live"
+                exit 1
+              fi
+              ;;
+            dry_run)
+              if [ -n "${IBKR_ACCOUNT_PAPER:-}" ]; then
+                set_env IBKR_ACCOUNT "${IBKR_ACCOUNT_PAPER}"
+              elif [ -z "${IBKR_ACCOUNT:-}" ]; then
+                echo "::error::IBKR_ACCOUNT_PAPER or IBKR_ACCOUNT GitHub Environment secret is required for deploy .env rendering"
+                exit 1
+              fi
+              ;;
+          esac
           if [ "${TRADING_MODE}" = "live" ] && [ "${ALLOW_LIVE_TRADING}" != "true" ]; then
             echo "::error::trading_mode=live requires allow_live_trading=true"
             exit 1
