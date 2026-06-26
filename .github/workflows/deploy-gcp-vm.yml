@@ -52,6 +52,11 @@ on:
         required: true
         type: boolean
         default: false
+      deploy_smoke:
+        description: Run the on-VM dry-run smoke test after building the image.
+        required: false
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       deploy_environment:
@@ -81,6 +86,10 @@ on:
         required: false
         type: boolean
         default: false
+      deploy_smoke:
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -379,7 +388,7 @@ jobs:
             cd /opt/poma
             sudo python3 ops/scripts/install_ibc_config_helper.py
             sudo sh ops/scripts/ensure_ibgateway_service.sh
-            sudo -u poma bash ops/scripts/deploy.sh
+            sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
             sudo -u poma crontab ops/cron/poma.cron
           '
 

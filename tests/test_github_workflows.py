@@ -217,7 +217,14 @@ def test_auto_cicd_deploys_dev_on_pr_and_stg_on_merge() -> None:
     assert "data_provider: fmp" in workflow
     assert "action: configure-paper" in workflow
     assert "deploy_environment: prd" not in workflow
+    # dev PRs skip the slow on-VM dry-run smoke for fast feedback.
+    assert "deploy_smoke: false" in workflow
 
     # Fork PRs (no secrets) must not trigger deploys.
     assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
     assert "github.event_name == 'push'" in workflow
+
+
+def test_deploy_workflow_passes_smoke_flag_to_vm() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" in workflow

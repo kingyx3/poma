@@ -50,6 +50,8 @@ jobs:
       # quota; the real fmp data path is validated by stg on merge to main.
       data_provider: fixture
       allow_live_trading: false
+      # Skip the slow on-VM dry-run smoke for fast PR feedback (stg keeps it on merge).
+      deploy_smoke: false
     secrets: inherit
 
   dev-configure-gateway:
