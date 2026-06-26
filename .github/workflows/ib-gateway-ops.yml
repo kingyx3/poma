@@ -47,8 +47,8 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
-      IB_GATEWAY_SOCKET_TIMEOUT_SECONDS: 900
-      IB_GATEWAY_SOCKET_POLL_SECONDS: 10
+      IB_GATEWAY_SOCKET_TIMEOUT_SECONDS: 300
+      IB_GATEWAY_SOCKET_POLL_SECONDS: 5
       IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
       IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
 
@@ -139,12 +139,12 @@ jobs:
           }
 
           verify_socket() {
-            local timeout_seconds="${IB_GATEWAY_SOCKET_TIMEOUT_SECONDS:-900}"
-            local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-10}"
+            local timeout_seconds="${IB_GATEWAY_SOCKET_TIMEOUT_SECONDS:-300}"
+            local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
             local deadline=$((SECONDS + timeout_seconds))
-            local attempt=1
+            local elapsed=0
 
-            echo "Waiting up to ${timeout_seconds}s for IB Gateway API socket on 127.0.0.1:7497."
+            echo "Waiting up to ${timeout_seconds}s after the 2FA prompt for IB Gateway API socket on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               if run_remote 'nc -z 127.0.0.1 7497'; then
                 echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
@@ -157,16 +157,16 @@ jobs:
                 exit 1
               fi
 
-              if [ $((attempt % 6)) -eq 0 ]; then
-                echo "Still waiting for IB Gateway API socket after $((attempt * poll_seconds))s."
+              elapsed=$((timeout_seconds - (deadline - SECONDS)))
+              if [ "${elapsed}" -gt 0 ] && [ $((elapsed % 30)) -eq 0 ]; then
+                echo "Waiting for IB Gateway API socket... ${elapsed}/${timeout_seconds}s."
                 run_remote "sudo systemctl status ibgateway --no-pager --lines=30 || true"
               fi
 
               sleep "${poll_seconds}"
-              attempt=$((attempt + 1))
             done
 
-            echo "IB Gateway API socket did not become reachable on 127.0.0.1:7497 within ${timeout_seconds}s." >&2
+            echo "IB Gateway API socket did not become reachable on 127.0.0.1:7497 within ${timeout_seconds}s after the 2FA prompt." >&2
             diagnose_gateway_failure
             exit 1
           }
