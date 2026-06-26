@@ -103,6 +103,7 @@ jobs:
   deploy:
     name: Terraform and deploy (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: ${{ inputs.deploy_environment }}
     env:
       TF_IN_AUTOMATION: "true"
@@ -264,6 +265,7 @@ jobs:
 
       - name: Configure Tailscale on VM
         if: ${{ inputs.terraform_action == 'apply' && inputs.tailscale_enabled }}
+        timeout-minutes: 15
         run: |
           set -euo pipefail
 
@@ -271,6 +273,12 @@ jobs:
           zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
           tailscale_hostname="${instance_name}"
           ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+
+          run_with_timeout() {
+            local seconds="$1"
+            shift
+            timeout --kill-after=30s "${seconds}" "$@"
+          }
 
           auth_key_file="$(mktemp)"
           remote_script="$(mktemp)"
@@ -289,6 +297,12 @@ jobs:
           }
           trap cleanup EXIT
 
+          run_with_timeout() {
+            local seconds="$1"
+            shift
+            timeout --kill-after=30s "${seconds}" "$@"
+          }
+
           apt_locks_busy() {
             if command -v fuser >/dev/null 2>&1; then
               fuser /var/lib/dpkg/lock-frontend \
@@ -303,7 +317,7 @@ jobs:
 
           wait_for_apt() {
             local waited_seconds=0
-            local max_wait_seconds=1200
+            local max_wait_seconds=300
 
             while apt_locks_busy; do
               if [ "${waited_seconds}" -ge "${max_wait_seconds}" ]; then
@@ -319,14 +333,16 @@ jobs:
 
           install_tailscale() {
             install -d -m 0755 /usr/share/keyrings
-            curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg \
+            curl --connect-timeout 10 --max-time 60 -fsSL \
+              https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg \
               -o /usr/share/keyrings/tailscale-archive-keyring.gpg
             chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
-            curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list \
+            curl --connect-timeout 10 --max-time 60 -fsSL \
+              https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list \
               -o /etc/apt/sources.list.d/tailscale.list
             chmod 0644 /etc/apt/sources.list.d/tailscale.list
-            apt-get update
-            apt-get install -y tailscale
+            run_with_timeout 5m apt-get update
+            run_with_timeout 5m apt-get install -y tailscale
           }
 
           wait_for_apt
@@ -335,18 +351,18 @@ jobs:
             install_tailscale
           fi
 
-          systemctl enable --now tailscaled
+          run_with_timeout 1m systemctl enable --now tailscaled
           install -m 600 -o root -g root /tmp/poma-tailscale-authkey /run/poma-tailscale-authkey
           auth_key="$(cat /run/poma-tailscale-authkey)"
-          tailscale up --auth-key="${auth_key}" --hostname="${TAILSCALE_HOSTNAME}" --accept-dns=false
-          tailscale status
+          run_with_timeout 2m tailscale up --auth-key="${auth_key}" --hostname="${TAILSCALE_HOSTNAME}" --accept-dns=false
+          run_with_timeout 30s tailscale status
           SCRIPT
 
-          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
-            'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
-          gcloud compute scp "${auth_key_file}" "${instance_name}:/tmp/poma-tailscale-authkey" "${ssh_common[@]}"
-          gcloud compute scp "${remote_script}" "${instance_name}:/tmp/poma-configure-tailscale.sh" "${ssh_common[@]}"
-          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
+          run_with_timeout 5m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
+            'timeout --kill-after=30s 300s bash -c '\''until [ -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'\'''
+          run_with_timeout 2m gcloud compute scp "${auth_key_file}" "${instance_name}:/tmp/poma-tailscale-authkey" "${ssh_common[@]}"
+          run_with_timeout 2m gcloud compute scp "${remote_script}" "${instance_name}:/tmp/poma-configure-tailscale.sh" "${ssh_common[@]}"
+          run_with_timeout 8m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
             "sudo env TAILSCALE_HOSTNAME='${tailscale_hostname}' bash /tmp/poma-configure-tailscale.sh"
 
       - name: Package application
