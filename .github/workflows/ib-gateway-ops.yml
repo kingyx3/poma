@@ -21,6 +21,8 @@ on:
           - restart
           - logs
           - verify-socket
+          - configure-paper
+          - configure-live
         default: status
       log_lines:
         description: Number of ibgateway journal lines for logs/status output.
@@ -45,6 +47,8 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
+      IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
+      IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
 
     steps:
       - name: Check out repository
@@ -110,32 +114,52 @@ jobs:
           gcloud config set project "${GCP_PROJECT_ID}"
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
 
-          remote_command='set -euo pipefail
+          run_remote() {
+            local command="$1"
+            gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "${command}"
+          }
+
+          verify_socket() {
+            run_remote 'if nc -z 127.0.0.1 7497; then echo "IB Gateway API socket is reachable on 127.0.0.1:7497."; else echo "IB Gateway API socket is not reachable on 127.0.0.1:7497." >&2; sudo systemctl status ibgateway --no-pager --lines=80 || true; exit 1; fi'
+          }
+
           case "${INPUT_ACTION}" in
             status)
-              sudo systemctl status ibgateway --no-pager --lines="${LOG_LINES}" || true
+              run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
               ;;
             restart)
-              sudo systemctl restart ibgateway
-              sudo systemctl status ibgateway --no-pager --lines="${LOG_LINES}" || true
+              run_remote "sudo systemctl restart ibgateway && sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
               ;;
             logs)
-              sudo journalctl -u ibgateway -n "${LOG_LINES}" --no-pager
+              run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager"
               ;;
             verify-socket)
-              if nc -z 127.0.0.1 7497; then
-                echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
-              else
-                echo "IB Gateway API socket is not reachable on 127.0.0.1:7497." >&2
-                sudo systemctl status ibgateway --no-pager --lines="${LOG_LINES}" || true
+              verify_socket
+              ;;
+            configure-paper|configure-live)
+              if [ -z "${IBKR_LOGIN_ID:-}" ] || [ -z "${IBKR_LOGIN_SECRET:-}" ]; then
+                echo "::error::IBKR_LOGIN_ID and IBKR_LOGIN_SECRET GitHub Environment secrets are required for ${INPUT_ACTION}."
                 exit 1
               fi
+
+              mode="${INPUT_ACTION#configure-}"
+              input_file="$(mktemp)"
+              cleanup() {
+                if command -v shred >/dev/null 2>&1; then
+                  shred -u "${input_file}" 2>/dev/null || rm -f "${input_file}"
+                else
+                  rm -f "${input_file}"
+                fi
+              }
+              trap cleanup EXIT
+
+              printf '%s\n%s\n%s\n' "${IBKR_LOGIN_ID}" "${IBKR_LOGIN_SECRET}" "${mode}" > "${input_file}"
+              chmod 600 "${input_file}"
+              gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
+              verify_socket
               ;;
             *)
               echo "Unknown action: ${INPUT_ACTION}" >&2
               exit 2
               ;;
-          esac'
-
-          gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command \
-            "sudo env INPUT_ACTION='${INPUT_ACTION}' LOG_LINES='${LOG_LINES}' bash -lc '${remote_command}'"
+          esac
