@@ -91,8 +91,18 @@ def test_ibc_launcher_uses_numeric_gateway_version() -> None:
     assert "def find_numeric_ancestor" in script
     assert "def gateway_version_from_jars_dir" in script
     assert "ancestor.name.isdigit()" in script
-    assert "gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir)" in script
+    assert "gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir, text)" in script
     assert "gateway_major_version = gateway_jars_dir.parent.name" not in script
+
+
+def test_ibc_launcher_handles_flat_gateway_install_layout() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
+
+    assert 'DEFAULT_IB_GATEWAY_MAJOR_VERSION = "1019"' in script
+    assert "def current_gatewaystart_version" in script
+    assert "existing_version = current_gatewaystart_version(gatewaystart_text)" in script
+    assert "return IB_GATEWAY_DIR" in script
+    assert "Unable to determine numeric IB Gateway version" not in script
 
 
 def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:

@@ -18,6 +18,7 @@ IBC_DIR = Path("/opt/ibc")
 IB_GATEWAY_RUNTIME_DIR = Path("/run/poma-ibgateway")
 IB_GATEWAY_LOG_DIR = Path("/var/log/poma/ibgateway")
 LEGACY_RUNTIME_DIR = Path("/tmp/poma-ibgateway")
+DEFAULT_IB_GATEWAY_MAJOR_VERSION = "1019"
 
 APT_PACKAGES = (
     "ca-certificates",
@@ -234,24 +235,32 @@ def find_numeric_ancestor(path: Path) -> Path | None:
     return None
 
 
-def gateway_version_from_jars_dir(jars_dir: Path) -> str:
+def current_gatewaystart_version(text: str) -> str | None:
+    match = re.search(r"(?m)^TWS_MAJOR_VRSN=([0-9]+)\s*$", text)
+    return match.group(1) if match else None
+
+
+def gateway_version_from_jars_dir(jars_dir: Path, gatewaystart_text: str) -> str:
     version_dir = find_numeric_ancestor(jars_dir)
-    if version_dir is None:
-        raise RuntimeError(
-            "Unable to determine numeric IB Gateway version from jars path: "
-            f"{jars_dir}"
-        )
-    return version_dir.name
+    if version_dir is not None:
+        return version_dir.name
+
+    existing_version = current_gatewaystart_version(gatewaystart_text)
+    if existing_version is not None:
+        return existing_version
+
+    print(
+        "Unable to infer numeric IB Gateway version from "
+        f"{jars_dir}; falling back to {DEFAULT_IB_GATEWAY_MAJOR_VERSION}."
+    )
+    return DEFAULT_IB_GATEWAY_MAJOR_VERSION
 
 
 def gateway_tws_path_from_jars_dir(jars_dir: Path) -> Path:
     version_dir = find_numeric_ancestor(jars_dir)
-    if version_dir is None:
-        raise RuntimeError(
-            "Unable to determine IB Gateway TWS path from jars path: "
-            f"{jars_dir}"
-        )
-    return version_dir.parent
+    if version_dir is not None:
+        return version_dir.parent
+    return IB_GATEWAY_DIR
 
 
 def configure_ibc_launcher() -> None:
@@ -265,7 +274,8 @@ def configure_ibc_launcher() -> None:
         print(f"Skipping IBC launcher repair because no Gateway jars exist under {IB_GATEWAY_DIR}")
         return
     gateway_jars_dir = jars_dirs[-1]
-    gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir)
+    text = gatewaystart.read_text(encoding="utf-8")
+    gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir, text)
     gateway_tws_path = gateway_tws_path_from_jars_dir(gateway_jars_dir)
     replacements = {
         "TWS_MAJOR_VRSN": gateway_major_version,
@@ -283,7 +293,6 @@ def configure_ibc_launcher() -> None:
         "JAVA_PATH": "",
         "HIDE": "YES",
     }
-    text = gatewaystart.read_text(encoding="utf-8")
     for key, value in replacements.items():
         pattern = rf"(?<![A-Za-z0-9_]){re.escape(key)}=[^\s\r\n]*"
         replacement = f"{key}={value}"
