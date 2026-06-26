@@ -1,3 +1,4 @@
+import importlib.util
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -85,24 +86,78 @@ def test_runtime_repair_accepts_gateway_jars_as_installed_artifacts() -> None:
     assert "no executable or jars were found" in script
 
 
+def _load_install_helper():
+    spec = importlib.util.spec_from_file_location("install_ibc_config_helper", INSTALL_HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _make_jars(program_dir: Path) -> Path:
+    jars = program_dir / "jars"
+    jars.mkdir(parents=True)
+    (jars / "ibgateway.jar").write_text("")
+    (program_dir / ".install4j").mkdir()
+    (program_dir / "ibgateway.vmoptions").write_text("")
+    return jars
+
+
 def test_ibc_launcher_uses_numeric_gateway_version() -> None:
     script = INSTALL_HELPER.read_text(encoding="utf-8")
 
     assert "def find_numeric_ancestor" in script
     assert "def gateway_version_from_jars_dir" in script
     assert "ancestor.name.isdigit()" in script
-    assert "gateway_major_version = gateway_version_from_jars_dir(gateway_jars_dir, text)" in script
+    assert "gateway_program_layout(gateway_jars_dir, text)" in script
     assert "gateway_major_version = gateway_jars_dir.parent.name" not in script
 
 
-def test_ibc_launcher_handles_flat_gateway_install_layout() -> None:
+def test_ibc_launcher_handles_flat_gateway_install_layout(tmp_path) -> None:
     script = INSTALL_HELPER.read_text(encoding="utf-8")
 
     assert 'DEFAULT_IB_GATEWAY_MAJOR_VERSION = "1019"' in script
     assert "def current_gatewaystart_version" in script
     assert "existing_version = current_gatewaystart_version(gatewaystart_text)" in script
-    assert "return IB_GATEWAY_DIR" in script
     assert "Unable to determine numeric IB Gateway version" not in script
+
+    module = _load_install_helper()
+    install_dir = tmp_path / "opt" / "ibgateway"
+    jars = _make_jars(install_dir)  # flat: jars live directly under the install dir
+    module.IB_GATEWAY_DIR = install_dir
+    module.IB_GATEWAY_LAUNCH_DIR = tmp_path / "opt" / "ibgateway-launch"
+
+    tws_path, version = module.gateway_program_layout(jars, "TWS_MAJOR_VRSN=1019\n")
+
+    # IBC resolves the gateway jars as ${TWS_PATH}/ibgateway/${version}/jars and only keeps
+    # the ibgateway.vmoptions source when that *primary* path holds the jars folder.
+    gateway_program = Path(tws_path) / "ibgateway" / version
+    assert (gateway_program / "jars").is_dir()
+    assert (gateway_program / "ibgateway.vmoptions").is_file()
+
+
+def test_ibc_launcher_uses_versioned_layout_directly(tmp_path) -> None:
+    module = _load_install_helper()
+    install_dir = tmp_path / "opt" / "ibgateway"
+    program = install_dir / "ibgateway" / "1019"
+    jars = _make_jars(program)
+    module.IB_GATEWAY_DIR = install_dir
+    module.IB_GATEWAY_LAUNCH_DIR = tmp_path / "launch"
+
+    tws_path, version = module.gateway_program_layout(jars, "TWS_MAJOR_VRSN=1019\n")
+
+    assert version == "1019"
+    assert Path(tws_path) == install_dir  # already structured; no symlink farm created
+    assert not (tmp_path / "launch").exists()
+    assert (Path(tws_path) / "ibgateway" / version / "jars").is_dir()
+
+
+def test_ibc_config_helper_pins_api_port_to_match_poma() -> None:
+    script = INSTALL_HELPER.read_text(encoding="utf-8")
+
+    # POMA (config.py IBKR_PORT) and the ops socket check both expect 7497; IB Gateway
+    # otherwise defaults to 4002 (paper) / 4001 (live), so the port must be overridden.
+    assert "set_ini OverrideTwsApiPort 7497" in script
+    assert "set_ini AcceptIncomingConnectionAction accept" in script
 
 
 def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
