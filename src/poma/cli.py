@@ -40,7 +40,9 @@ def _portfolio_summary(session_date: str, plan: RebalancePlan, status: str, exec
                 f"(${item.notional:,.0f}) {item.status}"
             )
         else:
-            lines.append(f"{item.side.value} {item.ticker} {item.quantity:g} (${item.notional:,.0f})")
+            lines.append(
+                f"{item.side.value} {item.ticker} {item.quantity:g} (${item.notional:,.0f})"
+            )
     if len(items) > _MAX_SUMMARY_LINES:
         lines.append(f"...and {len(items) - _MAX_SUMMARY_LINES} more")
 
