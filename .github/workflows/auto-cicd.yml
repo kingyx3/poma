@@ -1,8 +1,9 @@
 name: Auto CI/CD
 
 # Continuous delivery automation:
-#   - When a pull request is opened/reopened, deploy the dev VM and configure the
-#     IB Gateway (paper) so the change is exercised end-to-end before merge.
+#   - On every push to an open pull request (and when opened/reopened), deploy the
+#     dev VM and configure the IB Gateway (paper). A newer push supersedes and
+#     cancels the previous push's in-progress dev deploy (see concurrency below).
 #   - When a change merges to main, deploy the stg VM and configure its gateway.
 #
 # Notes:
@@ -18,7 +19,7 @@ name: Auto CI/CD
 
 on:
   pull_request:
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize]
   push:
     branches: [main]
 
@@ -26,9 +27,13 @@ permissions:
   contents: read
   id-token: write
 
+# One in-flight run per PR (and a separate one for main). A newer push to the same
+# PR cancels the previous push's in-progress deploy. The group key separates PRs
+# (pull_request.number) from main (github.ref), so PR churn never cancels a
+# stg-on-merge deploy and vice versa.
 concurrency:
   group: poma-auto-cicd-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   dev-deploy:

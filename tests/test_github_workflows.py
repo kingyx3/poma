@@ -181,11 +181,14 @@ def test_deploy_and_ops_workflows_are_reusable() -> None:
 def test_auto_cicd_deploys_dev_on_pr_and_stg_on_merge() -> None:
     workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
 
-    # Triggers: PR open/reopen for dev, push to main for stg.
+    # Triggers: every PR push (opened/reopened/synchronize) for dev, push to main for stg.
     assert "pull_request:" in workflow
-    assert "types: [opened, reopened]" in workflow
+    assert "types: [opened, reopened, synchronize]" in workflow
     assert "push:" in workflow
     assert "branches: [main]" in workflow
+
+    # A newer PR push cancels the previous push's in-progress deploy.
+    assert "cancel-in-progress: true" in workflow
 
     # Reuses the deploy + gateway-ops workflows.
     assert "uses: ./.github/workflows/deploy-gcp-vm.yml" in workflow
