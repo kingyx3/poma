@@ -29,15 +29,6 @@ jobs:
       deploy_smoke: false
     secrets: inherit
 
-  dev-configure-gateway:
-    needs: dev-deploy
-    uses: ./.github/workflows/ib-gateway-ops.yml
-    with:
-      deploy_environment: dev
-      action: configure-paper
-      log_lines: 200
-    secrets: inherit
-
   stg-deploy:
     if: ${{ github.event_name == 'push' }}
     uses: ./.github/workflows/deploy-gcp-vm.yml
