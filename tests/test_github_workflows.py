@@ -4,6 +4,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 BOOTSTRAP_WORKFLOW = REPO_ROOT / ".github/workflows/bootstrap-gcp-wif.yml"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
+GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 
 
 REQUIRED_ENVIRONMENT_SNIPPETS = (
@@ -87,5 +88,39 @@ def test_deploy_workflow_uses_current_action_versions() -> None:
     assert "google-github-actions/auth@v3" in workflow
     assert "google-github-actions/setup-gcloud@v3" in workflow
     assert "hashicorp/setup-terraform@v4" in workflow
+    for snippet in OLD_ACTION_SNIPPETS:
+        assert snippet not in workflow
+
+
+def test_gateway_ops_workflow_is_environment_scoped() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    for snippet in REQUIRED_ENVIRONMENT_SNIPPETS:
+        assert snippet in workflow
+
+    assert "poma-ib-gateway-ops-${{ inputs.deploy_environment }}" in workflow
+    assert "ops/deploy/environments/${DEPLOY_ENVIRONMENT}.env" in workflow
+    assert "systemctl restart ibgateway" in workflow
+    assert "journalctl -u ibgateway" in workflow
+    assert "nc -z 127.0.0.1 7497" in workflow
+
+
+def test_gateway_ops_workflow_can_configure_gateway_from_environment_secrets() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "configure-paper" in workflow
+    assert "configure-live" in workflow
+    assert "IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}" in workflow
+    assert "IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}" in workflow
+    assert "sudo poma-configure-ibc" in workflow
+    assert "printf '%s\\n%s\\n%s\\n'" in workflow
+
+
+def test_gateway_ops_workflow_uses_current_action_versions() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "actions/checkout@v5" in workflow
+    assert "google-github-actions/auth@v3" in workflow
+    assert "google-github-actions/setup-gcloud@v3" in workflow
     for snippet in OLD_ACTION_SNIPPETS:
         assert snippet not in workflow

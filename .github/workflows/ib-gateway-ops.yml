@@ -1,0 +1,165 @@
+name: IB Gateway Ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: GitHub Environment to inspect.
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - prd
+        default: dev
+      action:
+        description: Operation to run on the VM.
+        required: true
+        type: choice
+        options:
+          - status
+          - restart
+          - logs
+          - verify-socket
+          - configure-paper
+          - configure-live
+        default: status
+      log_lines:
+        description: Number of ibgateway journal lines for logs/status output.
+        required: true
+        type: number
+        default: 200
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: poma-ib-gateway-ops-${{ inputs.deploy_environment }}
+  cancel-in-progress: false
+
+jobs:
+  gateway-ops:
+    name: IB Gateway ${{ inputs.action }} (${{ inputs.deploy_environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.deploy_environment }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      INPUT_ACTION: ${{ inputs.action }}
+      LOG_LINES: ${{ inputs.log_lines }}
+      IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
+      IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Resolve generated deployment config
+        run: |
+          set -euo pipefail
+
+          config_path="ops/deploy/environments/${DEPLOY_ENVIRONMENT}.env"
+          if [ ! -f "${config_path}" ]; then
+            echo "::error::Missing generated deployment config: ${config_path}. Run Bootstrap GCP Workload Identity Federation with terraform_action=apply first."
+            exit 1
+          fi
+
+          set -a
+          # shellcheck source=/dev/null
+          . "${config_path}"
+          set +a
+
+          require_non_empty() {
+            local key="$1"
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing required setting for ${DEPLOY_ENVIRONMENT}: ${key}"
+              exit 1
+            fi
+          }
+
+          set_env() {
+            local key="$1"
+            local value="$2"
+            echo "${key}=${value}" >> "${GITHUB_ENV}"
+            export "${key}=${value}"
+          }
+
+          require_non_empty GCP_WORKLOAD_IDENTITY_PROVIDER
+          require_non_empty GCP_SERVICE_ACCOUNT_EMAIL
+
+          if [[ ! "${GCP_SERVICE_ACCOUNT_EMAIL}" =~ @([a-z0-9-]+)\.iam\.gserviceaccount\.com$ ]]; then
+            echo "::error::GCP_SERVICE_ACCOUNT_EMAIL in ${config_path} must be a Google service account email"
+            exit 1
+          fi
+
+          set_env GCP_WORKLOAD_IDENTITY_PROVIDER "${GCP_WORKLOAD_IDENTITY_PROVIDER}"
+          set_env GCP_SERVICE_ACCOUNT_EMAIL "${GCP_SERVICE_ACCOUNT_EMAIL}"
+          set_env GCP_PROJECT_ID "${BASH_REMATCH[1]}"
+          set_env GCP_ZONE "${GCP_ZONE:-us-west1-b}"
+          set_env GCP_VM_NAME "${GCP_VM_NAME:-poma-${DEPLOY_ENVIRONMENT}-free-tier}"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          create_credentials_file: true
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Run Gateway operation over IAP SSH
+        run: |
+          set -euo pipefail
+          gcloud config set project "${GCP_PROJECT_ID}"
+          ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+
+          run_remote() {
+            local command="$1"
+            gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "${command}"
+          }
+
+          verify_socket() {
+            run_remote 'if nc -z 127.0.0.1 7497; then echo "IB Gateway API socket is reachable on 127.0.0.1:7497."; else echo "IB Gateway API socket is not reachable on 127.0.0.1:7497." >&2; sudo systemctl status ibgateway --no-pager --lines=80 || true; exit 1; fi'
+          }
+
+          case "${INPUT_ACTION}" in
+            status)
+              run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
+              ;;
+            restart)
+              run_remote "sudo systemctl restart ibgateway && sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
+              ;;
+            logs)
+              run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager"
+              ;;
+            verify-socket)
+              verify_socket
+              ;;
+            configure-paper|configure-live)
+              if [ -z "${IBKR_LOGIN_ID:-}" ] || [ -z "${IBKR_LOGIN_SECRET:-}" ]; then
+                echo "::error::IBKR_LOGIN_ID and IBKR_LOGIN_SECRET GitHub Environment secrets are required for ${INPUT_ACTION}."
+                exit 1
+              fi
+
+              mode="${INPUT_ACTION#configure-}"
+              input_file="$(mktemp)"
+              cleanup() {
+                if command -v shred >/dev/null 2>&1; then
+                  shred -u "${input_file}" 2>/dev/null || rm -f "${input_file}"
+                else
+                  rm -f "${input_file}"
+                fi
+              }
+              trap cleanup EXIT
+
+              printf '%s\n%s\n%s\n' "${IBKR_LOGIN_ID}" "${IBKR_LOGIN_SECRET}" "${mode}" > "${input_file}"
+              chmod 600 "${input_file}"
+              gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
+              verify_socket
+              ;;
+            *)
+              echo "Unknown action: ${INPUT_ACTION}" >&2
+              exit 2
+              ;;
+          esac
