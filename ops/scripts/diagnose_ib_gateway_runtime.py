@@ -234,14 +234,15 @@ def diagnose(log_lines: int) -> int:
             print("missing")
             continue
         for path in sorted(directory.glob("*")):
-            if path.is_file():
-                print(f"--- {path} ---")
-                try:
-                    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-log_lines:]
-                except OSError as exc:
-                    print(f"cannot read: {exc}")
-                    continue
-                print(redact("\n".join(lines)))
+            if not path.is_file():
+                continue
+            print(f"--- {path} ---")
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-log_lines:]
+            except OSError as exc:
+                print(f"cannot read: {exc}")
+                continue
+            print(redact("\n".join(lines)))
     return 0
 
 
