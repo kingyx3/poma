@@ -33,7 +33,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `YAHOO_SCREENER_PAGE_SIZE` | yahoo only | `250` | Yahoo screen page size. yfinance/Yahoo caps this at 250. |
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
-| `MAX_HOLDINGS` | yes | `30` | Hold only the top names by rank improvement score. |
+| `MAX_HOLDINGS` | yes | `100` | Hold the top names by combined market-cap-size + rank-momentum score, equal-weighted. |
 | `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. |
 | `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap. |
