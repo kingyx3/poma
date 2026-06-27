@@ -15,9 +15,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 - IBKR account with paper trading enabled first.
 - IB Gateway running on the same host.
 - GitHub Environment Secrets for IB Gateway login configuration: `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET`.
-- Market-data provider:
-  - `DATA_PROVIDER=yahoo` uses yfinance and requires no API key.
-  - `DATA_PROVIDER=fmp` requires an FMP plan that supports constituents, market caps, and prices.
+- Market-data provider: `DATA_PROVIDER=yahoo` uses yfinance and requires no API key.
 - Telegram bot token and chat ID for mandatory run alerts.
 - Tailscale tailnet and reusable or ephemeral auth key for secure VPS access.
 
@@ -30,12 +28,10 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `ALLOW_LIVE_TRADING` | live only | `false` | Set by deploy workflow input. Must be true for live trading. |
 | `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars`. |
 | `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
-| `DATA_PROVIDER` | yes | `yahoo` | Provider module. Supported: `fixture`, `yahoo`, `fmp`. |
-| `FMP_API_KEY` | fmp only | `unused` | Required only when `DATA_PROVIDER=fmp`. |
-| `FMP_BASE_URL` | fmp only | `https://financialmodelingprep.com/stable` | Override if your FMP plan uses different endpoints. |
+| `DATA_PROVIDER` | yes | `yahoo` | Supported values: `yahoo` for real runs and `fixture` for tests/PR dry-runs. |
 | `YAHOO_SCREENER_LIMIT` | yahoo only | `500` | Number of largest US companies to request from Yahoo. |
 | `YAHOO_SCREENER_PAGE_SIZE` | yahoo only | `250` | Yahoo screen page size. yfinance/Yahoo caps this at 250. |
-| `UNIVERSE` | yes | `us_top_market_cap` | Yahoo supports `us_top_market_cap`; FMP supports `sp500`, `nasdaq100`. |
+| `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
 | `MAX_HOLDINGS` | yes | `30` | Hold only the top names by rank improvement score. |
 | `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. |
@@ -70,7 +66,7 @@ Run this before the first rank-improvement rebalance, or let the first rebalance
 poma refresh-market-data
 ```
 
-For Yahoo, current top-500 membership comes from `yfinance.screen()` sorted by `intradaymarketcap`. Historical market caps are estimated from Yahoo close prices multiplied by the current share count from the latest snapshot. This is suitable for low-cost personal research, but a future paid provider can replace it by implementing the same `MarketDataClient` interface.
+Current top-500 membership comes from `yfinance.screen()` sorted by `intradaymarketcap`. Historical market caps are estimated from Yahoo close prices multiplied by the current share count from the latest snapshot.
 
 ## Telegram alert config
 
@@ -88,7 +84,7 @@ The workflow sends these values to `sudo poma-configure-ibc` over IAP SSH stdin 
 
 The deploy workflow does not store secrets in GCP Secret Manager. Instead, it renders a VM-local `.env` file from CI defaults plus the selected GitHub Environment's required secrets, then uploads it to `/opt/poma/.env` over IAP SSH.
 
-`ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects empty/placeholder values, and writes the output file with `0600` permissions. The deploy workflow resolves runtime `IBKR_ACCOUNT` before rendering: paper uses `IBKR_ACCOUNT_PAPER`, live uses `IBKR_ACCOUNT`, and dry-run prefers `IBKR_ACCOUNT_PAPER` before falling back to `IBKR_ACCOUNT`. When `DATA_PROVIDER` is not `fmp`, CI renders `FMP_API_KEY=unused` so FMP is not required for Yahoo deployments.
+`ops/scripts/render_env.py` is the single renderer used by CI/CD. It reads `.env.example`, requires every key to be present in the workflow environment when `--strict-env` is used, rejects empty/placeholder values, and writes the output file with `0600` permissions. The deploy workflow resolves runtime `IBKR_ACCOUNT` before rendering: paper uses `IBKR_ACCOUNT_PAPER`, live uses `IBKR_ACCOUNT`, and dry-run prefers `IBKR_ACCOUNT_PAPER` before falling back to `IBKR_ACCOUNT`.
 
 The deploy workflow supplies deterministic defaults for every non-secret `.env.example` key. Do not create GitHub Environment Variables for the normal production path.
 
@@ -117,7 +113,6 @@ First bootstrap requires only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` 
 Runtime/deploy secrets:
 
 - `TAILSCALE_AUTHKEY` when deploy input `tailscale_enabled=true`.
-- `FMP_API_KEY` only when deploy input `data_provider=fmp`.
 - `IBKR_ACCOUNT_PAPER` for paper deploys, and preferred for dry-run deploy rendering.
 - `IBKR_ACCOUNT` for live deploys.
 - `TELEGRAM_BOT_TOKEN`.
