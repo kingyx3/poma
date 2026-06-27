@@ -321,18 +321,43 @@ jobs:
           }
 
           wait_for_apt() {
+            local context="${1:-apt operation}"
             local waited_seconds=0
-            local max_wait_seconds=300
+            local max_wait_seconds=600
 
             while apt_locks_busy; do
               if [ "${waited_seconds}" -ge "${max_wait_seconds}" ]; then
-                echo "Timed out waiting for apt/dpkg locks to be released." >&2
+                echo "Timed out waiting for apt/dpkg locks before ${context}." >&2
                 exit 1
               fi
 
-              echo "Waiting for apt/dpkg locks to be released before installing Tailscale..."
+              echo "Waiting for apt/dpkg locks to be released before ${context}..."
               sleep 10
               waited_seconds=$((waited_seconds + 10))
+            done
+          }
+
+          apt_get_with_retry() {
+            local context="$1"
+            shift
+            local attempt=1
+            local max_attempts=6
+
+            while true; do
+              wait_for_apt "${context}"
+              if DEBIAN_FRONTEND=noninteractive run_with_timeout 10m \
+                apt-get -o DPkg::Lock::Timeout=300 "$@"; then
+                return 0
+              fi
+
+              if [ "${attempt}" -ge "${max_attempts}" ]; then
+                echo "apt-get ${context} failed after ${max_attempts} attempts." >&2
+                return 1
+              fi
+
+              echo "apt-get ${context} failed; retrying after lock/backoff (${attempt}/${max_attempts})..."
+              sleep 10
+              attempt=$((attempt + 1))
             done
           }
 
@@ -346,11 +371,9 @@ jobs:
               https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list \
               -o /etc/apt/sources.list.d/tailscale.list
             chmod 0644 /etc/apt/sources.list.d/tailscale.list
-            run_with_timeout 5m apt-get update
-            run_with_timeout 5m apt-get install -y tailscale
+            apt_get_with_retry "update package indexes" update
+            apt_get_with_retry "install Tailscale" install -y tailscale
           }
-
-          wait_for_apt
 
           if ! command -v tailscale >/dev/null 2>&1; then
             install_tailscale
