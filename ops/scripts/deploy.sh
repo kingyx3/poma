@@ -8,10 +8,10 @@ cd "${APP_DIR}"
 export POMA_UID="${POMA_UID:-$(id -u)}"
 export POMA_GID="${POMA_GID:-$(id -g)}"
 
-mkdir -p reports state logs
-chmod u+rwX reports state logs
+mkdir -p reports state logs data
+chmod u+rwX reports state logs data
 
-for dir in reports state logs; do
+for dir in reports state logs data; do
   if [ ! -w "${dir}" ]; then
     echo "${APP_DIR}/${dir} is not writable by uid ${POMA_UID}." >&2
     echo "Fix ownership before deploying: sudo chown -R ${POMA_UID}:${POMA_GID} ${APP_DIR}/${dir}" >&2

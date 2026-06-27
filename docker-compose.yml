@@ -6,6 +6,7 @@ services:
     volumes:
       - ./reports:/app/reports
       - ./state:/app/state
+      - ./data:/app/data
     network_mode: host
 
 # Run this with `docker compose run --rm poma monitor` from cron.
