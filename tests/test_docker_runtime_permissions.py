@@ -31,5 +31,19 @@ def test_deploy_script_builds_container_with_current_host_user() -> None:
 def test_dockerignore_keeps_runtime_build_context_minimal() -> None:
     dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
 
-    for entry in (".env", ".env.*", ".git", ".github", "docs", "tests", "infra", "ops", "reports", "state", "data", "logs"):
+    minimal_context_exclusions = (
+        ".env",
+        ".env.*",
+        ".git",
+        ".github",
+        "docs",
+        "tests",
+        "infra",
+        "ops",
+        "reports",
+        "state",
+        "data",
+        "logs",
+    )
+    for entry in minimal_context_exclusions:
         assert entry in dockerignore

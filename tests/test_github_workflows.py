@@ -267,9 +267,26 @@ def test_deploy_package_contains_only_runtime_files() -> None:
     assert "-czf /tmp/poma.tar.gz" in workflow
     assert "--exclude='__pycache__'" in workflow
     assert "--exclude='*.pyc'" in workflow
-    for entry in (".dockerignore", "Dockerfile", "docker-compose.yml", "pyproject.toml", "src", "ops/cron", "ops/scripts/deploy.sh"):
+    runtime_package_entries = (
+        ".dockerignore",
+        "Dockerfile",
+        "docker-compose.yml",
+        "pyproject.toml",
+        "src",
+        "ops/cron",
+        "ops/scripts/deploy.sh",
+    )
+    for entry in runtime_package_entries:
         assert entry in workflow
-    for stale_path in ("/opt/poma/docs", "/opt/poma/infra", "/opt/poma/ops", "/opt/poma/tests", "/opt/poma/.github"):
+
+    stale_package_paths = (
+        "/opt/poma/docs",
+        "/opt/poma/infra",
+        "/opt/poma/ops",
+        "/opt/poma/tests",
+        "/opt/poma/.github",
+    )
+    for stale_path in stale_package_paths:
         assert stale_path in workflow
 
 
