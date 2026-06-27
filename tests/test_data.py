@@ -4,7 +4,6 @@ from datetime import date
 from typing import Any
 
 import pandas as pd
-
 from conftest import make_settings
 
 from poma.data import FmpMarketDataClient, YahooFinanceMarketDataClient
@@ -33,7 +32,12 @@ def _client(monkeypatch, router, **overrides) -> FmpMarketDataClient:
 
     monkeypatch.setattr("poma.data.requests.Session.get", fake_get)
     client = FmpMarketDataClient(
-        make_settings(DATA_PROVIDER="fmp", FMP_API_KEY="key", UNIVERSE="sp500", **overrides)
+        make_settings(
+            DATA_PROVIDER="fmp",
+            FMP_API_KEY="key",
+            UNIVERSE="sp500",
+            **overrides,
+        )
     )
     client.calls = calls  # type: ignore[attr-defined]
     return client
@@ -52,7 +56,12 @@ class FakeYahoo:
     @classmethod
     def screen(cls, query, offset=None, size=None, sortField=None, sortAsc=None):
         cls.screen_calls.append(
-            {"offset": offset, "size": size, "sortField": sortField, "sortAsc": sortAsc}
+            {
+                "offset": offset,
+                "size": size,
+                "sortField": sortField,
+                "sortAsc": sortAsc,
+            }
         )
         return {
             "quotes": [
@@ -96,16 +105,17 @@ def test_current_snapshot_merges_constituents_caps_and_prices(monkeypatch) -> No
                 {"symbol": "NOPRICE", "marketCap": 1000},
             ]
         if path == "batch-quote-short":
-            return [{"symbol": "AAPL", "price": 195.0}, {"symbol": "MSFT", "price": 410.0}]
+            return [
+                {"symbol": "AAPL", "price": 195.0},
+                {"symbol": "MSFT", "price": 410.0},
+            ]
         raise AssertionError(f"unexpected path {path}")
 
     client = _client(monkeypatch, router)
     frame = client.current_universe_snapshot()
 
-    # The constituent endpoint carries no market cap; caps/prices come from the batch endpoints.
     assert "market-capitalization-batch" in client.calls  # type: ignore[attr-defined]
     assert "batch-quote-short" in client.calls  # type: ignore[attr-defined]
-    # NOPRICE has a cap but no price, so it is dropped (price is needed for trade sizing).
     assert frame["ticker"].tolist() == ["AAPL", "MSFT"]
     assert frame.set_index("ticker").loc["AAPL", "market_cap"] == 3000
     assert frame.set_index("ticker").loc["MSFT", "price"] == 410.0
