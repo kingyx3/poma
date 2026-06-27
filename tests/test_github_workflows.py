@@ -296,4 +296,14 @@ def test_deploy_waits_for_revisioned_vm_ready_sentinel() -> None:
     assert 'startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"' in workflow
     assert "/var/lib/poma/vm-ready" in workflow
     assert "/proc/sys/kernel/random/boot_id" in workflow
+    assert "/var/lib/cloud/instance/boot-finished" in workflow
+    assert "uptime_seconds" in workflow
     assert "startup revision ${startup_revision} not ready" in workflow
+
+
+def test_deploy_does_not_recursively_chown_runtime_state() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "sudo chown -R poma:poma /opt/poma" not in workflow
+    assert "Only the freshly extracted package and .env need ownership fixed" in workflow
+    assert "sudo install -d -o poma -g poma" in workflow

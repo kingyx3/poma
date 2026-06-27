@@ -290,15 +290,17 @@ jobs:
           # short, independently-timed SSH, so a cold boot (the minimal startup installs Docker +
           # cron and writes /var/lib/poma/vm-ready with the current boot id) or a transient
           # IAP/SSH-key-propagation hang is
-          # retried with a fresh connection
-          # instead of blocking the whole step on one long-lived SSH. Returns within seconds on an
+          # retried with a fresh connection. If an older VM has no matching sentinel but cloud-init
+          # has been boot-finished for at least 2 minutes, continue so deploy fails fast with the
+          # concrete Docker/app error instead of spending the whole step polling readiness.
+          # Returns within seconds on an
           # already-warm VM.
           wait_for_vm_ready() {
-            local deadline=$((SECONDS + 420)) attempt=0
+            local deadline=$((SECONDS + 240)) attempt=0
             until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command "test \"\$(cat /var/lib/poma/vm-ready 2>/dev/null)\" = \"${startup_revision} \$(cat /proc/sys/kernel/random/boot_id)\""; do
+                --command "sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; if [ \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" ]; then exit 0; fi; uptime_seconds=\"\$(cut -d. -f1 /proc/uptime)\"; test -f /var/lib/cloud/instance/boot-finished && [ \"\${uptime_seconds}\" -ge 120 ]"; do
               if [ "${SECONDS}" -ge "${deadline}" ]; then
-                echo "VM ${instance_name} not reachable / startup revision ${startup_revision} not ready within 7m." >&2
+                echo "VM ${instance_name} not reachable / startup revision ${startup_revision} not ready within 4m." >&2
                 return 1
               fi
               attempt=$((attempt + 1))
@@ -365,7 +367,22 @@ jobs:
             sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
             sudo mv /tmp/poma.env /opt/poma/.env
             sudo chmod 600 /opt/poma/.env
-            sudo chown -R poma:poma /opt/poma
+            sudo install -d -o poma -g poma \
+              /opt/poma/data \
+              /opt/poma/logs \
+              /opt/poma/reports \
+              /opt/poma/state
+            # Keep deploy fast on long-lived VMs: do not recursively chown data/reports/state/logs.
+            # Only the freshly extracted package and .env need ownership fixed on each deploy.
+            sudo chown poma:poma /opt/poma /opt/poma/.env
+            sudo chown -R poma:poma \
+              /opt/poma/.dockerignore \
+              /opt/poma/Dockerfile \
+              /opt/poma/README.md \
+              /opt/poma/docker-compose.yml \
+              /opt/poma/ops \
+              /opt/poma/pyproject.toml \
+              /opt/poma/src
             cd /opt/poma
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping

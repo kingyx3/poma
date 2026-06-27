@@ -56,7 +56,5 @@ systemctl enable --now docker
 systemctl enable --now cron
 systemctl is-active --quiet docker
 systemctl is-active --quiet cron
-docker version >/dev/null
-docker compose version >/dev/null
 printf '%s %s\n' "$${STARTUP_REVISION}" "$(cat /proc/sys/kernel/random/boot_id)" >"$${READY_SENTINEL}"
 chmod 0644 "$${READY_SENTINEL}"

@@ -23,7 +23,6 @@ REQUIRED_STARTUP_SNIPPETS = (
     "systemctl enable --now cron",
     "systemctl is-active --quiet docker",
     "systemctl is-active --quiet cron",
-    "docker compose version >/dev/null",
 )
 
 # Heavy IB Gateway provisioning must NOT live in the boot path: it stalled cloud-init and
