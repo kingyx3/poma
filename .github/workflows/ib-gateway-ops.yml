@@ -131,6 +131,7 @@ jobs:
 
           timing_file="$(mktemp)"
           step_started="${SECONDS}"
+          input_file=""
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
           gateway_runtime_revision="$(sha256sum \
             ops/scripts/repair_ib_gateway_runtime.py \
@@ -142,6 +143,17 @@ jobs:
           record_timing() {
             local label="$1" seconds="$2" status="$3"
             printf '%s\t%s\t%s\n' "${seconds}" "${status}" "${label}" >> "${timing_file}"
+          }
+
+          cleanup_input_file() {
+            if [ -z "${input_file}" ] || [ ! -f "${input_file}" ]; then
+              return 0
+            fi
+            if command -v shred >/dev/null 2>&1; then
+              shred -u "${input_file}" 2>/dev/null || rm -f "${input_file}"
+            else
+              rm -f "${input_file}"
+            fi
           }
 
           write_timing_summary() {
@@ -164,7 +176,12 @@ jobs:
               echo "Total step time: **${total}s**"
             } >> "${GITHUB_STEP_SUMMARY}"
           }
-          trap write_timing_summary EXIT
+
+          on_exit() {
+            cleanup_input_file
+            write_timing_summary
+          }
+          trap on_exit EXIT
 
           timed() {
             local label="$1" status start duration
@@ -210,6 +227,7 @@ jobs:
             fi
 
             echo "Gateway runtime sentinel missing or stale; fail-open by running repair/install."
+            echo "Repairing IB Gateway runtime helpers and installers on the VM."
             timed "Upload gateway helper scripts" run_with_timeout 180s gcloud compute scp \
               ops/scripts/repair_ib_gateway_runtime.py \
               ops/scripts/install_ibc_config_helper.py \
@@ -305,14 +323,6 @@ jobs:
               repair_gateway_runtime
               mode="${INPUT_ACTION#configure-}"
               input_file="$(mktemp)"
-              cleanup() {
-                if command -v shred >/dev/null 2>&1; then
-                  shred -u "${input_file}" 2>/dev/null || rm -f "${input_file}"
-                else
-                  rm -f "${input_file}"
-                fi
-              }
-              trap cleanup EXIT
 
               printf '%s\n%s\n%s\n' "${IBKR_LOGIN_ID}" "${IBKR_LOGIN_SECRET}" "${mode}" > "${input_file}"
               chmod 600 "${input_file}"
