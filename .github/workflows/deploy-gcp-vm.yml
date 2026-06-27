@@ -281,6 +281,25 @@ jobs:
             timeout --kill-after=30s "${seconds}" "$@"
           }
 
+          # Poll the VM over IAP until cloud-init's startup script has finished. Each probe is a
+          # short, independently-timed SSH, so a slow cold boot (the startup script installs
+          # Docker + IB Gateway and can take several minutes on an e2-micro) or a transient
+          # IAP/SSH-key-propagation hang is retried with a fresh connection instead of blocking
+          # the whole step on one long-lived SSH. Returns within seconds on an already-warm VM.
+          wait_for_vm_ready() {
+            local deadline=$((SECONDS + 720)) attempt=0
+            until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
+                --command 'test -f /var/lib/cloud/instance/boot-finished'; do
+              if [ "${SECONDS}" -ge "${deadline}" ]; then
+                echo "VM ${instance_name} did not finish cloud-init within 12m." >&2
+                return 1
+              fi
+              attempt=$((attempt + 1))
+              echo "VM not ready yet (attempt ${attempt}); retrying in 15s..."
+              sleep 15
+            done
+          }
+
           auth_key_file="$(mktemp)"
           remote_script="$(mktemp)"
           cleanup() {
@@ -382,8 +401,7 @@ jobs:
           run_with_timeout 30s tailscale status
           SCRIPT
 
-          run_with_timeout 5m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
-            'timeout --kill-after=30s 300s bash -c '\''until [ -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'\'''
+          wait_for_vm_ready
           run_with_timeout 2m gcloud compute scp "${auth_key_file}" "${instance_name}:/tmp/poma-tailscale-authkey" "${ssh_common[@]}"
           run_with_timeout 2m gcloud compute scp "${remote_script}" "${instance_name}:/tmp/poma-configure-tailscale.sh" "${ssh_common[@]}"
           run_with_timeout 8m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
@@ -405,6 +423,7 @@ jobs:
 
       - name: Upload and install on VM
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
+        timeout-minutes: 30
         run: |
           set -euo pipefail
 
@@ -412,13 +431,33 @@ jobs:
           zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
           ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
 
-          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
-            'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
+          run_with_timeout() {
+            local seconds="$1"
+            shift
+            timeout --kill-after=30s "${seconds}" "$@"
+          }
 
-          gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
-          gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
+          # Same resilient cold-boot/transient-hang-tolerant wait used by the Tailscale step.
+          wait_for_vm_ready() {
+            local deadline=$((SECONDS + 720)) attempt=0
+            until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
+                --command 'test -f /var/lib/cloud/instance/boot-finished'; do
+              if [ "${SECONDS}" -ge "${deadline}" ]; then
+                echo "VM ${instance_name} did not finish cloud-init within 12m." >&2
+                return 1
+              fi
+              attempt=$((attempt + 1))
+              echo "VM not ready yet (attempt ${attempt}); retrying in 15s..."
+              sleep 15
+            done
+          }
 
-          gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
+          wait_for_vm_ready
+
+          run_with_timeout 3m gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
+          run_with_timeout 2m gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
+
+          run_with_timeout 25m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
             set -euo pipefail
             sudo mkdir -p /opt/poma
             sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
