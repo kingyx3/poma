@@ -356,6 +356,8 @@ jobs:
               timed "Configure IBC credentials" run_with_timeout 180s \
                 gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
               timed "Validate IBC configuration" validate_ibc_configuration "${mode}"
+              echo "Restarting ibgateway after IBC credential/config update so IBC reads the new config and can trigger IBKR 2FA."
+              timed "Restart ibgateway after IBC configuration" run_remote "sudo systemctl restart ibgateway" 180
               verify_socket
               ;;
             *)
