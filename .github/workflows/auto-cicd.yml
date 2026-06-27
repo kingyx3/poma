@@ -5,6 +5,8 @@ on:
     types: [opened, reopened, synchronize]
   push:
     branches: [main]
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -22,7 +24,6 @@ jobs:
       deploy_environment: dev
       terraform_action: plan
       deploy_app: false
-      tailscale_enabled: false
       trading_mode: paper
       data_provider: fixture
       allow_live_trading: false
@@ -36,11 +37,6 @@ jobs:
       deploy_environment: stg
       terraform_action: apply
       deploy_app: true
-      # Tailscale is operator-convenience only: all automation uses IAP SSH, and VNC/SSH access
-      # is available on demand via `gcloud compute ssh --tunnel-through-iap`. Skipping it removes
-      # a slow, failure-prone step from every merge. Flip back on via manual workflow_dispatch
-      # (or for live trading) when tailnet access is actually wanted.
-      tailscale_enabled: false
       trading_mode: paper
       data_provider: yahoo
       allow_live_trading: false
@@ -52,5 +48,29 @@ jobs:
     with:
       deploy_environment: stg
       action: configure-paper
+      log_lines: 200
+    secrets: inherit
+
+  # Publishing a non-prerelease GitHub release promotes to live/prd. prereleases are ignored so
+  # they can be used for staging/testing without touching real money. prd GitHub Environment
+  # protection rules (e.g. required reviewers) gate this deploy before it runs.
+  prd-deploy:
+    if: ${{ github.event_name == 'release' && github.event.release.prerelease == false }}
+    uses: ./.github/workflows/deploy-gcp-vm.yml
+    with:
+      deploy_environment: prd
+      terraform_action: apply
+      deploy_app: true
+      trading_mode: live
+      data_provider: yahoo
+      allow_live_trading: true
+    secrets: inherit
+
+  prd-configure-gateway:
+    needs: prd-deploy
+    uses: ./.github/workflows/ib-gateway-ops.yml
+    with:
+      deploy_environment: prd
+      action: configure-live
       log_lines: 200
     secrets: inherit

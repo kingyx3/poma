@@ -17,7 +17,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 - GitHub Environment Secrets for IB Gateway login configuration: `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET`.
 - Market-data provider: `DATA_PROVIDER=yahoo` uses yfinance and requires no API key.
 - Telegram bot token and chat ID for mandatory run alerts.
-- Tailscale tailnet and reusable or ephemeral auth key for secure VPS access.
+- Operator access to the VM is via Google Cloud IAP SSH (`gcloud compute ssh --tunnel-through-iap`); no extra VPN/secret is required.
 
 ## Environment variables
 
@@ -112,7 +112,6 @@ First bootstrap requires only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` 
 
 Runtime/deploy secrets:
 
-- `TAILSCALE_AUTHKEY` when deploy input `tailscale_enabled=true`.
 - `IBKR_ACCOUNT_PAPER` for paper deploys, and preferred for dry-run deploy rendering.
 - `IBKR_ACCOUNT` for live deploys.
 - `TELEGRAM_BOT_TOKEN`.
@@ -123,6 +122,6 @@ Gateway operation secrets:
 - `IBKR_LOGIN_ID` for `configure-paper` and `configure-live`.
 - `IBKR_LOGIN_SECRET` for `configure-paper` and `configure-live`.
 
-`TAILSCALE_AUTHKEY` is used only during deploy apply. It is copied to the VM over IAP, consumed by `tailscale up`, then deleted from both the runner and VM. It is not written to Terraform state, VM metadata, or the app `.env`.
+Operator access to the VM uses Google Cloud IAP SSH and needs no stored access secret. The VM's only ingress is IAP SSH (TCP 22 from `35.235.240.0/20`); reach a shell or tunnel the IB Gateway VNC port with `gcloud compute ssh <vm> --zone <zone> --tunnel-through-iap -- -L 5900:127.0.0.1:5900`.
 
 No Artifact Registry, Secret Manager, or long-lived GCP JSON key is required for normal deploys. Manually delete any old GitHub Environment Variables left over from earlier bootstrap runs; the current workflows no longer read or manage them.

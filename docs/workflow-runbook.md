@@ -54,7 +54,7 @@ flowchart TD
 | Workflow | Secrets needed |
 |---|---|
 | Bootstrap | Temporary bootstrap service account key |
-| Deploy | Telegram token, Telegram chat id, data provider key, account selector for selected mode, Tailscale key when joining tailnet |
+| Deploy | Telegram token, Telegram chat id, data provider key, account selector for selected mode |
 | Refresh Gateway Helper | Generated GCP deploy config from bootstrap |
 | IB Gateway Ops configure actions | Broker login id and broker login secret |
 

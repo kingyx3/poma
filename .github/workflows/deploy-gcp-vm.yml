@@ -25,11 +25,6 @@ on:
         required: true
         type: boolean
         default: true
-      tailscale_enabled:
-        description: Join the VPS to Tailscale after Terraform apply.
-        required: true
-        type: boolean
-        default: true
       trading_mode:
         description: Runtime mode for the rendered VM .env.
         required: true
@@ -70,10 +65,6 @@ on:
         required: false
         type: boolean
         default: true
-      tailscale_enabled:
-        required: false
-        type: boolean
-        default: true
       trading_mode:
         required: false
         type: string
@@ -110,7 +101,6 @@ jobs:
       TF_INPUT: "false"
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_TERRAFORM_ACTION: ${{ inputs.terraform_action }}
-      INPUT_TAILSCALE_ENABLED: ${{ inputs.tailscale_enabled }}
       INPUT_TRADING_MODE: ${{ inputs.trading_mode }}
       INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
       INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
@@ -118,7 +108,6 @@ jobs:
       # Minimal runtime secrets. Telegram is mandatory; IBKR is required by selected modes.
       IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
       IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}
-      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -206,12 +195,8 @@ jobs:
             echo "::error::trading_mode=live requires allow_live_trading=true"
             exit 1
           fi
-          if [ "${INPUT_TAILSCALE_ENABLED}" = "true" ] && [ "${INPUT_TERRAFORM_ACTION}" = "apply" ] && [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
-            echo "::error::TAILSCALE_AUTHKEY GitHub Environment secret is required when tailscale_enabled=true and terraform_action=apply"
-            exit 1
-          fi
 
-          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}, tailscale_enabled=${INPUT_TAILSCALE_ENABLED}"
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}"
 
       - name: Render .env from CI defaults and GitHub secrets
         run: python ops/scripts/render_env.py --strict-env --output .env.deploy
@@ -264,149 +249,6 @@ jobs:
         if: ${{ inputs.terraform_action == 'apply' }}
         run: terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan
 
-      - name: Configure Tailscale on VM
-        if: ${{ inputs.terraform_action == 'apply' && inputs.tailscale_enabled }}
-        timeout-minutes: 15
-        run: |
-          set -euo pipefail
-
-          instance_name="$(terraform -chdir=infra/gcp-free-tier output -raw instance_name)"
-          zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
-          tailscale_hostname="${instance_name}"
-          ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
-
-          run_with_timeout() {
-            local seconds="$1"
-            shift
-            timeout --kill-after=30s "${seconds}" "$@"
-          }
-
-          # Poll the VM over IAP until cloud-init's startup script has finished. Each probe is a
-          # short, independently-timed SSH, so a slow cold boot (the startup script installs
-          # Docker + IB Gateway and can take several minutes on an e2-micro) or a transient
-          # IAP/SSH-key-propagation hang is retried with a fresh connection instead of blocking
-          # the whole step on one long-lived SSH. Returns within seconds on an already-warm VM.
-          wait_for_vm_ready() {
-            local deadline=$((SECONDS + 720)) attempt=0
-            until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command 'test -f /var/lib/cloud/instance/boot-finished'; do
-              if [ "${SECONDS}" -ge "${deadline}" ]; then
-                echo "VM ${instance_name} did not finish cloud-init within 12m." >&2
-                return 1
-              fi
-              attempt=$((attempt + 1))
-              echo "VM not ready yet (attempt ${attempt}); retrying in 15s..."
-              sleep 15
-            done
-          }
-
-          auth_key_file="$(mktemp)"
-          remote_script="$(mktemp)"
-          cleanup() {
-            rm -f "${auth_key_file}" "${remote_script}"
-          }
-          trap cleanup EXIT
-
-          printf '%s' "${TAILSCALE_AUTHKEY}" > "${auth_key_file}"
-          chmod 600 "${auth_key_file}"
-          cat > "${remote_script}" <<'SCRIPT'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          cleanup() {
-            rm -f /tmp/poma-tailscale-authkey /run/poma-tailscale-authkey /tmp/poma-configure-tailscale.sh
-          }
-          trap cleanup EXIT
-
-          run_with_timeout() {
-            local seconds="$1"
-            shift
-            timeout --kill-after=30s "${seconds}" "$@"
-          }
-
-          apt_locks_busy() {
-            if command -v fuser >/dev/null 2>&1; then
-              fuser /var/lib/dpkg/lock-frontend \
-                /var/lib/dpkg/lock \
-                /var/lib/apt/lists/lock \
-                /var/cache/apt/archives/lock >/dev/null 2>&1
-              return $?
-            fi
-
-            pgrep -f '(apt-get|apt.systemd.daily|dpkg|unattended-upgrade)' >/dev/null 2>&1
-          }
-
-          wait_for_apt() {
-            local context="${1:-apt operation}"
-            local waited_seconds=0
-            local max_wait_seconds=600
-
-            while apt_locks_busy; do
-              if [ "${waited_seconds}" -ge "${max_wait_seconds}" ]; then
-                echo "Timed out waiting for apt/dpkg locks before ${context}." >&2
-                exit 1
-              fi
-
-              echo "Waiting for apt/dpkg locks to be released before ${context}..."
-              sleep 10
-              waited_seconds=$((waited_seconds + 10))
-            done
-          }
-
-          apt_get_with_retry() {
-            local context="$1"
-            shift
-            local attempt=1
-            local max_attempts=6
-
-            while true; do
-              wait_for_apt "${context}"
-              if DEBIAN_FRONTEND=noninteractive run_with_timeout 10m \
-                apt-get -o DPkg::Lock::Timeout=300 "$@"; then
-                return 0
-              fi
-
-              if [ "${attempt}" -ge "${max_attempts}" ]; then
-                echo "apt-get ${context} failed after ${max_attempts} attempts." >&2
-                return 1
-              fi
-
-              echo "apt-get ${context} failed; retrying after lock/backoff (${attempt}/${max_attempts})..."
-              sleep 10
-              attempt=$((attempt + 1))
-            done
-          }
-
-          install_tailscale() {
-            install -d -m 0755 /usr/share/keyrings
-            curl --connect-timeout 10 --max-time 60 -fsSL \
-              https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg \
-              -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-            chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
-            curl --connect-timeout 10 --max-time 60 -fsSL \
-              https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list \
-              -o /etc/apt/sources.list.d/tailscale.list
-            chmod 0644 /etc/apt/sources.list.d/tailscale.list
-            apt_get_with_retry "update package indexes" update
-            apt_get_with_retry "install Tailscale" install -y tailscale
-          }
-
-          if ! command -v tailscale >/dev/null 2>&1; then
-            install_tailscale
-          fi
-
-          run_with_timeout 1m systemctl enable --now tailscaled
-          install -m 600 -o root -g root /tmp/poma-tailscale-authkey /run/poma-tailscale-authkey
-          auth_key="$(cat /run/poma-tailscale-authkey)"
-          run_with_timeout 2m tailscale up --auth-key="${auth_key}" --hostname="${TAILSCALE_HOSTNAME}" --accept-dns=false
-          run_with_timeout 30s tailscale status
-          SCRIPT
-
-          wait_for_vm_ready
-          run_with_timeout 2m gcloud compute scp "${auth_key_file}" "${instance_name}:/tmp/poma-tailscale-authkey" "${ssh_common[@]}"
-          run_with_timeout 2m gcloud compute scp "${remote_script}" "${instance_name}:/tmp/poma-configure-tailscale.sh" "${ssh_common[@]}"
-          run_with_timeout 8m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command \
-            "sudo env TAILSCALE_HOSTNAME='${tailscale_hostname}' bash /tmp/poma-configure-tailscale.sh"
-
       - name: Package application
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
         run: |
@@ -437,7 +279,11 @@ jobs:
             timeout --kill-after=30s "${seconds}" "$@"
           }
 
-          # Same resilient cold-boot/transient-hang-tolerant wait used by the Tailscale step.
+          # Poll the VM over IAP until cloud-init's startup script has finished. Each probe is a
+          # short, independently-timed SSH, so a slow cold boot (the startup script installs
+          # Docker + IB Gateway and can take several minutes on an e2-micro) or a transient
+          # IAP/SSH-key-propagation hang is retried with a fresh connection instead of blocking
+          # the whole step on one long-lived SSH. Returns within seconds on an already-warm VM.
           wait_for_vm_ready() {
             local deadline=$((SECONDS + 720)) attempt=0
             until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
