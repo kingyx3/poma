@@ -1,11 +1,10 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim AS runtime
-
-ARG APP_UID=1000
-ARG APP_GID=1000
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
 
 WORKDIR /app
 
@@ -16,8 +15,11 @@ RUN apt-get update \
 # Install third-party dependencies in a layer keyed only on project metadata, so routine
 # source changes don't reinstall pandas/numpy/etc. (very slow on the free-tier VM). A minimal
 # package stub lets the resolver read dependencies from pyproject without the real source.
+# BuildKit keeps the pip download/build cache outside the final image, so dependency-layer
+# rebuilds get faster without bloating runtime layers on the small persistent disk.
 COPY pyproject.toml README.md ./
-RUN pip install --upgrade pip \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip \
     && mkdir -p src/poma \
     && : > src/poma/__init__.py \
     && pip install . \
@@ -25,7 +27,11 @@ RUN pip install --upgrade pip \
 
 # Install the real package on top, without re-resolving the cached dependency layer.
 COPY src ./src
-RUN pip install --no-deps --force-reinstall .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-deps --force-reinstall .
+
+ARG APP_UID=1000
+ARG APP_GID=1000
 
 RUN groupadd --gid "${APP_GID}" appuser \
     && useradd \
