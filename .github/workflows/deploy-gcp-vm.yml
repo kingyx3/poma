@@ -311,8 +311,9 @@ jobs:
             sudo chmod 600 /opt/poma/.env
             sudo chown -R poma:poma /opt/poma
             cd /opt/poma
-            sudo python3 ops/scripts/install_ibc_config_helper.py
-            sudo sh ops/scripts/ensure_ibgateway_service.sh
+            # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
+            # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
+            # it out of the deploy keeps this step to app concerns only (build + smoke + cron).
             sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
             sudo -u poma crontab ops/cron/poma.cron
           '

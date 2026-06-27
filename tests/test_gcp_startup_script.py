@@ -3,42 +3,41 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STARTUP_SCRIPT = REPO_ROOT / "infra/gcp-free-tier/startup.sh"
 
+# The startup script is intentionally minimal host prep so cloud-init finishes quickly.
 REQUIRED_STARTUP_SNIPPETS = (
-    "cat >/etc/systemd/system/ibgateway.service",
-    "ExecStart=/usr/local/bin/poma-run-ib-gateway",
-    'exec "$${IBC_DIR}/gatewaystart.sh" -inline',
-    'gateway_executable="$$(find "$${IB_GATEWAY_DIR}" -type f -name ibgateway',
-    'exec "$${gateway_executable}"',
-    "Restart=always",
-    'IBC_INI": "/home/poma/ibc/config.ini"',
-    'TWS_PATH": tws_path',
-    'TWS_SETTINGS_PATH": "/home/poma/Jts"',
-    'LOG_PATH": "/home/poma/ibc/logs"',
-    (
-        "find \"$${IB_GATEWAY_DIR}\" -type d "
-        "-path '*/ibgateway/[0-9]*/jars'"
-    ),
-    (
-        'if ! find "$${IB_GATEWAY_DIR}" -type f '
-        '-name ibgateway -perm -111'
-    ),
-    'require_command Xvfb',
-    'require_command fluxbox',
-    'require_command x11vnc',
-    (
-        'install -d -m 700 -o poma -g poma '
-        '"$${IBC_HOME}" "$${IBC_HOME}/logs"'
-    ),
-    (
-        'install -m 600 -o poma -g poma '
-        '"$${IBC_DIR}/config.ini" "$${IBC_CONFIG}"'
-    ),
-    'chmod 600 "$${IBC_CONFIG}"',
+    "apt-get install -y ca-certificates cron curl python3",
+    "curl -fsSL https://get.docker.com | sh",
+    'useradd --create-home --shell /bin/bash "$${APP_USER}"',
+    'usermod -aG docker "$${APP_USER}"',
+    'mkdir -p \\',
+    '"$${APP_DIR}/data"',
+    "systemctl enable --now docker",
+    "systemctl enable --now cron",
+)
+
+# Heavy IB Gateway provisioning must NOT live in the boot path: it stalled cloud-init and
+# duplicated ops/scripts/repair_ib_gateway_runtime.py + install_ibc_config_helper.py, which the
+# IB Gateway Ops workflow runs after every deploy.
+FORBIDDEN_STARTUP_SNIPPETS = (
+    "ibgateway.service",
+    "poma-run-ib-gateway",
+    "poma-configure-ibc",
+    "IB_GATEWAY_INSTALLER_URL",
+    "gatewaystart.sh",
+    "Xvfb",
+    "x11vnc",
 )
 
 
-def test_gcp_startup_script_keeps_gateway_runtime_contracts() -> None:
+def test_gcp_startup_script_is_minimal_host_bootstrap() -> None:
     script = STARTUP_SCRIPT.read_text(encoding="utf-8")
 
     for snippet in REQUIRED_STARTUP_SNIPPETS:
-        assert snippet in script
+        assert snippet in script, snippet
+
+
+def test_gcp_startup_script_does_not_install_ib_gateway() -> None:
+    script = STARTUP_SCRIPT.read_text(encoding="utf-8")
+
+    for snippet in FORBIDDEN_STARTUP_SNIPPETS:
+        assert snippet not in script, snippet
