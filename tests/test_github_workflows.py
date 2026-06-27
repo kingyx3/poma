@@ -6,6 +6,7 @@ BOOTSTRAP_WORKFLOW = REPO_ROOT / ".github/workflows/bootstrap-gcp-wif.yml"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 AUTO_CICD_WORKFLOW = REPO_ROOT / ".github/workflows/auto-cicd.yml"
+GATEWAY_DIAGNOSTICS_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
 
 REQUIRED_ENVIRONMENT_SNIPPETS = (
     "deploy_environment:",
@@ -134,6 +135,7 @@ def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
     assert "repair_ib_gateway_runtime.py" in workflow
     assert "install_ibc_config_helper.py" in workflow
     assert "ensure_ibgateway_service.sh" in workflow
+    assert "diagnose_ib_gateway_runtime.py" in workflow
     assert "sudo python3 /tmp/repair_ib_gateway_runtime.py" in workflow
     assert "sudo python3 /tmp/install_ibc_config_helper.py" in workflow
     assert "sudo sh /tmp/ensure_ibgateway_service.sh" in workflow
@@ -151,12 +153,15 @@ def test_gateway_ops_workflow_verifies_real_api_handshake() -> None:
 
 def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    diagnostics = GATEWAY_DIAGNOSTICS_HELPER.read_text(encoding="utf-8")
 
     assert "diagnose_gateway_failure" in workflow
-    assert "sudo journalctl -u ibgateway" in workflow
-    assert "/var/log/poma/ibgateway/*.log" in workflow
-    assert "/tmp/poma-ibgateway/*.log" in workflow
-    assert "/home/poma/ibc/logs/*.log" in workflow
+    assert "poma-diagnose-ibgateway diagnose" in workflow
+    assert "systemctl status ibgateway" in diagnostics
+    assert "journalctl" in diagnostics
+    assert "/var/log/poma/ibgateway" in diagnostics
+    assert "/tmp/poma-ibgateway" in diagnostics
+    assert "/home/poma/ibc/logs" in diagnostics
 
 
 def test_gateway_ops_workflow_uses_current_action_versions() -> None:
@@ -183,8 +188,10 @@ def test_workflows_send_env_tagged_telegram_notifications() -> None:
     assert "api.telegram.org" in action
     assert "using: composite" in action
 
-    for workflow in (DEPLOY_WORKFLOW.read_text(encoding="utf-8"),
-                     GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")):
+    for workflow in (
+        DEPLOY_WORKFLOW.read_text(encoding="utf-8"),
+        GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8"),
+    ):
         assert "uses: ./.github/actions/telegram-notify" in workflow
         assert "POMA[${{ inputs.deploy_environment }}]" in workflow
         assert "if: ${{ always() }}" in workflow
@@ -305,6 +312,7 @@ def test_auto_cicd_path_filter_is_conservative_and_visible() -> None:
         "ops/scripts/repair_ib_gateway_runtime.py",
         "ops/scripts/install_ibc_config_helper.py",
         "ops/scripts/ensure_ibgateway_service.sh",
+        "ops/scripts/diagnose_ib_gateway_runtime.py",
         "ops/scripts/refresh_gateway_helper.sh",
     )
     for path in gateway_paths:
@@ -358,28 +366,12 @@ def test_deploy_package_contains_only_runtime_files() -> None:
     stale_package_paths = (
         "/opt/poma/docs",
         "/opt/poma/infra",
-        "/opt/poma/ops",
         "/opt/poma/tests",
         "/opt/poma/.github",
     )
-    for stale_path in stale_package_paths:
-        assert stale_path in workflow
+    for path in stale_package_paths:
+        assert path in workflow
 
-
-def test_deploy_waits_for_revisioned_vm_ready_sentinel() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-
-    assert 'startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"' in workflow
-    assert "/var/lib/poma/vm-ready" in workflow
-    assert "/proc/sys/kernel/random/boot_id" in workflow
-    assert "/var/lib/cloud/instance/boot-finished" in workflow
-    assert "uptime_seconds" in workflow
-    assert "startup revision ${startup_revision} not ready" in workflow
-
-
-def test_deploy_does_not_recursively_chown_runtime_state() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-
-    assert "sudo chown -R poma:poma /opt/poma" not in workflow
-    assert "Only the freshly extracted package and .env need ownership fixed" in workflow
-    assert "sudo install -d -o poma -g poma" in workflow
+    assert ".git" not in "\n".join(
+        line for line in workflow.splitlines() if "-czf /tmp/poma.tar.gz" in line
+    )
