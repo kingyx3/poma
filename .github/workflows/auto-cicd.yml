@@ -38,7 +38,7 @@ jobs:
       deploy_app: true
       tailscale_enabled: true
       trading_mode: paper
-      data_provider: fmp
+      data_provider: yahoo
       allow_live_trading: false
     secrets: inherit
 
