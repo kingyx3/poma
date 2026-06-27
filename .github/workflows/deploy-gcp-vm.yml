@@ -152,7 +152,7 @@ jobs:
           esac
           set_default UNIVERSE "us_top_market_cap"
           set_default RANK_LOOKBACK_DAYS "90"
-          set_default MAX_HOLDINGS "30"
+          set_default MAX_HOLDINGS "100"
           set_default PORTFOLIO_VALUE_USD "10000"
           set_default CASH_BUFFER_PCT "0.02"
           set_default MAX_POSITION_PCT "0.10"
