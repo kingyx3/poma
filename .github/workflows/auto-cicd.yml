@@ -86,6 +86,7 @@ jobs:
               ops/scripts/repair_ib_gateway_runtime.py|\
               ops/scripts/install_ibc_config_helper.py|\
               ops/scripts/ensure_ibgateway_service.sh|\
+              ops/scripts/diagnose_ib_gateway_runtime.py|\
               ops/scripts/refresh_gateway_helper.sh)
                 return 0
                 ;;
