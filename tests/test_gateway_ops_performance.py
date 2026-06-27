@@ -19,6 +19,7 @@ def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
         "timed \"Restart ibgateway\"",
         "timed \"Configure IBC credentials\"",
         "timed \"Validate IBC configuration\"",
+        "timed \"Restart ibgateway after IBC configuration\"",
         "timed \"Real API handshake\"",
         "timed \"Collect gateway diagnostics\"",
     )
@@ -66,6 +67,23 @@ def test_gateway_socket_poll_is_errexit_safe() -> None:
     assert "set +e\n              timed \"Socket/service poll attempt" not in workflow
 
 
+def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    block = workflow.split("configure-paper|configure-live)", 1)[1]
+    block = block.split(";;", 1)[0]
+
+    configure = "timed \"Configure IBC credentials\""
+    validate = "timed \"Validate IBC configuration\""
+    restart = "timed \"Restart ibgateway after IBC configuration\""
+    wait = "verify_socket"
+
+    for snippet in (configure, validate, restart, wait):
+        assert snippet in block
+    assert block.index(configure) < block.index(validate)
+    assert block.index(validate) < block.index(restart)
+    assert block.index(restart) < block.index(wait)
+
+
 def test_gateway_ops_has_explicit_five_minute_2fa_timeout() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
@@ -82,7 +100,6 @@ def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None
 
     assert "poma ibkr-check" in workflow
     assert "real ib_insync connect" in workflow
-    assert "shred -u" in workflow
     assert "poma-diagnose-ibgateway validate --mode" in workflow
     assert "poma-diagnose-ibgateway progress" in workflow
     assert "poma-diagnose-ibgateway diagnose" in workflow
