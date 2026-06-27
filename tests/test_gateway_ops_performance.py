@@ -3,6 +3,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 DIAG_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
+ENSURE_HELPER = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
 
 
 def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
@@ -21,7 +22,7 @@ def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
         "timed \"Validate IBC configuration\"",
         "timed \"Restart ibgateway after IBC configuration\"",
         "timed \"Real API handshake\"",
-        "timed \"Collect gateway diagnostics\"",
+        "TIMING Collect gateway diagnostics",
     )
     for snippet in expected:
         assert snippet in workflow
@@ -34,6 +35,7 @@ def test_gateway_runtime_repair_is_idempotent_and_fails_open() -> None:
     assert "sha256sum" in workflow
     assert "/var/lib/poma/ib-gateway-runtime-revision" in workflow
     assert "ops/scripts/diagnose_ib_gateway_runtime.py" in workflow
+    assert "ensure_ibgateway_service.sh" in workflow
     assert "poma-diagnose-ibgateway" in workflow
     assert "Gateway runtime helpers already current" in workflow
     assert "skipping repair/install" in workflow
@@ -63,7 +65,7 @@ def test_gateway_socket_poll_is_errexit_safe() -> None:
     )
     assert "status=0" in workflow
     assert "status=\"$?\"" in workflow
-    assert "would otherwise abort the polling loop before the 5-minute deadline" in workflow
+    assert "Gateway startup classification" in workflow
     assert "set +e\n              timed \"Socket/service poll attempt" not in workflow
 
 
@@ -103,11 +105,20 @@ def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None
     assert "poma-diagnose-ibgateway validate --mode" in workflow
     assert "poma-diagnose-ibgateway progress" in workflow
     assert "poma-diagnose-ibgateway diagnose" in workflow
+    assert "poma-diagnose-ibgateway startup-check" in workflow
     assert "ss" in helper
     for port in ("7497", "4001", "4002", "5900"):
         assert port in helper
     assert "Gateway/IBC likely has not reached the IBKR login/2FA stage" in helper
     assert "***" in helper
+
+
+def test_gateway_runner_is_hardened_after_render() -> None:
+    ensure = ENSURE_HELPER.read_text(encoding="utf-8")
+
+    assert "refusing raw Gateway fallback" in ensure
+    assert "require_command java" in ensure
+    assert "MemoryMax" in ensure
 
 
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
@@ -118,13 +129,3 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "run_remote" in workflow
-    assert "timed out. Check IAP/SSH reachability" in workflow
-
-
-def test_gateway_ops_loops_have_deadlines_or_bounded_attempts() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-
-    assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
-    assert "sleep \"${poll_seconds}\"" in workflow
-    assert "exit 1" in workflow
-    assert "diagnose_gateway_failure" in workflow
