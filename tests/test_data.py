@@ -31,14 +31,13 @@ def _client(monkeypatch, router, **overrides) -> FmpMarketDataClient:
         return FakeResponse(router(path, params or {}))
 
     monkeypatch.setattr("poma.data.requests.Session.get", fake_get)
-    client = FmpMarketDataClient(
-        make_settings(
-            DATA_PROVIDER="fmp",
-            FMP_API_KEY="key",
-            UNIVERSE="sp500",
-            **overrides,
-        )
-    )
+    settings_values: dict[str, object] = {
+        "DATA_PROVIDER": "fmp",
+        "FMP_API_KEY": "key",
+        "UNIVERSE": "sp500",
+    }
+    settings_values.update(overrides)
+    client = FmpMarketDataClient(make_settings(**settings_values))
     client.calls = calls  # type: ignore[attr-defined]
     return client
 
