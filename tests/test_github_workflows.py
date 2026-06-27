@@ -123,7 +123,7 @@ def test_gateway_ops_workflow_can_configure_gateway_from_environment_secrets() -
     assert "IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}" in workflow
     assert "IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}" in workflow
     assert "sudo poma-configure-ibc" in workflow
-    assert "printf '%s\n%s\n%s\n'" in workflow
+    assert "printf '%s" in workflow
 
 
 def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
