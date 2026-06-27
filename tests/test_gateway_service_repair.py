@@ -169,7 +169,10 @@ def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval" in workflow
     assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
-    assert "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then" in workflow
+    assert (
+        "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then"
+        in workflow
+    )
     assert "systemctl is-active --quiet ibgateway" in workflow
     assert "Waiting for IBKR 2FA approval / Gateway API socket" in workflow
     assert "IBKR 2FA approval or Gateway API readiness timed out" in workflow
