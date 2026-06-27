@@ -3,6 +3,7 @@ import pandas as pd
 from poma.strategy import (
     build_market_cap_targets,
     rank_by_market_cap,
+    select_rank_improvers,
     select_top_market_cap,
 )
 
@@ -34,9 +35,31 @@ def test_select_top_market_cap_caps_holdings() -> None:
     assert len(selected) == 2
 
 
+def test_select_rank_improvers_compares_current_rank_to_history() -> None:
+    historical = pd.DataFrame(
+        [
+            {"ticker": "A", "market_cap": 400},
+            {"ticker": "B", "market_cap": 300},
+            {"ticker": "C", "market_cap": 200},
+        ]
+    )
+    current = pd.DataFrame(
+        [
+            {"ticker": "A", "market_cap": 200},
+            {"ticker": "B", "market_cap": 500},
+            {"ticker": "C", "market_cap": 300},
+        ]
+    )
+
+    selected = select_rank_improvers(current, historical, max_holdings=1)
+
+    assert selected["ticker"].tolist() == ["B"]
+    assert selected.iloc[0]["previous_market_cap_rank"] == 2
+    assert selected.iloc[0]["market_cap_rank"] == 1
+    assert selected.iloc[0]["rank_improvement_score"] == 1
+
+
 def test_build_market_cap_targets_enforces_cap_when_it_binds_on_all_names() -> None:
-    # 4 equal names with a 10% cap can't be fully invested under the cap; weights must stay at
-    # the cap (rest is cash), not be renormalized back to 25% each.
     selected = pd.DataFrame([{"ticker": t, "market_cap": 100} for t in "ABCD"])
     targets = build_market_cap_targets(selected, 1_000, 0.0, 0.10)
     assert all(t.target_weight <= 0.10 + 1e-9 for t in targets)
