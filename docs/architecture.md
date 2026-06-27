@@ -6,7 +6,7 @@
 Ubuntu host
   -> cron every 5 minutes
   -> POMA monitor command
-  -> modular market-data provider
+  -> Yahoo/yfinance market data
   -> local snapshot store
   -> IB Gateway on same host
   -> IBKR
@@ -14,17 +14,15 @@ Ubuntu host
 
 The host can be any small VPS. The included Terraform path provisions a GCP free-tier-aligned `e2-micro` VM for this same one-host design.
 
-The app checks the Nasdaq/NYSE market calendar on every run and only rebalances when:
+The app checks the market calendar on every run and only rebalances when:
 
 1. Today is a US trading day.
 2. The market has been open for at least `REBALANCE_AFTER_OPEN_MINUTES`.
 3. The local state file says today's rebalance has not already completed.
 
-This avoids hardcoding Singapore or New York cron times and handles daylight saving time through the market-calendar library.
-
 ## Market data provider boundary
 
-The strategy code does not depend directly on Yahoo, FMP, or any future vendor. Providers implement the normalized `MarketDataClient` contract and return snapshots with at least:
+The strategy code consumes normalized snapshots and does not depend directly on the data adapter implementation. The production adapter is Yahoo/yfinance and returns snapshots with at least:
 
 ```text
 ticker
@@ -32,7 +30,7 @@ market_cap
 price
 ```
 
-Optional provider fields such as `name`, `exchange`, `float_shares`, `shares_outstanding`, `source`, and `as_of` are preserved in the snapshot store when available.
+Optional provider fields such as `name`, `exchange`, `volume`, `dollar_volume`, `float_shares`, `shares_outstanding`, `source`, and `as_of` are preserved when available.
 
 Default provider:
 
@@ -41,14 +39,7 @@ DATA_PROVIDER=yahoo
 UNIVERSE=us_top_market_cap
 ```
 
-Fallback/paid provider:
-
-```text
-DATA_PROVIDER=fmp
-UNIVERSE=sp500 or nasdaq100
-```
-
-Future providers should be added as a new `MarketDataClient` implementation and registered in `build_data_client()`; engine and strategy code should not change.
+`DATA_PROVIDER=fixture` remains available for tests and PR dry-runs. Future providers should be added as a new `MarketDataClient` implementation and registered in `build_data_client()`; engine and strategy code should not change.
 
 ## GCP e2-micro deployment path
 
@@ -61,29 +52,7 @@ GitHub Actions
   -> install cron
 ```
 
-Terraform creates only:
-
-- One `e2-micro` VM.
-- One standard persistent boot disk, capped at 30 GB.
-- One dedicated VPC/subnet.
-- One SSH firewall rule limited to the IAP TCP forwarding range.
-
-The deploy path intentionally does not use Artifact Registry, Secret Manager, Cloud Run, Cloud Scheduler, Pub/Sub, Cloud NAT, Redis, or a managed database.
-
-## Why this is simpler and cheaper
-
-The only always-on component is the host you already need for IB Gateway. Docker images are built locally on the host, `.env` is a local file created from GitHub Actions, and cron remains the scheduler.
-
-Removed or avoided by design:
-
-- Cloud Run
-- Cloud Scheduler
-- Artifact Registry
-- Secret Manager
-- Remote executor API
-- Multi-service deployment machinery
-
-This eliminates the main sources of accidental cloud bill growth for a personal deployment.
+Terraform creates one small VM, one standard boot disk, one dedicated VPC/subnet, and one SSH firewall rule limited to the IAP TCP forwarding range.
 
 ## Runtime files
 
@@ -106,4 +75,3 @@ reports/*.json                   # generated rebalance reports
 | Accidental live trading | `ALLOW_LIVE_TRADING=true` required for live mode. |
 | Missing deploy config | CI/CD `.env` rendering fails before deployment. |
 | Public SSH exposure | Terraform only allows SSH through IAP TCP forwarding. |
-| Cloud cost growth | One VM, no registry, no secret store, no scheduler, no managed database. |
