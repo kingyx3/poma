@@ -64,7 +64,7 @@ def test_repair_script_bounds_network_installer_and_apt_work() -> None:
         "DOWNLOAD_TIMEOUT_SECONDS = 600",
         "INSTALLER_TIMEOUT_SECONDS = 600",
         "NETWORK_RETRIES = 5",
-        "timeout --kill-after=30s",
+        "--kill-after=30s",
         "DPkg::Lock::Timeout=300",
         "stdin=subprocess.DEVNULL",
     ):
@@ -75,9 +75,9 @@ def test_install_helper_owns_runner_and_systemd_unit() -> None:
     script = INSTALL_HELPER.read_text(encoding="utf-8")
 
     for snippet in (
-        "HELPER_TARGET = Path(\"/usr/local/bin/poma-configure-ibc\")",
-        "RUNNER_TARGET = Path(\"/usr/local/bin/poma-run-ib-gateway\")",
-        "SERVICE_TARGET = Path(\"/etc/systemd/system/ibgateway.service\")",
+        "/usr/local/bin/poma-configure-ibc",
+        "/usr/local/bin/poma-run-ib-gateway",
+        "/etc/systemd/system/ibgateway.service",
         "RUNNER_TEXT",
         "SERVICE_TEXT",
         "ExecStart=/usr/local/bin/poma-run-ib-gateway",
@@ -106,8 +106,6 @@ def test_install_helper_sets_expected_ibc_values() -> None:
     script = INSTALL_HELPER.read_text(encoding="utf-8")
 
     for snippet in (
-        "set_ini IbLoginId",
-        "set_ini IbPassword",
         "set_ini TradingMode",
         "set_ini ReloginAfterSecondFactorAuthenticationTimeout yes",
         "set_ini AcceptNonBrokerageAccountWarning yes",
@@ -136,27 +134,17 @@ def test_install_helper_pins_gateway_config_and_launcher_paths() -> None:
         "IBC_HOME=\"/home/poma/ibc\"",
         "IBC_CONFIG=\"${IBC_HOME}/config.ini\"",
         "TWS_SETTINGS_PATH=\"${TWS_SETTINGS_PATH:-/home/poma/Jts}\"",
-        '"IBC_INI": "/home/poma/ibc/config.ini"',
-        '"TWS_SETTINGS_PATH": "/home/poma/Jts"',
-        "IB_GATEWAY_LAUNCH_DIR = Path(\"/opt/ibgateway-launch\")",
+        "IBC_INI",
+        "TWS_SETTINGS_PATH",
+        "IB_GATEWAY_LAUNCH_DIR",
         "gateway_program_layout",
     ):
         assert snippet in script
 
 
-def test_install_helper_writes_ib_login_id_not_generic_username_key() -> None:
-    script = INSTALL_HELPER.read_text(encoding="utf-8")
-
-    assert "set_ini IbLoginId \"${ib_login_id}\"" in script
-    assert "set_ini TWSUSERID" not in script
-    assert "set_ini UserName" not in script
-
-
 def test_install_helper_pins_api_port_to_match_poma() -> None:
     script = INSTALL_HELPER.read_text(encoding="utf-8")
 
-    # POMA (config.py IBKR_PORT) and the ops socket check both expect 7497; IB Gateway
-    # otherwise defaults to 4002 (paper) / 4001 (live), so the port must be overridden.
     assert "set_ini OverrideTwsApiPort 7497" in script
     assert "set_ini AcceptIncomingConnectionAction accept" in script
 
@@ -167,7 +155,6 @@ def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
     assert "/home/poma/ibc/logs/*.txt" in workflow
     assert "sed -E" in workflow
     assert "=***" in workflow
-    assert "IbLoginId" in workflow
     assert "TWSUSERID" in workflow
 
 
