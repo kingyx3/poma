@@ -267,6 +267,7 @@ jobs:
             src \
             ops/cron \
             ops/scripts/deploy.sh
+          echo "Packaged runtime archive: $(du -h /tmp/poma.tar.gz | awk '{print $1}')"
 
       - name: Upload and install on VM
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
@@ -278,6 +279,21 @@ jobs:
           zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
           startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"
           ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+          step_start="${SECONDS}"
+
+          timed() {
+            local label="$1" start status
+            shift
+            start="${SECONDS}"
+            echo "::group::${label}"
+            set +e
+            "$@"
+            status="$?"
+            set -e
+            echo "::endgroup::"
+            echo "TIMING ${label}: $((SECONDS - start))s (status=${status})"
+            return "${status}"
+          }
 
           run_with_timeout() {
             local seconds="$1"
@@ -286,15 +302,13 @@ jobs:
           }
 
           # Poll the VM over IAP until the POMA startup readiness sentinel matches this
-          # deploy's startup revision. Each probe is a
-          # short, independently-timed SSH, so a cold boot (the minimal startup installs Docker +
-          # cron and writes /var/lib/poma/vm-ready with the current boot id) or a transient
-          # IAP/SSH-key-propagation hang is
-          # retried with a fresh connection. If an older VM has no matching sentinel but cloud-init
-          # has been boot-finished for at least 2 minutes, continue so deploy fails fast with the
-          # concrete Docker/app error instead of spending the whole step polling readiness.
-          # Returns within seconds on an
-          # already-warm VM.
+          # deploy's startup revision. Each probe is a short, independently timed SSH, so a cold
+          # boot (the minimal startup installs Docker + cron and writes /var/lib/poma/vm-ready
+          # with the current boot id) or a transient IAP/SSH-key-propagation hang is retried with
+          # a fresh connection. If an older VM has no matching sentinel but cloud-init has been
+          # boot-finished for at least 2 minutes, continue so deploy fails fast with the concrete
+          # Docker/app error instead of spending the whole step polling readiness. Returns within
+          # seconds on an already-warm VM.
           wait_for_vm_ready() {
             local deadline=$((SECONDS + 240)) attempt=0
             until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
@@ -339,19 +353,35 @@ jobs:
             done
           }
 
-          ensure_vm_ready
+          timed "VM readiness" ensure_vm_ready
 
-          retry_with_backoff 3m "App package upload" 3 \
+          timed "App package upload" retry_with_backoff 3m "App package upload" 3 \
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
-          retry_with_backoff 2m "Environment upload" 3 \
+          timed "Environment upload" retry_with_backoff 2m "Environment upload" 3 \
             gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
 
-          run_with_timeout 25m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
+          timed "Remote install, Docker build, smoke, cron" run_with_timeout 25m \
+            gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
             set -euo pipefail
-            sudo mkdir -p /opt/poma
+
+            remote_started="$(date +%s)"
+            remote_timed() {
+              local label="$1" status start
+              shift
+              start="$(date +%s)"
+              echo "REMOTE TIMING BEGIN ${label}"
+              set +e
+              "$@"
+              status="$?"
+              set -e
+              echo "REMOTE TIMING END ${label}: $(( $(date +%s) - start ))s (status=${status})"
+              return "${status}"
+            }
+
+            remote_timed "Prepare app directory" sudo mkdir -p /opt/poma
             # Remove files owned by the deploy package before extracting the trimmed runtime set.
             # Preserve .env plus runtime data/report/state/log directories across deploys.
-            sudo rm -rf \
+            remote_timed "Remove old deployed package files" sudo rm -rf \
               /opt/poma/.dockerignore \
               /opt/poma/.git \
               /opt/poma/.github \
@@ -364,18 +394,18 @@ jobs:
               /opt/poma/pyproject.toml \
               /opt/poma/src \
               /opt/poma/tests
-            sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
-            sudo mv /tmp/poma.env /opt/poma/.env
-            sudo chmod 600 /opt/poma/.env
-            sudo install -d -o poma -g poma \
+            remote_timed "Extract application package" sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
+            remote_timed "Install rendered environment" sudo mv /tmp/poma.env /opt/poma/.env
+            remote_timed "Secure rendered environment" sudo chmod 600 /opt/poma/.env
+            remote_timed "Ensure runtime state directories" sudo install -d -o poma -g poma \
               /opt/poma/data \
               /opt/poma/logs \
               /opt/poma/reports \
               /opt/poma/state
             # Keep deploy fast on long-lived VMs: do not recursively chown data/reports/state/logs.
             # Only the freshly extracted package and .env need ownership fixed on each deploy.
-            sudo chown poma:poma /opt/poma /opt/poma/.env
-            sudo chown -R poma:poma \
+            remote_timed "Fix package ownership" sudo chown poma:poma /opt/poma /opt/poma/.env
+            remote_timed "Fix extracted file ownership" sudo chown -R poma:poma \
               /opt/poma/.dockerignore \
               /opt/poma/Dockerfile \
               /opt/poma/README.md \
@@ -387,9 +417,12 @@ jobs:
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (build + smoke + cron).
-            sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
-            sudo -u poma crontab ops/cron/poma.cron
+            remote_timed "Docker build and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
+            remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
+            echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
+
+          echo "TIMING Upload and install on VM total: $((SECONDS - step_start))s"
 
       - name: Notify Telegram (deployment result)
         if: ${{ always() }}
