@@ -56,7 +56,10 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
 def test_gateway_socket_poll_is_errexit_safe() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then" in workflow
+    assert (
+        "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then"
+        in workflow
+    )
     assert "status=0" in workflow
     assert "status=\"$?\"" in workflow
     assert "would otherwise abort the polling loop before the 5-minute deadline" in workflow
@@ -105,6 +108,6 @@ def test_gateway_ops_loops_have_deadlines_or_bounded_attempts() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
     assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
-    assert "sleep \"${poll_seconds}" in workflow
+    assert "sleep \"${poll_seconds}\"" in workflow
     assert "exit 1" in workflow
     assert "diagnose_gateway_failure" in workflow
