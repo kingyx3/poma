@@ -80,15 +80,32 @@ def select_top_market_cap(current: pd.DataFrame, max_holdings: int) -> pd.DataFr
     return rank_by_market_cap(current).head(max_holdings)
 
 
-def select_rank_improvers(
+def _zscore(values: pd.Series) -> pd.Series:
+    """Standardize to mean 0 / std 1, returning zeros when the series has no spread."""
+    std = float(values.std(ddof=0))
+    if std == 0.0 or pd.isna(std):
+        return pd.Series(0.0, index=values.index)
+    return (values - values.mean()) / std
+
+
+def select_by_combined_factor(
     current: pd.DataFrame,
     historical: pd.DataFrame,
     max_holdings: int,
 ) -> pd.DataFrame:
-    """Select names with the strongest market-cap-rank improvement versus history.
+    """Select names by an equal-weighted blend of market-cap size and rank momentum.
 
-    Rank 1 is the largest company. A positive score means the current rank number is smaller
-    than the historical rank number, so the company moved up the market-cap ranking.
+    Two factors are combined so the strategy favours companies that are both large and climbing:
+
+    * ``size`` -- larger companies score higher. Market cap is heavily right-skewed, so the
+      market-cap *rank* (1 = largest) is used instead of the raw cap; that keeps the size factor on
+      the same uniform scale as momentum rather than letting a few mega-caps swamp the blend.
+    * ``momentum`` -- companies that climbed the market-cap ranking versus the lookback snapshot
+      score higher. A positive ``rank_improvement_score`` means the current rank number is smaller
+      than the historical one, i.e. the company moved up.
+
+    Each factor is z-scored and summed with equal weight to form ``combined_score``; the top
+    ``max_holdings`` names by that score are selected.
     """
     if max_holdings <= 0:
         raise ValueError("max_holdings must be positive")
@@ -107,8 +124,15 @@ def select_rank_improvers(
     )
     merged["previous_market_cap_rank"] = merged["previous_market_cap_rank"].astype(int)
     merged["rank_improvement_score"] = merged["previous_market_cap_rank"] - merged["market_cap_rank"]
+
+    # Smaller market-cap rank = larger company, so negate it before z-scoring so that "bigger" maps
+    # to a higher score, matching momentum's "higher is better" orientation.
+    merged["size_score"] = _zscore(-merged["market_cap_rank"].astype(float))
+    merged["momentum_score"] = _zscore(merged["rank_improvement_score"].astype(float))
+    merged["combined_score"] = merged["size_score"] + merged["momentum_score"]
+
     return merged.sort_values(
-        ["rank_improvement_score", "market_cap_rank"],
+        ["combined_score", "market_cap_rank"],
         ascending=[False, True],
     ).head(max_holdings)
 
@@ -138,17 +162,24 @@ def _apply_max_weight_cap(weights: pd.Series, max_weight: float) -> pd.Series:
     return capped / total if total > 1.0 else capped
 
 
-def build_market_cap_targets(
+def build_equal_weight_targets(
     selected: pd.DataFrame,
     portfolio_value_usd: float,
     cash_buffer_pct: float,
     max_position_pct: float,
 ) -> list[TargetPosition]:
+    """Allocate the investable value equally across the selected names.
+
+    Every constituent targets ``1 / N`` of the investable value. When that equal weight would
+    exceed ``max_position_pct`` (i.e. the basket is small), the cap binds on every name and the
+    uninvested remainder is held as cash rather than concentrated into fewer positions.
+    """
     if selected.empty:
         return []
     investable_value = portfolio_value_usd * (1 - cash_buffer_pct)
-    market_caps = selected.set_index("ticker")["market_cap"]
-    raw_weights = market_caps / selected["market_cap"].sum()
+    tickers = selected["ticker"].astype(str).tolist()
+    equal_weight = 1.0 / len(tickers)
+    raw_weights = pd.Series(equal_weight, index=tickers)
     weights = _apply_max_weight_cap(raw_weights, max_position_pct)
     return [
         TargetPosition(
@@ -156,5 +187,5 @@ def build_market_cap_targets(
             target_weight=float(weight),
             target_notional=float(weight * investable_value),
         )
-        for ticker, weight in weights.sort_values(ascending=False).items()
+        for ticker, weight in weights.items()
     ]

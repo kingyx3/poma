@@ -15,8 +15,8 @@ from poma.risk import (
     validate_targets,
 )
 from poma.strategy import (
-    build_market_cap_targets,
-    select_rank_improvers,
+    build_equal_weight_targets,
+    select_by_combined_factor,
     select_top_market_cap,
 )
 
@@ -66,8 +66,8 @@ class RebalanceEngine:
                     "falling back to current market-cap selection"
                 )
         else:
-            selected = select_rank_improvers(current, historical, settings.max_holdings)
-        targets = build_market_cap_targets(
+            selected = select_by_combined_factor(current, historical, settings.max_holdings)
+        targets = build_equal_weight_targets(
             selected=selected,
             portfolio_value_usd=settings.portfolio_value_usd,
             cash_buffer_pct=settings.cash_buffer_pct,

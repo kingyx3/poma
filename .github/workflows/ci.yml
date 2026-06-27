@@ -1,9 +1,9 @@
 name: CI
 
+# Runs on pull requests only. Pushes to main are handled by Auto CI/CD, which deploys; tests
+# and lint gate the PR before it can merge.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
