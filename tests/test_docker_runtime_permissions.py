@@ -24,3 +24,10 @@ def test_deploy_script_builds_container_with_current_host_user() -> None:
     assert '--build-arg "APP_UID=${POMA_UID}"' in script
     assert '--build-arg "APP_GID=${POMA_GID}"' in script
     assert 'if [ ! -w "${dir}" ]; then' in script
+
+
+def test_dockerignore_keeps_runtime_build_context_minimal() -> None:
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+    for entry in (".env", ".env.*", ".git", ".github", "docs", "tests", "infra", "ops", "reports", "state", "data", "logs"):
+        assert entry in dockerignore

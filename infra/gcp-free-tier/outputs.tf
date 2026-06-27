@@ -22,3 +22,8 @@ output "ssh_command" {
   description = "IAP SSH command for manual access."
   value       = "gcloud compute ssh ${google_compute_instance.poma.name} --zone ${google_compute_instance.poma.zone} --tunnel-through-iap"
 }
+
+output "startup_revision" {
+  description = "Revision string written by startup.sh to /var/lib/poma/vm-ready after host bootstrap succeeds."
+  value       = local.startup_revision
+}

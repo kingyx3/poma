@@ -259,3 +259,24 @@ def test_no_workflow_references_tailscale() -> None:
         AUTO_CICD_WORKFLOW,
     ):
         assert "tailscale" not in workflow.read_text(encoding="utf-8").lower()
+
+
+def test_deploy_package_contains_only_runtime_files() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "-czf /tmp/poma.tar.gz" in workflow
+    assert "--exclude='__pycache__'" in workflow
+    assert "--exclude='*.pyc'" in workflow
+    for entry in (".dockerignore", "Dockerfile", "docker-compose.yml", "pyproject.toml", "src", "ops/cron", "ops/scripts/deploy.sh"):
+        assert entry in workflow
+    for stale_path in ("/opt/poma/docs", "/opt/poma/infra", "/opt/poma/tests", "/opt/poma/.github"):
+        assert stale_path in workflow
+
+
+def test_deploy_waits_for_revisioned_vm_ready_sentinel() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"' in workflow
+    assert "/var/lib/poma/vm-ready" in workflow
+    assert "/proc/sys/kernel/random/boot_id" in workflow
+    assert "startup revision ${startup_revision} not ready" in workflow
