@@ -5,6 +5,7 @@ REPAIR_SCRIPT = REPO_ROOT / "ops/scripts/repair_ib_gateway_runtime.py"
 INSTALL_HELPER = REPO_ROOT / "ops/scripts/install_ibc_config_helper.py"
 OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 SERVICE_SCRIPT = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
+DIAG_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
 
 
 def test_repair_script_installs_current_runtime_components() -> None:
@@ -151,11 +152,14 @@ def test_install_helper_pins_api_port_to_match_poma() -> None:
 
 def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
     workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
+    helper = DIAG_HELPER.read_text(encoding="utf-8")
 
-    assert "/home/poma/ibc/logs/*.txt" in workflow
-    assert "sed -E" in workflow
-    assert "=***" in workflow
-    assert "TWSUSERID" in workflow
+    assert "poma-diagnose-ibgateway diagnose" in workflow
+    assert "poma-diagnose-ibgateway progress" in workflow
+    assert "poma-diagnose-ibgateway validate --mode" in workflow
+    assert "/home/poma/ibc/logs" in helper
+    assert "=***" in helper
+    assert "redact" in helper
 
 
 def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
