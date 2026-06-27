@@ -14,6 +14,17 @@ APP_DIR="${app_dir}"
 
 export DEBIAN_FRONTEND=noninteractive
 
+# The 1 GB e2-micro has no memory headroom for IB Gateway's JVM (~850 MB) plus Docker image builds
+# and the pandas app. OOM kills were wedging the VM (dead SSH, not recoverable by a reboot). Add a
+# 2 GB swap file so memory pressure pages to disk instead of killing the box.
+if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
+  fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+fi
+
 apt-get update
 apt-get install -y ca-certificates cron curl python3
 

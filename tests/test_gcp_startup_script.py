@@ -7,6 +7,9 @@ STARTUP_SCRIPT = REPO_ROOT / "infra/gcp-free-tier/startup.sh"
 REQUIRED_STARTUP_SNIPPETS = (
     "apt-get install -y ca-certificates cron curl python3",
     "curl -fsSL https://get.docker.com | sh",
+    # Swap keeps the 1 GB e2-micro from OOM-wedging under IB Gateway + Docker + the app.
+    "mkswap /swapfile",
+    "swapon /swapfile",
     'useradd --create-home --shell /bin/bash "$${APP_USER}"',
     'usermod -aG docker "$${APP_USER}"',
     'mkdir -p \\',
