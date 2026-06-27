@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "poma"
 version = "0.1.0"
-description = "Simple S&P 500 long-only rebalancer for a single VPS with IBKR."
+description = "US top-500 dual-score rebalancer for a single VPS with IBKR."
 requires-python = ">=3.11"
 dependencies = [
   "ib-insync>=0.9.86",

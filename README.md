@@ -1,4 +1,4 @@
-# POMA — Simple US Top-500 Rebalancer
+# POMA — US Top-500 Dual-Score Rebalancer
 
 POMA is a low-cost Python scaffold for a personal long-only US large-cap strategy.
 
@@ -6,16 +6,17 @@ POMA is a low-cost Python scaffold for a personal long-only US large-cap strateg
 
 ```text
 Universe: Yahoo Finance US top 500 by current market cap
+Deduplication: one ticker per company/share-class family, preferring the most liquid class
 Lookback: 90 days
-Factors: market-cap size + rank momentum (previous_rank - current_rank), each z-scored
+Factors: market-cap size + rank-rising velocity (previous_rank - current_rank), each z-scored
 Score: equal-weighted sum of the two factors (combined_score)
-Selection: top 100 stocks by combined_score
-Weighting: equal-weighted, with risk caps
+Selection: top 100 company stocks by combined_score
+Weighting: equal-weighted across the selected 100 names, with risk caps
 ```
 
-Rank 1 is the largest company by market cap, so a positive momentum score means the stock moved up the market-cap ranking over the 90-day window. The size and momentum factors are each standardized (z-scored) and summed with equal weight, so the strategy favours companies that are both large and climbing. Selected names are held at equal weight (`1/N`), with the per-position cap still binding.
+Rank 1 is the largest company by market cap, so a positive rank-rising velocity score means the stock moved up the market-cap ranking over the 90-day window. The size and rank-rising velocity factors are each standardized (z-scored) and summed with equal weight, so the strategy favours companies that are both large and climbing. Selected names are held at equal weight (`1/N`), with the per-position cap still binding.
 
-The production market-data provider is `DATA_PROVIDER=yahoo`. Future providers should implement the normalized `current_universe_snapshot()` contract without changing strategy or engine code.
+The production market-data provider is `DATA_PROVIDER=yahoo`. It requests the largest 500 US-listed equities by current market cap, normalizes the feed into the provider contract, deduplicates share classes at issuer level when issuer/name metadata is present, and falls back to exact market-cap bucket dedupe when issuer metadata is unavailable. Future providers should implement the normalized `current_universe_snapshot()` contract without changing strategy or engine code.
 
 Yahoo's free feed does not provide a clean bulk historical market-cap endpoint. POMA stores daily point-in-time snapshots under `DATA_DIR/market_snapshots/` and can backfill estimated historical market caps from Yahoo close prices using current share-count information.
 
