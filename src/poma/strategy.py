@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from poma.models import TargetPosition
@@ -13,6 +15,11 @@ _LIQUIDITY_COLUMNS = [
     "float_shares",
     "shares_outstanding",
 ]
+
+_ISSUER_SUFFIX_PATTERN = re.compile(
+    r"\b(incorporated|inc|corp|corporation|co|company|plc|ltd|limited|class|cl|ordinary|shares?|stock)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def _liquidity_score(snapshot: pd.DataFrame) -> pd.Series:
@@ -29,13 +36,51 @@ def _liquidity_score(snapshot: pd.DataFrame) -> pd.Series:
     return score.fillna(0.0)
 
 
-def deduplicate_share_classes(snapshot: pd.DataFrame) -> pd.DataFrame:
-    """Keep one ticker per exact market-cap bucket, preferring the most liquid share class.
+def _normalise_issuer_name(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    normalised = str(value).strip().lower()
+    if not normalised:
+        return None
+    normalised = normalised.replace("&", " and ")
+    normalised = re.sub(r"[^a-z0-9]+", " ", normalised)
+    normalised = _ISSUER_SUFFIX_PATTERN.sub(" ", normalised)
+    normalised = re.sub(r"\b[abc]\b", " ", normalised)
+    normalised = re.sub(r"\s+", " ", normalised).strip()
+    return normalised or None
 
-    Some stock-level screeners can return multiple share classes for one company with the same
-    company-level market cap. Ranking those rows separately double-counts the company and can
-    allocate to two share classes. Exact duplicate market caps are treated as a duplicate issuer
-    bucket; the row with the best liquidity proxy is retained.
+
+def _issuer_dedupe_keys(frame: pd.DataFrame) -> pd.Series:
+    """Return issuer-level dedupe keys while preserving a safe market-cap fallback.
+
+    Yahoo-style screeners can return multiple share classes for the same company. When an
+    issuer/name field is present, prefer that as the dedupe key so share classes such as GOOG/GOOGL
+    or BRK.A/BRK.B collapse to one row. If the feed lacks an issuer/name field, fall back to exact
+    market-cap buckets, because same-company share classes commonly carry the same company-level
+    market cap in screeners.
+    """
+    if "issuer_id" in frame.columns:
+        issuer_ids = frame["issuer_id"].astype(str).str.strip().str.lower()
+        return issuer_ids.where(issuer_ids != "", "market_cap:" + frame["market_cap"].astype(str))
+
+    if "name" in frame.columns:
+        issuer_names = frame["name"].map(_normalise_issuer_name)
+        return issuer_names.where(
+            issuer_names.notna(),
+            "market_cap:" + frame["market_cap"].astype(str),
+        )
+
+    return "market_cap:" + frame["market_cap"].astype(str)
+
+
+def deduplicate_share_classes(snapshot: pd.DataFrame) -> pd.DataFrame:
+    """Keep one ticker per issuer/share-class family, preferring the most liquid row.
+
+    The strategy must rank companies, not every listed share class independently. If the feed
+    provides issuer/name metadata, rows are collapsed by normalized issuer key. If it does not,
+    exact duplicate market-cap buckets are treated as likely duplicate issuer/share-class rows. The
+    row with the strongest liquidity proxy is retained so the selected ticker is the more tradable
+    share class.
     """
     if snapshot.empty:
         return snapshot.copy()
@@ -48,14 +93,15 @@ def deduplicate_share_classes(snapshot: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
 
+    frame["_issuer_dedupe_key"] = _issuer_dedupe_keys(frame)
     frame["_liquidity_score"] = _liquidity_score(frame)
     frame["_original_order"] = range(len(frame))
     frame = frame.sort_values(
         ["market_cap", "_liquidity_score", "_original_order"],
         ascending=[False, False, True],
     )
-    frame = frame.drop_duplicates(subset=["market_cap"], keep="first")
-    return frame.drop(columns=["_liquidity_score", "_original_order"]).reset_index(drop=True)
+    frame = frame.drop_duplicates(subset=["_issuer_dedupe_key"], keep="first")
+    return frame.drop(columns=["_issuer_dedupe_key", "_liquidity_score", "_original_order"]).reset_index(drop=True)
 
 
 def rank_by_market_cap(snapshot: pd.DataFrame) -> pd.DataFrame:
@@ -74,7 +120,7 @@ def rank_by_market_cap(snapshot: pd.DataFrame) -> pd.DataFrame:
 
 
 def select_top_market_cap(current: pd.DataFrame, max_holdings: int) -> pd.DataFrame:
-    """Select the largest `max_holdings` names by current market cap."""
+    """Select the largest `max_holdings` issuer-deduplicated names by current market cap."""
     if max_holdings <= 0:
         raise ValueError("max_holdings must be positive")
     return rank_by_market_cap(current).head(max_holdings)
@@ -93,19 +139,20 @@ def select_by_combined_factor(
     historical: pd.DataFrame,
     max_holdings: int,
 ) -> pd.DataFrame:
-    """Select names by an equal-weighted blend of market-cap size and rank momentum.
+    """Select names by a dual score of market-cap size and rank-rising velocity.
 
-    Two factors are combined so the strategy favours companies that are both large and climbing:
+    The production strategy first works inside the configured US top-500 market-cap universe from
+    the data provider. It then ranks issuer-deduplicated companies using two equal-weighted factors:
 
-    * ``size`` -- larger companies score higher. Market cap is heavily right-skewed, so the
-      market-cap *rank* (1 = largest) is used instead of the raw cap; that keeps the size factor on
-      the same uniform scale as momentum rather than letting a few mega-caps swamp the blend.
-    * ``momentum`` -- companies that climbed the market-cap ranking versus the lookback snapshot
-      score higher. A positive ``rank_improvement_score`` means the current rank number is smaller
-      than the historical one, i.e. the company moved up.
+    * ``size`` -- larger companies score higher. Market-cap rank (1 = largest) is negated and
+      z-scored so that bigger companies receive a higher size score without raw mega-cap values
+      overwhelming the rest of the universe.
+    * ``rank-rising velocity`` -- companies that climbed the market-cap ranking over the lookback
+      window score higher. A positive ``rank_improvement_score`` means the current rank number is
+      smaller than the historical rank number, i.e. the company moved up.
 
-    Each factor is z-scored and summed with equal weight to form ``combined_score``; the top
-    ``max_holdings`` names by that score are selected.
+    The two factors are z-scored and summed into ``combined_score``. The top ``max_holdings`` rows
+    by combined score are selected and are later equal-weighted by ``build_equal_weight_targets``.
     """
     if max_holdings <= 0:
         raise ValueError("max_holdings must be positive")
@@ -128,12 +175,13 @@ def select_by_combined_factor(
     # Smaller market-cap rank = larger company, so negate it before z-scoring so that "bigger" maps
     # to a higher score, matching momentum's "higher is better" orientation.
     merged["size_score"] = _zscore(-merged["market_cap_rank"].astype(float))
-    merged["momentum_score"] = _zscore(merged["rank_improvement_score"].astype(float))
-    merged["combined_score"] = merged["size_score"] + merged["momentum_score"]
+    merged["rank_velocity_score"] = _zscore(merged["rank_improvement_score"].astype(float))
+    merged["momentum_score"] = merged["rank_velocity_score"]
+    merged["combined_score"] = merged["size_score"] + merged["rank_velocity_score"]
 
     return merged.sort_values(
-        ["combined_score", "market_cap_rank"],
-        ascending=[False, True],
+        ["combined_score", "rank_improvement_score", "market_cap_rank"],
+        ascending=[False, False, True],
     ).head(max_holdings)
 
 
