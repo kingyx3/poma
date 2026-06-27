@@ -2,6 +2,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
+DIAG_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
 
 
 def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
@@ -17,6 +18,7 @@ def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
         "timed \"Runtime repair/install\"",
         "timed \"Restart ibgateway\"",
         "timed \"Configure IBC credentials\"",
+        "timed \"Validate IBC configuration\"",
         "timed \"Real API handshake\"",
         "timed \"Collect gateway diagnostics\"",
     )
@@ -30,11 +32,14 @@ def test_gateway_runtime_repair_is_idempotent_and_fails_open() -> None:
     assert "gateway_runtime_revision" in workflow
     assert "sha256sum" in workflow
     assert "/var/lib/poma/ib-gateway-runtime-revision" in workflow
+    assert "ops/scripts/diagnose_ib_gateway_runtime.py" in workflow
+    assert "poma-diagnose-ibgateway" in workflow
     assert "Gateway runtime helpers already current" in workflow
     assert "skipping repair/install" in workflow
     assert "Gateway runtime sentinel missing or stale; fail-open" in workflow
     assert "sudo tee '${gateway_runtime_sentinel}'" in workflow
     assert "test -x /usr/local/bin/poma-configure-ibc" in workflow
+    assert "test -x /usr/local/bin/poma-diagnose-ibgateway" in workflow
     assert "systemctl cat ibgateway" in workflow
 
 
@@ -64,19 +69,25 @@ def test_gateway_ops_has_explicit_five_minute_2fa_timeout() -> None:
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval" in workflow
     assert "IBKR 2FA approval or Gateway API readiness timed out" in workflow
-    assert "Waiting for IBKR 2FA approval / Gateway API socket" in workflow
+    assert "Gateway/IBC likely never reached the IBKR login/2FA stage" in workflow
     assert "local deadline=$((SECONDS + timeout_seconds))" in workflow
 
 
-def test_gateway_ops_preserves_authenticated_api_check_and_log_redaction() -> None:
+def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    helper = DIAG_HELPER.read_text(encoding="utf-8")
 
     assert "poma ibkr-check" in workflow
     assert "real ib_insync connect" in workflow
-    assert "GitHub Environment secrets are required" in workflow
     assert "shred -u" in workflow
-    assert "IbPassword|TWSPASSWORD|Password|password" in workflow
-    assert "IbLoginId|TWSUSERID" in workflow
+    assert "poma-diagnose-ibgateway validate --mode" in workflow
+    assert "poma-diagnose-ibgateway progress" in workflow
+    assert "poma-diagnose-ibgateway diagnose" in workflow
+    assert "ss" in helper
+    for port in ("7497", "4001", "4002", "5900"):
+        assert port in helper
+    assert "Gateway/IBC likely has not reached the IBKR login/2FA stage" in helper
+    assert "***" in helper
 
 
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
@@ -94,6 +105,6 @@ def test_gateway_ops_loops_have_deadlines_or_bounded_attempts() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
     assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
-    assert "sleep \"${poll_seconds}\"" in workflow
+    assert "sleep \"${poll_seconds}" in workflow
     assert "exit 1" in workflow
     assert "diagnose_gateway_failure" in workflow
