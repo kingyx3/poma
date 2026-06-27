@@ -24,6 +24,37 @@ def test_upload_install_step_reports_stage_timings() -> None:
         assert snippet in workflow
 
 
+def test_deploy_workflow_bounds_expensive_steps() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    expected_snippets = (
+        "timeout --kill-after=30s 2m python ops/scripts/render_env.py",
+        "timeout --kill-after=30s 5m pip install -e .",
+        "timeout --kill-after=30s 5m python ops/scripts/validate_data_provider.py",
+        "timeout --kill-after=30s 2m gcloud config set project",
+        "timeout --kill-after=30s 5m terraform -chdir=infra/gcp-free-tier init",
+        "timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan",
+        "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
+        "timeout --kill-after=30s 2m tar",
+        "timeout-minutes: 35",
+        "Remote install, Docker build, smoke, cron",
+    )
+    for snippet in expected_snippets:
+        assert snippet in workflow
+
+
+def test_deploy_polling_and_retries_are_bounded() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "local deadline=$((SECONDS + 240)) attempt=0" in workflow
+    assert "startup revision ${startup_revision} not ready within 4m" in workflow
+    assert "retry_with_backoff" in workflow
+    assert "max_attempts" in workflow
+    assert "failed after ${attempt} attempt(s)" in workflow
+    assert "timeout --kill-after=30s" in workflow
+    assert "timed out; check VM readiness" in workflow
+
+
 def test_vm_deploy_script_reports_build_smoke_and_cache_usage() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
