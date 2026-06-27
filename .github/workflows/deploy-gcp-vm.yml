@@ -46,7 +46,6 @@ on:
         options:
           - fixture
           - yahoo
-          - fmp
         default: yahoo
       allow_live_trading:
         description: Must be true when trading_mode=live.
@@ -116,8 +115,7 @@ jobs:
       INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
       INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
 
-      # Minimal runtime secrets. Telegram is mandatory; FMP/IBKR are only required by selected modes.
-      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+      # Minimal runtime secrets. Telegram is mandatory; IBKR is required by selected modes.
       IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
       IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
@@ -143,12 +141,16 @@ jobs:
           set_env ALLOW_LIVE_TRADING "${INPUT_ALLOW_LIVE_TRADING}"
           set_default MARKET_CALENDAR "NASDAQ"
           set_default REBALANCE_AFTER_OPEN_MINUTES "10"
-          set_env DATA_PROVIDER "${INPUT_DATA_PROVIDER}"
-          if [ "${DATA_PROVIDER}" = "yahoo" ]; then
-            set_default UNIVERSE "us_top_market_cap"
-          else
-            set_default UNIVERSE "sp500"
-          fi
+          case "${INPUT_DATA_PROVIDER}" in
+            fixture|yahoo)
+              set_env DATA_PROVIDER "${INPUT_DATA_PROVIDER}"
+              ;;
+            *)
+              echo "::error::unsupported data_provider=${INPUT_DATA_PROVIDER}; use fixture or yahoo"
+              exit 1
+              ;;
+          esac
+          set_default UNIVERSE "us_top_market_cap"
           set_default RANK_LOOKBACK_DAYS "90"
           set_default MAX_HOLDINGS "30"
           set_default PORTFOLIO_VALUE_USD "10000"
@@ -164,7 +166,6 @@ jobs:
           set_default MAX_DAILY_TRADES "100"
           set_default ORDER_STATUS_TIMEOUT_SECONDS "60"
           set_default CANCEL_STALE_ORDERS "true"
-          set_default FMP_BASE_URL "https://financialmodelingprep.com/stable"
           set_default YAHOO_SCREENER_LIMIT "500"
           set_default YAHOO_SCREENER_PAGE_SIZE "250"
           set_default IBKR_HOST "127.0.0.1"
@@ -177,14 +178,6 @@ jobs:
           if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
             echo "::error::TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID GitHub Environment secrets are required"
             exit 1
-          fi
-          if [ "${DATA_PROVIDER}" = "fmp" ]; then
-            if [ -z "${FMP_API_KEY:-}" ]; then
-              echo "::error::FMP_API_KEY GitHub Environment secret is required when DATA_PROVIDER=fmp"
-              exit 1
-            fi
-          else
-            set_default FMP_API_KEY "unused"
           fi
           case "${TRADING_MODE}" in
             paper)
