@@ -62,7 +62,7 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
-      IB_GATEWAY_SOCKET_TIMEOUT_SECONDS: 300
+      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300
       IB_GATEWAY_SOCKET_POLL_SECONDS: 5
       IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
       IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
@@ -195,6 +195,9 @@ jobs:
             duration=$((SECONDS - start))
             echo "::endgroup::"
             echo "TIMING ${label}: ${duration}s (status=${status})"
+            if [ "${status}" -eq 124 ]; then
+              echo "::error::${label} timed out. Check IAP/SSH reachability, remote process health, or IBKR 2FA approval depending on the step."
+            fi
             record_timing "${label}" "${duration}" "${status}"
             return "${status}"
           }
@@ -253,12 +256,12 @@ jobs:
           }
 
           verify_socket() {
-            local timeout_seconds="${IB_GATEWAY_SOCKET_TIMEOUT_SECONDS:-300}"
+            local timeout_seconds="${IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS:-300}"
             local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
             local deadline=$((SECONDS + timeout_seconds))
             local elapsed=0 attempt=0 status=0
 
-            echo "Waiting up to ${timeout_seconds}s after the 2FA prompt for IB Gateway API socket on 127.0.0.1:7497."
+            echo "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               attempt=$((attempt + 1))
               set +e
@@ -286,13 +289,13 @@ jobs:
 
               elapsed=$((timeout_seconds - (deadline - SECONDS)))
               if [ "${elapsed}" -gt 0 ] && [ $((elapsed % 30)) -eq 0 ]; then
-                echo "Waiting for IB Gateway API socket... ${elapsed}/${timeout_seconds}s."
+                echo "Waiting for IBKR 2FA approval / Gateway API socket... ${elapsed}/${timeout_seconds}s."
               fi
 
               sleep "${poll_seconds}"
             done
 
-            echo "IB Gateway API socket did not become reachable on 127.0.0.1:7497 within ${timeout_seconds}s after the 2FA prompt." >&2
+            echo "IBKR 2FA approval or Gateway API readiness timed out after ${timeout_seconds}s; socket 127.0.0.1:7497 never became API-ready." >&2
             diagnose_gateway_failure
             exit 1
           }
