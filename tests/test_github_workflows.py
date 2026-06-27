@@ -211,7 +211,7 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
     assert "uses: ./.github/workflows/ib-gateway-ops.yml" in workflow
     assert "secrets: inherit" in workflow
 
-    # dev on PR and stg on merge now run equivalent paper deploy + gateway paths.
+    # dev on PR and stg on merge now run equivalent paper deploy paths when changes require it.
     dev_deploy = workflow.split("  dev-deploy:\n", 1)[1]
     dev_deploy = dev_deploy.split("\n\n  dev-configure-gateway:", 1)[0]
     stg_deploy = workflow.split("  stg-deploy:\n", 1)[1]
@@ -228,18 +228,25 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
         assert "data_provider: yahoo" in deploy_block
         assert "allow_live_trading: false" in deploy_block
         assert "deploy_smoke: true" in deploy_block
+        assert "needs: changes" in deploy_block
+        assert "needs.changes.outputs.deploy_required == 'true'" in deploy_block
+        assert "needs.changes.result != 'success'" in deploy_block
 
     for gateway_block in (dev_gateway, stg_gateway):
         assert "action: configure-paper" in gateway_block
         assert "log_lines: 200" in gateway_block
         assert "secrets: inherit" in gateway_block
+        assert "needs.changes.outputs.gateway_required == 'true'" in gateway_block
+        assert "needs.changes.result != 'success'" in gateway_block
+        assert ".result == 'success' || needs." in gateway_block
+        assert ".result == 'skipped'" in gateway_block
 
     assert "deploy_environment: dev" in dev_deploy
     assert "deploy_environment: dev" in dev_gateway
     assert "deploy_environment: stg" in stg_deploy
     assert "deploy_environment: stg" in stg_gateway
-    assert "needs: dev-deploy" in dev_gateway
-    assert "needs: stg-deploy" in stg_gateway
+    assert "needs: [changes, dev-deploy]" in dev_gateway
+    assert "needs: [changes, stg-deploy]" in stg_gateway
 
     # Guard against reintroducing a lighter PR-only path.
     assert "terraform_action: plan" not in workflow
@@ -247,7 +254,8 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
     assert "data_provider: fixture" not in workflow
     assert "deploy_smoke: false" not in workflow
 
-    # prd only on a published, non-prerelease release; fork PRs (no secrets) never deploy.
+    # prd only on a published, non-prerelease release. Release deploys remain unconditional because
+    # publishing a release is an explicit production promotion.
     assert "github.event_name == 'release' && github.event.release.prerelease == false" in workflow
     assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
     assert "github.event_name == 'push'" in workflow
@@ -255,9 +263,55 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
     assert "trading_mode: live" in workflow
     assert "allow_live_trading: true" in workflow
     assert "action: configure-live" in workflow
+    assert "Release deploys are" in workflow
+    assert "intentionally unconditional" in workflow
 
     # No Tailscale anywhere in the orchestrator.
     assert "tailscale" not in workflow.lower()
+
+
+def test_auto_cicd_path_filter_is_conservative_and_visible() -> None:
+    workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "Detect deploy-relevant changes" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "deploy_required: ${{ steps.detect.outputs.deploy_required }}" in workflow
+    assert "gateway_required: ${{ steps.detect.outputs.gateway_required }}" in workflow
+    assert "changed files unavailable; fail-open" in workflow
+    assert "### Auto CI/CD change detection" in workflow
+    assert "Changed files:" in workflow
+
+    deploy_paths = (
+        ".github/workflows/auto-cicd.yml",
+        ".github/workflows/deploy-gcp-vm.yml",
+        "infra/gcp-free-tier/*",
+        "Dockerfile",
+        "docker-compose.yml",
+        ".dockerignore",
+        "pyproject.toml",
+        "src/*",
+        "ops/cron/*",
+        "ops/scripts/deploy.sh",
+        "ops/scripts/render_env.py",
+        "ops/scripts/resolve_gcp_deploy_env.sh",
+        "ops/scripts/validate_data_provider.py",
+        "ops/deploy/environments/*",
+    )
+    for path in deploy_paths:
+        assert path in workflow
+
+    gateway_paths = (
+        ".github/workflows/ib-gateway-ops.yml",
+        "ops/scripts/repair_ib_gateway_runtime.py",
+        "ops/scripts/install_ibc_config_helper.py",
+        "ops/scripts/ensure_ibgateway_service.sh",
+        "ops/scripts/refresh_gateway_helper.sh",
+    )
+    for path in gateway_paths:
+        assert path in workflow
+
+    assert "docs/*" not in workflow
+    assert "tests/*" not in workflow
 
 
 def test_deploy_workflow_passes_smoke_flag_to_vm() -> None:
