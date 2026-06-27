@@ -35,12 +35,7 @@ class Settings(BaseSettings):
         alias="REBALANCE_AFTER_OPEN_MINUTES",
     )
 
-    data_provider: str = Field(default="fixture", alias="DATA_PROVIDER")
-    fmp_api_key: str | None = Field(default=None, alias="FMP_API_KEY")
-    fmp_base_url: str = Field(
-        default="https://financialmodelingprep.com/stable",
-        alias="FMP_BASE_URL",
-    )
+    data_provider: str = Field(default="yahoo", alias="DATA_PROVIDER")
     yahoo_screener_limit: PositiveInt = Field(default=500, alias="YAHOO_SCREENER_LIMIT")
     yahoo_screener_page_size: PositiveInt = Field(default=250, alias="YAHOO_SCREENER_PAGE_SIZE")
 

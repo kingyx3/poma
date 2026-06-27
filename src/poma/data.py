@@ -1,30 +1,21 @@
 from __future__ import annotations
 
-import time
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 import pandas as pd
-import requests
 
 from poma.config import Settings
 
-FMP_MAX_RETRIES = 4
-FMP_MAX_BACKOFF_SECONDS = 30
-
-# FMP "stable" constituent endpoints return membership only (symbol/name/sector) — no market
-# cap or price. Market cap and price come from the (batch) market-cap and quote endpoints.
-FMP_CONSTITUENT_ENDPOINTS = {
-    "nasdaq100": "nasdaq-constituent",
-    "sp500": "sp500-constituent",
-}
-FMP_BATCH_SIZE = 100
 YAHOO_SUPPORTED_UNIVERSES = {"us_top_market_cap", "us_top500"}
 YAHOO_EXCHANGES = ("NMS", "NYQ", "ASE")
 YAHOO_DOWNLOAD_BATCH_SIZE = 100
-_MARKET_CAP_KEYS = ("marketCap", "marketCapitalization", "market_cap", "intradaymarketcap")
+_MARKET_CAP_KEYS = ("marketCap", "market_cap", "intradaymarketcap")
 _PRICE_KEYS = ("price", "regularMarketPrice", "intradayprice")
+_VOLUME_KEYS = ("volume", "regularMarketVolume", "regular_market_volume")
+_AVERAGE_VOLUME_KEYS = ("averageVolume", "average_volume")
+_AVERAGE_VOLUME_10D_KEYS = ("averageVolume10days", "average_volume_10d")
 _FLOAT_KEYS = ("floatShares", "float_shares")
 _SHARES_KEYS = ("sharesOutstanding", "shares_outstanding")
 
@@ -65,89 +56,12 @@ def _load_yfinance() -> tuple[Any, Any]:
         import yfinance as yf
         from yfinance import EquityQuery
     except ImportError as exc:  # pragma: no cover - exercised only when dependency is absent
-        raise RuntimeError(
-            "DATA_PROVIDER=yahoo requires the optional yfinance dependency to be installed"
-        ) from exc
+        raise RuntimeError("DATA_PROVIDER=yahoo requires yfinance to be installed") from exc
     return yf, EquityQuery
 
 
-class FmpMarketDataClient:
-    """FMP "stable" adapter.
-
-    Universe membership comes from the constituent endpoint; market caps and prices come from
-    the batch market-cap and batch quote endpoints (the constituent endpoint carries neither).
-    """
-
-    def __init__(self, settings: Settings) -> None:
-        if not settings.fmp_api_key:
-            raise ValueError("FMP_API_KEY is required when DATA_PROVIDER=fmp")
-        if settings.universe not in FMP_CONSTITUENT_ENDPOINTS:
-            supported = ", ".join(sorted(FMP_CONSTITUENT_ENDPOINTS))
-            raise ValueError(f"unsupported FMP universe={settings.universe}; supported={supported}")
-        self.settings = settings
-        self._session = requests.Session()
-
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        merged = {"apikey": self.settings.fmp_api_key, **(params or {})}
-        url = f"{self.settings.fmp_base_url}/{path.lstrip('/')}"
-        response = None
-        for attempt in range(FMP_MAX_RETRIES):
-            response = self._session.get(url, params=merged, timeout=30)
-            if getattr(response, "status_code", 200) != 429:
-                break
-            if attempt < FMP_MAX_RETRIES - 1:
-                retry_after = response.headers.get("Retry-After")
-                delay = float(retry_after) if retry_after else float(2**attempt)
-                time.sleep(min(delay, FMP_MAX_BACKOFF_SECONDS))
-        response.raise_for_status()
-        return response.json()
-
-    def _constituent_symbols(self) -> list[str]:
-        rows = self._get(FMP_CONSTITUENT_ENDPOINTS[self.settings.universe])
-        symbols = [str(row.get("symbol", "")).upper().strip() for row in rows or []]
-        symbols = [symbol for symbol in symbols if symbol]
-        if not symbols:
-            raise ValueError("FMP constituent endpoint returned no symbols")
-        return list(dict.fromkeys(symbols))  # de-duplicate, preserve order
-
-    def current_universe_snapshot(self) -> pd.DataFrame:
-        symbols = self._constituent_symbols()
-        caps: dict[str, Any] = {}
-        prices: dict[str, Any] = {}
-        for chunk in _chunked(symbols, FMP_BATCH_SIZE):
-            joined = ",".join(chunk)
-            for row in self._get("market-capitalization-batch", {"symbols": joined}) or []:
-                symbol = str(row.get("symbol", "")).upper().strip()
-                cap = _market_cap_value(row)
-                if symbol and cap is not None:
-                    caps[symbol] = cap
-            for row in self._get("batch-quote-short", {"symbols": joined}) or []:
-                symbol = str(row.get("symbol", "")).upper().strip()
-                price = row.get("price")
-                if symbol and price is not None:
-                    prices[symbol] = price
-
-        records = [
-            {
-                "ticker": symbol,
-                "market_cap": caps[symbol],
-                "price": prices[symbol],
-                "source": "fmp",
-                "as_of": date.today().isoformat(),
-            }
-            for symbol in symbols
-            if symbol in caps and symbol in prices
-        ]
-        return _normalise_snapshot(records, require_price=True)
-
-
 class YahooFinanceMarketDataClient:
-    """Yahoo Finance adapter isolated behind the same normalized provider contract.
-
-    Yahoo/yfinance is an unofficial data source. It is useful for low-cost personal research and
-    dry-run/paper validation, but production trading can switch providers by adding another
-    MarketDataClient implementation without changing strategy or engine code.
-    """
+    """Yahoo Finance adapter isolated behind the normalized provider contract."""
 
     def __init__(self, settings: Settings) -> None:
         if settings.universe not in YAHOO_SUPPORTED_UNIVERSES:
@@ -203,9 +117,15 @@ class YahooFinanceMarketDataClient:
             symbol = str(row.get("symbol", "")).upper().strip()
             market_cap = _market_cap_value(row)
             price = _first_value(row, _PRICE_KEYS)
+            volume = _first_value(row, _VOLUME_KEYS)
+            average_volume = _first_value(row, _AVERAGE_VOLUME_KEYS)
+            average_volume_10d = _first_value(row, _AVERAGE_VOLUME_10D_KEYS)
             shares_outstanding = _first_value(row, _SHARES_KEYS)
             if shares_outstanding is None and market_cap is not None and price not in (None, 0):
                 shares_outstanding = float(market_cap) / float(price)
+            dollar_volume = None
+            if volume is not None and price not in (None, 0):
+                dollar_volume = float(volume) * float(price)
             if not symbol:
                 continue
             records.append(
@@ -215,6 +135,10 @@ class YahooFinanceMarketDataClient:
                     "exchange": row.get("exchange"),
                     "market_cap": market_cap,
                     "price": price,
+                    "volume": volume,
+                    "average_volume": average_volume,
+                    "average_volume_10d": average_volume_10d,
+                    "dollar_volume": dollar_volume,
                     "float_shares": _first_value(row, _FLOAT_KEYS),
                     "shares_outstanding": shares_outstanding,
                     "source": "yahoo",
@@ -231,13 +155,7 @@ class YahooFinanceMarketDataClient:
         lookback_days: int,
         end_date: date | None = None,
     ) -> dict[date, pd.DataFrame]:
-        """Estimate daily historical market caps from Yahoo close prices.
-
-        Yahoo's free endpoints do not provide a clean historical market-cap bulk endpoint. This
-        uses the current share count from the screener snapshot and multiplies it by historical
-        close prices. That keeps the provider free and modular, but it is an estimate when share
-        counts changed during the lookback window.
-        """
+        """Estimate daily historical market caps from Yahoo close prices."""
         end = end_date or date.today()
         start = end - timedelta(days=lookback_days + 10)
         current = _normalise_snapshot(current_snapshot.to_dict("records"), require_price=True)
@@ -270,6 +188,10 @@ class YahooFinanceMarketDataClient:
                             "exchange": current_row.get("exchange"),
                             "market_cap": float(close) * shares,
                             "price": float(close),
+                            "volume": current_row.get("volume"),
+                            "average_volume": current_row.get("average_volume"),
+                            "average_volume_10d": current_row.get("average_volume_10d"),
+                            "dollar_volume": current_row.get("dollar_volume"),
                             "float_shares": current_row.get("float_shares"),
                             "shares_outstanding": shares,
                             "source": "yahoo_estimated",
@@ -330,12 +252,14 @@ def _normalise_snapshot(rows: list[dict[str, Any]], require_price: bool = False)
         "symbol": "ticker",
         "ticker": "ticker",
         "marketCap": "market_cap",
-        "marketCapitalization": "market_cap",
         "intradaymarketcap": "market_cap",
         "market_cap": "market_cap",
         "regularMarketPrice": "price",
         "intradayprice": "price",
         "price": "price",
+        "regularMarketVolume": "volume",
+        "averageVolume": "average_volume",
+        "averageVolume10days": "average_volume_10d",
         "floatShares": "float_shares",
         "sharesOutstanding": "shares_outstanding",
     }
@@ -355,6 +279,10 @@ def _normalise_snapshot(rows: list[dict[str, Any]], require_price: bool = False)
             "exchange",
             "market_cap",
             "price",
+            "volume",
+            "average_volume",
+            "average_volume_10d",
+            "dollar_volume",
             "float_shares",
             "shares_outstanding",
             "source",
@@ -364,7 +292,16 @@ def _normalise_snapshot(rows: list[dict[str, Any]], require_price: bool = False)
     ]
     frame = frame[columns].copy()
     frame["ticker"] = frame["ticker"].astype(str).str.upper().str.strip()
-    for column in ["market_cap", "price", "float_shares", "shares_outstanding"]:
+    for column in [
+        "market_cap",
+        "price",
+        "volume",
+        "average_volume",
+        "average_volume_10d",
+        "dollar_volume",
+        "float_shares",
+        "shares_outstanding",
+    ]:
         if column in frame:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
     required_subset = ["ticker", "market_cap"] + (["price"] if require_price else [])
@@ -425,11 +362,9 @@ class FixtureMarketDataClient:
 def build_data_client(settings: Settings) -> MarketDataClient:
     if settings.data_provider == "fixture":
         return FixtureMarketDataClient()
-    if settings.data_provider == "fmp":
-        return FmpMarketDataClient(settings)
     if settings.data_provider == "yahoo":
         return YahooFinanceMarketDataClient(settings)
-    raise ValueError(f"unsupported DATA_PROVIDER={settings.data_provider}")
+    raise ValueError("unsupported DATA_PROVIDER; expected fixture or yahoo")
 
 
 def utc_run_id(prefix: str = "rebalance") -> str:

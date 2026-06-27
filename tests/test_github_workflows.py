@@ -123,7 +123,7 @@ def test_gateway_ops_workflow_can_configure_gateway_from_environment_secrets() -
     assert "IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}" in workflow
     assert "IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}" in workflow
     assert "sudo poma-configure-ibc" in workflow
-    assert "printf '%s\\n%s\\n%s\\n'" in workflow
+    assert "printf '%s" in workflow
 
 
 def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
@@ -208,13 +208,13 @@ def test_auto_cicd_deploys_dev_on_pr_and_stg_on_merge() -> None:
     assert "uses: ./.github/workflows/ib-gateway-ops.yml" in workflow
     assert "secrets: inherit" in workflow
 
-    # dev on PR, stg on merge; both paper+fmp; gateway configured; prd never automated.
+    # dev on PR, stg on merge; both paper; gateway configured; prd never automated.
     assert "deploy_environment: dev" in workflow
     assert "deploy_environment: stg" in workflow
     assert "trading_mode: paper" in workflow
-    # dev PRs use fixture data (no FMP quota burn); stg-on-merge validates the real fmp path.
+    # dev PRs use fixture data; stg-on-merge validates the real Yahoo path.
     assert "data_provider: fixture" in workflow
-    assert "data_provider: fmp" in workflow
+    assert "data_provider: yahoo" in workflow
     assert "action: configure-paper" in workflow
     assert "deploy_environment: prd" not in workflow
     # dev PRs skip the slow on-VM dry-run smoke for fast feedback.

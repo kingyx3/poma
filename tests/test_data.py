@@ -6,40 +6,7 @@ from typing import Any
 import pandas as pd
 from conftest import make_settings
 
-from poma.data import FmpMarketDataClient, YahooFinanceMarketDataClient
-
-
-class FakeResponse:
-    def __init__(self, payload: Any) -> None:
-        self._payload = payload
-        self.status_code = 200
-        self.headers: dict[str, str] = {}
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> Any:
-        return self._payload
-
-
-def _client(monkeypatch, router, **overrides) -> FmpMarketDataClient:
-    calls: list[str] = []
-
-    def fake_get(self, url, params=None, timeout=None):
-        path = url.rsplit("/", maxsplit=1)[-1]
-        calls.append(path)
-        return FakeResponse(router(path, params or {}))
-
-    monkeypatch.setattr("poma.data.requests.Session.get", fake_get)
-    settings_values: dict[str, object] = {
-        "DATA_PROVIDER": "fmp",
-        "FMP_API_KEY": "key",
-        "UNIVERSE": "sp500",
-    }
-    settings_values.update(overrides)
-    client = FmpMarketDataClient(make_settings(**settings_values))
-    client.calls = calls  # type: ignore[attr-defined]
-    return client
+from poma.data import YahooFinanceMarketDataClient
 
 
 class FakeEquityQuery:
@@ -55,12 +22,7 @@ class FakeYahoo:
     @classmethod
     def screen(cls, query, offset=None, size=None, sortField=None, sortAsc=None):
         cls.screen_calls.append(
-            {
-                "offset": offset,
-                "size": size,
-                "sortField": sortField,
-                "sortAsc": sortAsc,
-            }
+            {"offset": offset, "size": size, "sortField": sortField, "sortAsc": sortAsc}
         )
         return {
             "quotes": [
@@ -70,6 +32,7 @@ class FakeYahoo:
                     "exchange": "NMS",
                     "intradaymarketcap": 3000,
                     "regularMarketPrice": 30,
+                    "regularMarketVolume": 1000,
                     "floatShares": 95,
                 },
                 {
@@ -78,6 +41,7 @@ class FakeYahoo:
                     "exchange": "NMS",
                     "intradaymarketcap": 2000,
                     "regularMarketPrice": 20,
+                    "regularMarketVolume": 2000,
                 },
             ]
         }
@@ -93,57 +57,11 @@ class FakeYahoo:
         )
 
 
-def test_current_snapshot_merges_constituents_caps_and_prices(monkeypatch) -> None:
-    def router(path, params):
-        if path == "sp500-constituent":
-            return [{"symbol": "AAPL"}, {"symbol": "MSFT"}, {"symbol": "NOPRICE"}]
-        if path == "market-capitalization-batch":
-            return [
-                {"symbol": "AAPL", "marketCap": 3000},
-                {"symbol": "MSFT", "marketCap": 2000},
-                {"symbol": "NOPRICE", "marketCap": 1000},
-            ]
-        if path == "batch-quote-short":
-            return [
-                {"symbol": "AAPL", "price": 195.0},
-                {"symbol": "MSFT", "price": 410.0},
-            ]
-        raise AssertionError(f"unexpected path {path}")
-
-    client = _client(monkeypatch, router)
-    frame = client.current_universe_snapshot()
-
-    assert "market-capitalization-batch" in client.calls  # type: ignore[attr-defined]
-    assert "batch-quote-short" in client.calls  # type: ignore[attr-defined]
-    assert frame["ticker"].tolist() == ["AAPL", "MSFT"]
-    assert frame.set_index("ticker").loc["AAPL", "market_cap"] == 3000
-    assert frame.set_index("ticker").loc["MSFT", "price"] == 410.0
-
-
-def test_fmp_universe_selects_constituent_endpoint(monkeypatch) -> None:
-    def router(path, params):
-        if path.endswith("constituent"):
-            return [{"symbol": "AAPL"}]
-        if path == "market-capitalization-batch":
-            return [{"symbol": "AAPL", "marketCap": 3000}]
-        if path == "batch-quote-short":
-            return [{"symbol": "AAPL", "price": 195.0}]
-        raise AssertionError(f"unexpected path {path}")
-
-    client = _client(monkeypatch, router, UNIVERSE="nasdaq100")
-    client.current_universe_snapshot()
-    assert "nasdaq-constituent" in client.calls  # type: ignore[attr-defined]
-
-
-def test_yahoo_screener_normalizes_market_cap_price_and_share_fields(monkeypatch) -> None:
+def test_yahoo_screener_normalizes_market_cap_price_liquidity_and_share_fields(monkeypatch) -> None:
     FakeYahoo.screen_calls = []
     monkeypatch.setattr("poma.data._load_yfinance", lambda: (FakeYahoo, FakeEquityQuery))
     client = YahooFinanceMarketDataClient(
-        make_settings(
-            DATA_PROVIDER="yahoo",
-            UNIVERSE="us_top_market_cap",
-            YAHOO_SCREENER_LIMIT=2,
-        )
+        make_settings(DATA_PROVIDER="yahoo", UNIVERSE="us_top_market_cap", YAHOO_SCREENER_LIMIT=2)
     )
 
     frame = client.current_universe_snapshot()
@@ -152,6 +70,7 @@ def test_yahoo_screener_normalizes_market_cap_price_and_share_fields(monkeypatch
     assert FakeYahoo.screen_calls[0]["sortField"] == "intradaymarketcap"
     assert frame["ticker"].tolist() == ["AAPL", "MSFT"]
     assert frame.set_index("ticker").loc["AAPL", "float_shares"] == 95
+    assert frame.set_index("ticker").loc["AAPL", "dollar_volume"] == 30_000
     assert frame.set_index("ticker").loc["MSFT", "shares_outstanding"] == 100
 
 

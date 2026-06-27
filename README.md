@@ -4,8 +4,6 @@ POMA is a low-cost Python scaffold for a personal long-only US large-cap strateg
 
 ## Strategy
 
-The default strategy is explicit:
-
 ```text
 Universe: Yahoo Finance US top 500 by current market cap
 Lookback: 90 days
@@ -16,9 +14,9 @@ Weighting: market-cap weighted, with risk caps
 
 Rank 1 is the largest company by market cap, so a positive score means the stock moved up the market-cap ranking over the 90-day window.
 
-The market-data layer is modular. `DATA_PROVIDER=yahoo` is the default no-key provider, `DATA_PROVIDER=fmp` remains available for paid FMP plans, and future providers only need to implement the normalized `current_universe_snapshot()` contract.
+The production market-data provider is `DATA_PROVIDER=yahoo`. Future providers should implement the normalized `current_universe_snapshot()` contract without changing strategy or engine code.
 
-Yahoo's free feed does not provide a clean bulk historical market-cap endpoint. POMA therefore stores daily point-in-time snapshots under `DATA_DIR/market_snapshots/` and can backfill estimated historical market caps from Yahoo close prices using current share-count information. Use a paid point-in-time fundamentals feed later if you need institutional-grade historical market caps.
+Yahoo's free feed does not provide a clean bulk historical market-cap endpoint. POMA stores daily point-in-time snapshots under `DATA_DIR/market_snapshots/` and can backfill estimated historical market caps from Yahoo close prices using current share-count information.
 
 ## Architecture
 
@@ -30,11 +28,7 @@ Ubuntu VPS / GCP e2-micro VM
   -> refreshes/saves market snapshot and rebalances through IB Gateway on the same host
 ```
 
-No Cloud Run. No Artifact Registry. No Secret Manager. No remote executor service.
-
-The simplest recurring infrastructure is one small host plus your data-provider plan. The optional Terraform path provisions a GCP free-tier-aligned `e2-micro` VM and pushes the runtime `.env` from GitHub Actions variables/secrets. See [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
-
-> This repository is engineering infrastructure, not financial advice. Keep `TRADING_MODE=dry_run` or `paper` until the strategy, data, and execution are validated.
+The optional Terraform path provisions a GCP free-tier-aligned `e2-micro` VM and pushes the runtime `.env` from GitHub Actions variables/secrets. See [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
 
 ## Local quickstart
 
@@ -43,7 +37,6 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env
-# set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and IBKR_ACCOUNT in .env
 poma refresh-market-data
 python -m poma.cli monitor
 pytest
@@ -55,59 +48,17 @@ pytest
 |---|---|
 | `poma refresh-market-data` | Fetch the configured provider, save current/historical snapshots under `DATA_DIR`, and prepare rank-history inputs. |
 | `poma monitor` | Cron entrypoint: rebalances once per session when the market timing and state allow it. |
-| `poma rebalance [--dry-run]` | Run a rebalance now (optionally forced to dry-run). |
-| `poma positions` | Print the broker's current stock portfolio (paper/live). |
-| `poma doctor` | Check config, market-data provider, and IBKR connectivity; exits non-zero on failure. |
-| `poma ibkr-check` | Probe only the IBKR API handshake (ignores the data provider); used by gateway ops. |
+| `poma rebalance [--dry-run]` | Run a rebalance now. |
+| `poma positions` | Print the broker's current stock portfolio. |
+| `poma doctor` | Check config, market-data provider, and IBKR connectivity. |
+| `poma ibkr-check` | Probe only the IBKR API handshake. |
 
-On the VM these run through the container, e.g. `cd /opt/poma && docker compose run --rm poma doctor`.
-
-## VPS deployment
-
-### Manual VPS
-
-```bash
-git clone <repo-url> /opt/poma
-cd /opt/poma
-cp .env.example .env
-# edit .env, including mandatory Telegram values
-bash ops/scripts/deploy.sh
-crontab ops/cron/poma.cron
-```
-
-### GCP e2-micro via GitHub Actions + Terraform
+## GCP e2-micro via GitHub Actions + Terraform
 
 1. Add only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
 2. Run **Bootstrap GCP Workload Identity Federation** with `terraform_action=plan`, then `apply`.
 3. Delete the bootstrap key and add the runtime secrets from [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
 4. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`, then `apply` with `deploy_app=true`.
 5. Before `paper` or `live`, configure and verify Gateway using [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md).
-
-The deploy workflow renders every key from `.env.example` into a VM-local `.env` file using GitHub Variables/Secrets, uploads the repo package through IAP SSH, runs a dry-run deploy smoke test, and installs the cron schedule.
-
-Docker Compose is used as a one-shot runner from cron. Do not run the POMA container as an always-on service.
-
-## Trading modes
-
-| Mode | Purpose |
-|---|---|
-| `dry_run` | Computes targets and writes reports only. No broker connection required. |
-| `paper` | Connects to IB Gateway paper trading. |
-| `live` | Connects to live IBKR. Requires `ALLOW_LIVE_TRADING=true`. |
-
-## Included safeguards
-
-- Dry-run default.
-- Mandatory Telegram configuration at startup.
-- Explicit live-trading guard.
-- One attempted rebalance per market session via local state file.
-- Failed runs become manual-review events.
-- Market-calendar timing instead of brittle DST cron logic.
-- Cash buffer.
-- Max 30 holdings by default.
-- Max position, turnover, order size, and trade-count limits.
-- Minimum trade notional and minimum weight-delta filters.
-- JSON reports with proposed trades and execution results.
-- CI/CD `.env` rendering fails if required GitHub Variables/Secrets are missing.
 
 See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md), [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
