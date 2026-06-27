@@ -264,10 +264,14 @@ jobs:
             echo "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               attempt=$((attempt + 1))
-              set +e
-              timed "Socket/service poll attempt ${attempt}" poll_gateway_socket_once
-              status="$?"
-              set -e
+              # Keep timed() in a conditional context: it intentionally returns 1 while the
+              # gateway is still starting, and returning non-zero after re-enabling errexit
+              # would otherwise abort the polling loop before the 5-minute deadline.
+              if timed "Socket/service poll attempt ${attempt}" poll_gateway_socket_once; then
+                status=0
+              else
+                status="$?"
+              fi
 
               case "${status}" in
                 0)
