@@ -36,7 +36,11 @@ jobs:
       deploy_environment: stg
       terraform_action: apply
       deploy_app: true
-      tailscale_enabled: true
+      # Tailscale is operator-convenience only: all automation uses IAP SSH, and VNC/SSH access
+      # is available on demand via `gcloud compute ssh --tunnel-through-iap`. Skipping it removes
+      # a slow, failure-prone step from every merge. Flip back on via manual workflow_dispatch
+      # (or for live trading) when tailnet access is actually wanted.
+      tailscale_enabled: false
       trading_mode: paper
       data_provider: yahoo
       allow_live_trading: false
