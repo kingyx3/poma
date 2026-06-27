@@ -253,24 +253,30 @@ jobs:
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
         run: |
           set -euo pipefail
+          # Ship only the runtime files required on the VM. Avoid uploading CI/test/docs/git
+          # history so IAP transfer and on-VM Docker build contexts stay small.
           tar \
-            --exclude='.git' \
-            --exclude='.venv' \
-            --exclude='.env' \
-            --exclude='.env.deploy' \
-            --exclude='reports' \
-            --exclude='state' \
-            --exclude='logs' \
-            -czf /tmp/poma.tar.gz .
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            -czf /tmp/poma.tar.gz \
+            .dockerignore \
+            Dockerfile \
+            README.md \
+            docker-compose.yml \
+            pyproject.toml \
+            src \
+            ops/cron \
+            ops/scripts/deploy.sh
 
       - name: Upload and install on VM
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
-        timeout-minutes: 30
+        timeout-minutes: 55
         run: |
           set -euo pipefail
 
           instance_name="$(terraform -chdir=infra/gcp-free-tier output -raw instance_name)"
           zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
+          startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"
           ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
 
           run_with_timeout() {
@@ -279,17 +285,20 @@ jobs:
             timeout --kill-after=30s "${seconds}" "$@"
           }
 
-          # Poll the VM over IAP until cloud-init's startup script has finished. Each probe is a
+          # Poll the VM over IAP until the POMA startup readiness sentinel matches this
+          # deploy's startup revision. Each probe is a
           # short, independently-timed SSH, so a cold boot (the minimal startup installs Docker +
-          # cron) or a transient IAP/SSH-key-propagation hang is retried with a fresh connection
+          # cron and writes /var/lib/poma/vm-ready with the current boot id) or a transient
+          # IAP/SSH-key-propagation hang is
+          # retried with a fresh connection
           # instead of blocking the whole step on one long-lived SSH. Returns within seconds on an
           # already-warm VM.
           wait_for_vm_ready() {
             local deadline=$((SECONDS + 420)) attempt=0
             until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command 'test -f /var/lib/cloud/instance/boot-finished'; do
+                --command "test \"\$(cat /var/lib/poma/vm-ready 2>/dev/null)\" = \"${startup_revision} \$(cat /proc/sys/kernel/random/boot_id)\""; do
               if [ "${SECONDS}" -ge "${deadline}" ]; then
-                echo "VM ${instance_name} not reachable / boot not finished within 7m." >&2
+                echo "VM ${instance_name} not reachable / startup revision ${startup_revision} not ready within 7m." >&2
                 return 1
               fi
               attempt=$((attempt + 1))
@@ -312,14 +321,47 @@ jobs:
             wait_for_vm_ready
           }
 
+          retry_with_backoff() {
+            local timeout_duration="$1" label="$2" max_attempts="$3"
+            shift 3
+
+            local attempt=1
+            until run_with_timeout "${timeout_duration}" "$@"; do
+              if [ "${attempt}" -ge "${max_attempts}" ]; then
+                echo "${label} failed after ${attempt} attempt(s)." >&2
+                return 1
+              fi
+              attempt=$((attempt + 1))
+              echo "${label} failed; retrying attempt ${attempt}/${max_attempts} in 15s..."
+              sleep 15
+            done
+          }
+
           ensure_vm_ready
 
-          run_with_timeout 3m gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
-          run_with_timeout 2m gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
+          retry_with_backoff 3m "App package upload" 3 \
+            gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
+          retry_with_backoff 2m "Environment upload" 3 \
+            gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
 
           run_with_timeout 25m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
             set -euo pipefail
             sudo mkdir -p /opt/poma
+            # Remove files owned by the deploy package before extracting the trimmed runtime set.
+            # Preserve .env plus runtime data/report/state/log directories across deploys.
+            sudo rm -rf \
+              /opt/poma/.dockerignore \
+              /opt/poma/.git \
+              /opt/poma/.github \
+              /opt/poma/Dockerfile \
+              /opt/poma/README.md \
+              /opt/poma/docker-compose.yml \
+              /opt/poma/docs \
+              /opt/poma/infra \
+              /opt/poma/ops \
+              /opt/poma/pyproject.toml \
+              /opt/poma/src \
+              /opt/poma/tests
             sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
             sudo mv /tmp/poma.env /opt/poma/.env
             sudo chmod 600 /opt/poma/.env

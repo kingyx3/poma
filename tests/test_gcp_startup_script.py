@@ -5,8 +5,13 @@ STARTUP_SCRIPT = REPO_ROOT / "infra/gcp-free-tier/startup.sh"
 
 # The startup script is intentionally minimal host prep so cloud-init finishes quickly.
 REQUIRED_STARTUP_SNIPPETS = (
-    "apt-get install -y ca-certificates cron curl python3",
+    "apt-get install -y --no-install-recommends ca-certificates cron curl python3",
     "curl -fsSL https://get.docker.com | sh",
+    "rm -rf /var/lib/apt/lists/*",
+    'READY_SENTINEL="$${READY_DIR}/vm-ready"',
+    'rm -f "$${READY_SENTINEL}"',
+    '$(cat /proc/sys/kernel/random/boot_id)',
+    'chmod 0644 "$${READY_SENTINEL}"',
     # Swap keeps the 1 GB e2-micro from OOM-wedging under IB Gateway + Docker + the app.
     "mkswap /swapfile",
     "swapon /swapfile",
@@ -16,6 +21,9 @@ REQUIRED_STARTUP_SNIPPETS = (
     '"$${APP_DIR}/data"',
     "systemctl enable --now docker",
     "systemctl enable --now cron",
+    "systemctl is-active --quiet docker",
+    "systemctl is-active --quiet cron",
+    "docker compose version >/dev/null",
 )
 
 # Heavy IB Gateway provisioning must NOT live in the boot path: it stalled cloud-init and

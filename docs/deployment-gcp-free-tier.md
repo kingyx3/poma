@@ -112,13 +112,14 @@ On apply, the deploy workflow:
 4. Authenticates to GCP through the generated Workload Identity Federation settings.
 5. Renders a VM-local `.env` from CI defaults plus the selected environment's GitHub secrets.
 6. Runs Terraform for `infra/gcp-free-tier` using that environment's state prefix.
-7. Uploads the app package and `.env` through IAP SSH.
-8. Runs a fixture-backed dry-run smoke test.
-9. Installs the cron schedule.
+7. Waits for the VM startup script to write `/var/lib/poma/vm-ready` with the expected startup revision and current boot id, resetting the VM once if IAP/SSH never becomes reachable within the readiness window.
+8. Uploads a trimmed runtime package (`.dockerignore`, Dockerfile, compose file, Python package metadata/source, deploy script, and cron file) and `.env` through IAP SSH, retrying short-lived `scp` attempts to survive transient IAP backend or SSH-key propagation failures.
+9. Runs a fixture-backed dry-run smoke test.
+10. Installs the cron schedule.
 
 The VM keeps Google Cloud ingress limited to IAP SSH. Operators reach a shell or tunnel the IB Gateway VNC port over the same IAP SSH path (`gcloud compute ssh --tunnel-through-iap`), so no broad public SSH/VNC firewall rules are opened. The VM still keeps an ephemeral public IP for low-cost outbound package installs and broker/data-provider traffic.
 
-The VM startup script keeps boot light: it installs Docker, cron, the app user, and runtime directories only. IB Gateway, IBC, headless GUI support, and `ibgateway.service` are provisioned by the IB Gateway Ops workflow, which Auto CI/CD runs after every deploy. This keeps cloud-init fast so the deploy's VM-readiness wait does not stall on the multi-minute IB Gateway install.
+The VM startup script keeps boot light: it removes any stale readiness sentinel, installs Docker, cron, the app user, and runtime directories only, uses `--no-install-recommends`, clears apt lists after host bootstrap, and writes `/var/lib/poma/vm-ready` only after Docker and cron are enabled, active, and Docker Compose responds. IB Gateway, IBC, headless GUI support, and `ibgateway.service` are provisioned by the IB Gateway Ops workflow, which Auto CI/CD runs after every deploy. This keeps cloud-init fast so the deploy's VM-readiness wait does not stall on the multi-minute IB Gateway install. Before extracting the package, deploy removes stale package-owned files from older full-repo uploads while preserving `.env`, `data`, `reports`, `state`, and `logs`. After a successful app deploy, it prunes only dangling Docker images so repeated on-VM builds do not waste disk, while retaining reusable build cache for speed. The deploy package and `.dockerignore` exclude tests, docs, Git metadata, local state, reports, logs, and `.env` files so IAP uploads and Docker build contexts stay small and runtime secrets are not sent to the Docker daemon. The deploy install step has a 55-minute ceiling so the worst-case path (initial readiness wait, one VM reset, retried uploads, and the app build/smoke command) is not killed by the GitHub Actions step timeout before its own shorter command timeouts can report the failing operation.
 
 ## Paper/live setup
 

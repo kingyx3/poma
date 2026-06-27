@@ -11,8 +11,14 @@ set -euxo pipefail
 
 APP_USER="${app_user}"
 APP_DIR="${app_dir}"
+STARTUP_REVISION="${startup_revision}"
+READY_DIR="/var/lib/poma"
+READY_SENTINEL="$${READY_DIR}/vm-ready"
 
 export DEBIAN_FRONTEND=noninteractive
+
+mkdir -p "$${READY_DIR}"
+rm -f "$${READY_SENTINEL}"
 
 # The 1 GB e2-micro has no memory headroom for IB Gateway's JVM (~850 MB) plus Docker image builds
 # and the pandas app. OOM kills were wedging the VM (dead SSH, not recoverable by a reboot). Add a
@@ -26,11 +32,12 @@ if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
 fi
 
 apt-get update
-apt-get install -y ca-certificates cron curl python3
+apt-get install -y --no-install-recommends ca-certificates cron curl python3
 
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 fi
+rm -rf /var/lib/apt/lists/*
 
 if ! id "$${APP_USER}" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$${APP_USER}"
@@ -47,3 +54,9 @@ chown -R "$${APP_USER}:$${APP_USER}" "$${APP_DIR}"
 
 systemctl enable --now docker
 systemctl enable --now cron
+systemctl is-active --quiet docker
+systemctl is-active --quiet cron
+docker version >/dev/null
+docker compose version >/dev/null
+printf '%s %s\n' "$${STARTUP_REVISION}" "$(cat /proc/sys/kernel/random/boot_id)" >"$${READY_SENTINEL}"
+chmod 0644 "$${READY_SENTINEL}"

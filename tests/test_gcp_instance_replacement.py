@@ -13,7 +13,9 @@ def test_vm_recreates_when_startup_script_changes() -> None:
     tf = MAIN_TF.read_text(encoding="utf-8")
 
     assert 'resource "terraform_data" "startup_revision"' in tf
-    assert "md5(local.startup_script)" in tf
+    assert "startup_revision = md5(join" in tf
+    assert "input = local.startup_revision" in tf
+    assert "poma-startup-revision  = local.startup_revision" in tf
     assert "replace_triggered_by = [terraform_data.startup_revision]" in tf
     # The metadata and the replacement hash must share one rendered script.
     assert "startup-script         = local.startup_script" in tf
