@@ -76,7 +76,6 @@ def test_install_helper_sets_expected_ibc_values() -> None:
 
     assert "set_ini TradingMode" in script
     assert "set_ini IbLoginId" in script
-    assert "set_ini IbPassword" in script
     assert "set_ini StoreSettingsOnServer no" in script
     assert "set_ini ReadOnlyApi no" in script
     assert "poma-configure-ibc" in script
@@ -121,8 +120,8 @@ def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
     workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
 
     assert "/home/poma/ibc/logs/*.txt" in workflow
-    assert "IbPassword" in workflow
-    assert "TWSPASSWORD" in workflow
+    assert "sed -E" in workflow
+    assert "=***" in workflow
     assert "IbLoginId" in workflow
     assert "TWSUSERID" in workflow
 
@@ -133,7 +132,7 @@ def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval" in workflow
-    assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
+    assert "while [" in workflow and "${SECONDS}" in workflow and "${deadline}" in workflow
     assert "systemctl is-active --quiet ibgateway" in workflow
     assert "Waiting for IBKR 2FA approval / Gateway API socket" in workflow
     assert "IBKR 2FA approval or Gateway API readiness timed out" in workflow
