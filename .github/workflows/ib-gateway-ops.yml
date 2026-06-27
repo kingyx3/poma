@@ -62,7 +62,7 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
-      IB_GATEWAY_SOCKET_TIMEOUT_SECONDS: 300
+      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300
       IB_GATEWAY_SOCKET_POLL_SECONDS: 5
       IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
       IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
@@ -128,101 +128,217 @@ jobs:
       - name: Run Gateway operation over IAP SSH
         run: |
           set -euo pipefail
-          gcloud config set project "${GCP_PROJECT_ID}"
+
+          timing_file="$(mktemp)"
+          step_started="${SECONDS}"
+          input_file=""
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+          gateway_runtime_revision="$(sha256sum \
+            ops/scripts/repair_ib_gateway_runtime.py \
+            ops/scripts/install_ibc_config_helper.py \
+            ops/scripts/ensure_ibgateway_service.sh \
+            ops/scripts/diagnose_ib_gateway_runtime.py \
+            | sha256sum | awk '{print $1}')"
+          gateway_runtime_sentinel="/var/lib/poma/ib-gateway-runtime-revision"
+
+          record_timing() {
+            local label="$1" seconds="$2" status="$3"
+            printf '%s\t%s\t%s\n' "${seconds}" "${status}" "${label}" >> "${timing_file}"
+          }
+
+          cleanup_input_file() {
+            if [ -z "${input_file}" ] || [ ! -f "${input_file}" ]; then
+              return 0
+            fi
+            if command -v shred >/dev/null 2>&1; then
+              shred -u "${input_file}" 2>/dev/null || rm -f "${input_file}"
+            else
+              rm -f "${input_file}"
+            fi
+          }
+
+          write_timing_summary() {
+            local total=$((SECONDS - step_started))
+            {
+              echo "### IB Gateway Ops timing"
+              echo
+              echo "| Step | Seconds | Status |"
+              echo "| --- | ---: | ---: |"
+              if [ -s "${timing_file}" ]; then
+                awk -F '\t' '{printf "| %s | %s | %s |\n", $3, $1, $2}' "${timing_file}"
+                awk -F '\t' '
+                  NR == 1 || $1 > max { max = $1; status = $2; label = $3 }
+                  END { if (NR > 0) printf "\nSlowest step: **%s** (%ss, status=%s)\n", label, max, status }
+                ' "${timing_file}"
+              else
+                echo "| none recorded | 0 | 0 |"
+              fi
+              echo
+              echo "Total step time: **${total}s**"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          }
+
+          on_exit() {
+            cleanup_input_file
+            write_timing_summary
+          }
+          trap on_exit EXIT
+
+          timed() {
+            local label="$1" status start duration
+            shift
+            start="${SECONDS}"
+            echo "::group::${label}"
+            set +e
+            "$@"
+            status="$?"
+            set -e
+            duration=$((SECONDS - start))
+            echo "::endgroup::"
+            echo "TIMING ${label}: ${duration}s (status=${status})"
+            if [ "${status}" -eq 124 ]; then
+              echo "::error::${label} timed out. Check IAP/SSH reachability, remote process health, or IBKR 2FA approval depending on the step."
+            fi
+            record_timing "${label}" "${duration}" "${status}"
+            return "${status}"
+          }
+
+          run_with_timeout() {
+            local seconds="$1"
+            shift
+            timeout --kill-after=30s "${seconds}" "$@"
+          }
 
           # Bound every remote call so a hung IAP SSH tunnel or remote command cannot stall
           # the job. Callers pass a longer timeout for the install/repair step.
           run_remote() {
             local command="$1"
             local seconds="${2:-180}"
-            timeout --kill-after=30s "${seconds}" \
+            run_with_timeout "${seconds}s" \
               gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "${command}"
           }
 
+          timed "GCP project configuration" gcloud config set project "${GCP_PROJECT_ID}"
+
+          gateway_runtime_current() {
+            run_remote "test -f '${gateway_runtime_sentinel}' && [ \"\$(cat '${gateway_runtime_sentinel}')\" = '${gateway_runtime_revision}' ] && test -x /usr/local/bin/poma-configure-ibc && test -x /usr/local/bin/poma-run-ib-gateway && test -x /usr/local/bin/poma-diagnose-ibgateway && systemctl cat ibgateway >/dev/null" 75
+          }
+
           repair_gateway_runtime() {
+            if timed "IAP SSH/runtime sentinel check" gateway_runtime_current; then
+              echo "Gateway runtime helpers already current (${gateway_runtime_revision}); skipping repair/install."
+              return 0
+            fi
+
+            echo "Gateway runtime sentinel missing or stale; fail-open by running repair/install."
             echo "Repairing IB Gateway runtime helpers and installers on the VM."
-            timeout --kill-after=30s 180s gcloud compute scp \
+            timed "Upload gateway helper scripts" run_with_timeout 180s gcloud compute scp \
               ops/scripts/repair_ib_gateway_runtime.py \
               ops/scripts/install_ibc_config_helper.py \
               ops/scripts/ensure_ibgateway_service.sh \
+              ops/scripts/diagnose_ib_gateway_runtime.py \
               "${GCP_VM_NAME}:/tmp/" \
               "${ssh_common[@]}"
-            run_remote "sudo python3 /tmp/repair_ib_gateway_runtime.py && sudo python3 /tmp/install_ibc_config_helper.py && sudo sh /tmp/ensure_ibgateway_service.sh && rm -f /tmp/repair_ib_gateway_runtime.py /tmp/install_ibc_config_helper.py /tmp/ensure_ibgateway_service.sh" 900
+            timed "Runtime repair/install" run_remote "sudo python3 /tmp/repair_ib_gateway_runtime.py && sudo python3 /tmp/install_ibc_config_helper.py && sudo install -m 755 /tmp/diagnose_ib_gateway_runtime.py /usr/local/bin/poma-diagnose-ibgateway && sudo sh /tmp/ensure_ibgateway_service.sh && sudo install -d -m 755 /var/lib/poma && printf '%s\n' '${gateway_runtime_revision}' | sudo tee '${gateway_runtime_sentinel}' >/dev/null && rm -f /tmp/repair_ib_gateway_runtime.py /tmp/install_ibc_config_helper.py /tmp/ensure_ibgateway_service.sh /tmp/diagnose_ib_gateway_runtime.py" 900
           }
 
           diagnose_gateway_failure() {
-            run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
-            run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true"
-            run_remote 'for log in /var/log/poma/ibgateway/*.log /home/poma/ibc/logs/*.txt /home/poma/ibc/logs/*.log /tmp/poma-ibgateway/*.log; do if [ -f "${log}" ]; then echo "===== ${log} ====="; sudo tail -n 120 "${log}" | sed -E "s/(IbPassword|TWSPASSWORD|Password|password)=.*/\1=***/g; s/(IbLoginId|TWSUSERID)=.*/\1=***/g" || true; fi; done'
+            timed "Collect gateway diagnostics" run_remote "if command -v poma-diagnose-ibgateway >/dev/null 2>&1; then sudo poma-diagnose-ibgateway diagnose --log-lines ${LOG_LINES}; else sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true; sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true; fi" 240 || true
+          }
+
+          validate_ibc_configuration() {
+            local mode="$1"
+            run_remote "sudo poma-diagnose-ibgateway validate --mode '${mode}'" 120
+          }
+
+          gateway_readiness_snapshot() {
+            run_remote "sudo poma-diagnose-ibgateway progress --log-lines 40" 90
           }
 
           verify_api_handshake() {
             # A reachable socket only proves a TCP listener. Confirm a real authenticated API
             # handshake via the deployed POMA container (ib_insync connect + managedAccounts).
             # Best-effort: skip cleanly when the app is not yet deployed on the VM.
-            if ! run_remote 'test -f /opt/poma/docker-compose.yml || test -f /opt/poma/compose.yaml'; then
-              echo "POMA app not deployed at /opt/poma; skipping ib_insync API handshake (socket check only)."
-              return 0
-            fi
-            echo "Confirming IBKR API handshake via 'poma ibkr-check' (real ib_insync connect)."
-            if run_remote "sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE=paper -e DATA_PROVIDER=fixture poma ibkr-check'"; then
-              echo "IBKR API handshake succeeded; the gateway is authenticated and serving the API."
-              return 0
-            fi
-            echo "IBKR API handshake failed even though the socket is open on 127.0.0.1:7497." >&2
-            diagnose_gateway_failure
-            exit 1
+            run_remote "if ! test -f /opt/poma/docker-compose.yml && ! test -f /opt/poma/compose.yaml; then echo 'POMA app not deployed at /opt/poma; skipping ib_insync API handshake (socket check only).'; exit 0; fi; echo \"Confirming IBKR API handshake via 'poma ibkr-check' (real ib_insync connect).\"; sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE=paper -e DATA_PROVIDER=fixture poma ibkr-check'" 240
+          }
+
+          poll_gateway_socket_once() {
+            run_remote 'if nc -z 127.0.0.1 7497; then exit 0; fi; if ! systemctl is-active --quiet ibgateway; then exit 2; fi; exit 1' 45
           }
 
           verify_socket() {
-            local timeout_seconds="${IB_GATEWAY_SOCKET_TIMEOUT_SECONDS:-300}"
+            local timeout_seconds="${IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS:-300}"
             local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
             local deadline=$((SECONDS + timeout_seconds))
-            local elapsed=0
+            local elapsed=0 attempt=0 status=0 last_snapshot=0
 
-            echo "Waiting up to ${timeout_seconds}s after the 2FA prompt for IB Gateway API socket on 127.0.0.1:7497."
+            echo "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
-              if run_remote 'nc -z 127.0.0.1 7497'; then
-                echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
-                verify_api_handshake
-                return 0
+              attempt=$((attempt + 1))
+              # Keep timed() in a conditional context: it intentionally returns 1 while the
+              # gateway is still starting, and returning non-zero after re-enabling errexit
+              # would otherwise abort the polling loop before the 5-minute deadline.
+              if timed "Socket/service poll attempt ${attempt}" poll_gateway_socket_once; then
+                status=0
+              else
+                status="$?"
               fi
 
-              if ! run_remote 'systemctl is-active --quiet ibgateway'; then
-                echo "IB Gateway service stopped before the API socket became reachable." >&2
-                diagnose_gateway_failure
-                exit 1
-              fi
+              case "${status}" in
+                0)
+                  echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
+                  if timed "Real API handshake" verify_api_handshake; then
+                    echo "IBKR API handshake succeeded; the gateway is authenticated and serving the API."
+                    return 0
+                  fi
+                  echo "IBKR API handshake failed even though the socket is open on 127.0.0.1:7497." >&2
+                  diagnose_gateway_failure
+                  exit 1
+                  ;;
+                2)
+                  echo "IB Gateway service stopped before the API socket became reachable." >&2
+                  diagnose_gateway_failure
+                  exit 1
+                  ;;
+              esac
 
               elapsed=$((timeout_seconds - (deadline - SECONDS)))
-              if [ "${elapsed}" -gt 0 ] && [ $((elapsed % 30)) -eq 0 ]; then
-                echo "Waiting for IB Gateway API socket... ${elapsed}/${timeout_seconds}s."
-                run_remote "sudo systemctl status ibgateway --no-pager --lines=30 || true"
+              if [ "${elapsed}" -gt 0 ] && [ $((elapsed - last_snapshot)) -ge 60 ]; then
+                echo "Gateway is active but no API listener is reachable yet (${elapsed}/${timeout_seconds}s). Capturing a redacted readiness snapshot."
+                if timed "Gateway readiness snapshot" gateway_readiness_snapshot; then
+                  :
+                else
+                  echo "Gateway readiness snapshot failed; continuing until the bounded deadline."
+                fi
+                last_snapshot="${elapsed}"
+              elif [ "${elapsed}" -gt 0 ] && [ $((elapsed % 30)) -eq 0 ]; then
+                echo "Waiting for IBKR 2FA approval / Gateway API socket... ${elapsed}/${timeout_seconds}s."
               fi
 
               sleep "${poll_seconds}"
             done
 
-            echo "IB Gateway API socket did not become reachable on 127.0.0.1:7497 within ${timeout_seconds}s after the 2FA prompt." >&2
+            echo "IBKR 2FA approval or Gateway API readiness timed out after ${timeout_seconds}s; socket 127.0.0.1:7497 never became API-ready." >&2
+            echo "If no IBKR mobile approval notification was received, Gateway/IBC likely never reached the IBKR login/2FA stage; diagnostics below distinguish config, runner, process, listener, and log state." >&2
             diagnose_gateway_failure
             exit 1
           }
 
           case "${INPUT_ACTION}" in
             status)
-              run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
+              timed "Gateway status" run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
               ;;
             restart)
               repair_gateway_runtime
-              run_remote "sudo systemctl restart ibgateway && sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true"
+              timed "Restart ibgateway" run_remote "sudo systemctl restart ibgateway" 180
+              timed "Gateway status after restart" run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true" 180
               ;;
             logs)
-              run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager"
+              timed "Gateway journal logs" run_remote "sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager" 180
               ;;
             verify-socket)
               repair_gateway_runtime
-              run_remote "sudo systemctl restart ibgateway || true"
+              timed "Restart ibgateway" run_remote "sudo systemctl restart ibgateway || true" 180
               verify_socket
               ;;
             configure-paper|configure-live)
@@ -234,19 +350,14 @@ jobs:
               repair_gateway_runtime
               mode="${INPUT_ACTION#configure-}"
               input_file="$(mktemp)"
-              cleanup() {
-                if command -v shred >/dev/null 2>&1; then
-                  shred -u "${input_file}" 2>/dev/null || rm -f "${input_file}"
-                else
-                  rm -f "${input_file}"
-                fi
-              }
-              trap cleanup EXIT
 
               printf '%s\n%s\n%s\n' "${IBKR_LOGIN_ID}" "${IBKR_LOGIN_SECRET}" "${mode}" > "${input_file}"
               chmod 600 "${input_file}"
-              timeout --kill-after=30s 180s \
+              timed "Configure IBC credentials" run_with_timeout 180s \
                 gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
+              timed "Validate IBC configuration" validate_ibc_configuration "${mode}"
+              echo "Restarting ibgateway after IBC credential/config update so IBC reads the new config and can trigger IBKR 2FA."
+              timed "Restart ibgateway after IBC configuration" run_remote "sudo systemctl restart ibgateway" 180
               verify_socket
               ;;
             *)

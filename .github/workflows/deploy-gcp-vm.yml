@@ -199,7 +199,11 @@ jobs:
           echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}"
 
       - name: Render .env from CI defaults and GitHub secrets
-        run: python ops/scripts/render_env.py --strict-env --output .env.deploy
+        run: |
+          timeout --kill-after=30s 2m python ops/scripts/render_env.py --strict-env --output .env.deploy || {
+            echo "::error::render_env.py timed out or failed while rendering deployment .env"
+            exit 1
+          }
 
       - name: Validate market data provider output
         run: |
@@ -208,8 +212,14 @@ jobs:
             echo "Skipping external provider validation because DATA_PROVIDER=${DATA_PROVIDER}"
             exit 0
           fi
-          pip install -e .
-          python ops/scripts/validate_data_provider.py
+          timeout --kill-after=30s 5m pip install -e . || {
+            echo "::error::Dependency install timed out while preparing data-provider validation"
+            exit 1
+          }
+          timeout --kill-after=30s 5m python ops/scripts/validate_data_provider.py || {
+            echo "::error::Market data provider validation timed out or failed"
+            exit 1
+          }
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -222,7 +232,11 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Configure gcloud project
-        run: gcloud config set project "${GCP_PROJECT_ID}"
+        run: |
+          timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}" || {
+            echo "::error::gcloud project configuration timed out or failed"
+            exit 1
+          }
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4
@@ -231,23 +245,36 @@ jobs:
 
       - name: Terraform init
         run: |
-          terraform -chdir=infra/gcp-free-tier init \
+          set -euo pipefail
+          timeout --kill-after=30s 5m terraform -chdir=infra/gcp-free-tier init \
             -backend-config="bucket=${TF_STATE_BUCKET}" \
-            -backend-config="prefix=poma/${DEPLOY_ENVIRONMENT}/gcp-free-tier"
+            -backend-config="prefix=poma/${DEPLOY_ENVIRONMENT}/gcp-free-tier" || {
+              echo "::error::Terraform init timed out or failed"
+              exit 1
+            }
 
       # terraform fmt -check and validate run in ci.yml on every PR (covering both modules), so
       # they are not repeated here; `terraform plan` below still surfaces any config errors.
       - name: Terraform plan
         run: |
-          terraform -chdir=infra/gcp-free-tier plan -out=tfplan \
+          set -euo pipefail
+          timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan -out=tfplan \
             -var="project_id=${GCP_PROJECT_ID}" \
             -var="region=${GCP_REGION}" \
             -var="zone=${GCP_ZONE}" \
-            -var="instance_name=${GCP_VM_NAME}"
+            -var="instance_name=${GCP_VM_NAME}" || {
+              echo "::error::Terraform plan timed out or failed"
+              exit 1
+            }
 
       - name: Terraform apply
         if: ${{ inputs.terraform_action == 'apply' }}
-        run: terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan || {
+            echo "::error::Terraform apply timed out or failed"
+            exit 1
+          }
 
       - name: Package application
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
@@ -255,7 +282,7 @@ jobs:
           set -euo pipefail
           # Ship only the runtime files required on the VM. Avoid uploading CI/test/docs/git
           # history so IAP transfer and on-VM Docker build contexts stay small.
-          tar \
+          timeout --kill-after=30s 2m tar \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             -czf /tmp/poma.tar.gz \
@@ -266,11 +293,15 @@ jobs:
             pyproject.toml \
             src \
             ops/cron \
-            ops/scripts/deploy.sh
+            ops/scripts/deploy.sh || {
+              echo "::error::Runtime package creation timed out or failed"
+              exit 1
+            }
+          echo "Packaged runtime archive: $(du -h /tmp/poma.tar.gz | awk '{print $1}')"
 
       - name: Upload and install on VM
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
-        timeout-minutes: 55
+        timeout-minutes: 35
         run: |
           set -euo pipefail
 
@@ -278,6 +309,24 @@ jobs:
           zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
           startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"
           ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+          step_start="${SECONDS}"
+
+          timed() {
+            local label="$1" start status
+            shift
+            start="${SECONDS}"
+            echo "::group::${label}"
+            set +e
+            "$@"
+            status="$?"
+            set -e
+            echo "::endgroup::"
+            echo "TIMING ${label}: $((SECONDS - start))s (status=${status})"
+            if [ "${status}" -eq 124 ]; then
+              echo "::error::${label} timed out; check VM readiness, IAP/SSH connectivity, Docker build, or smoke-test health."
+            fi
+            return "${status}"
+          }
 
           run_with_timeout() {
             local seconds="$1"
@@ -286,15 +335,13 @@ jobs:
           }
 
           # Poll the VM over IAP until the POMA startup readiness sentinel matches this
-          # deploy's startup revision. Each probe is a
-          # short, independently-timed SSH, so a cold boot (the minimal startup installs Docker +
-          # cron and writes /var/lib/poma/vm-ready with the current boot id) or a transient
-          # IAP/SSH-key-propagation hang is
-          # retried with a fresh connection. If an older VM has no matching sentinel but cloud-init
-          # has been boot-finished for at least 2 minutes, continue so deploy fails fast with the
-          # concrete Docker/app error instead of spending the whole step polling readiness.
-          # Returns within seconds on an
-          # already-warm VM.
+          # deploy's startup revision. Each probe is a short, independently timed SSH, so a cold
+          # boot (the minimal startup installs Docker + cron and writes /var/lib/poma/vm-ready
+          # with the current boot id) or a transient IAP/SSH-key-propagation hang is retried with
+          # a fresh connection. If an older VM has no matching sentinel but cloud-init has been
+          # boot-finished for at least 2 minutes, continue so deploy fails fast with the concrete
+          # Docker/app error instead of spending the whole step polling readiness. Returns within
+          # seconds on an already-warm VM.
           wait_for_vm_ready() {
             local deadline=$((SECONDS + 240)) attempt=0
             until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
@@ -339,19 +386,35 @@ jobs:
             done
           }
 
-          ensure_vm_ready
+          timed "VM readiness" ensure_vm_ready
 
-          retry_with_backoff 3m "App package upload" 3 \
+          timed "App package upload" retry_with_backoff 3m "App package upload" 3 \
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
-          retry_with_backoff 2m "Environment upload" 3 \
+          timed "Environment upload" retry_with_backoff 2m "Environment upload" 3 \
             gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
 
-          run_with_timeout 25m gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
+          timed "Remote install, Docker build, smoke, cron" run_with_timeout 25m \
+            gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
             set -euo pipefail
-            sudo mkdir -p /opt/poma
+
+            remote_started="$(date +%s)"
+            remote_timed() {
+              local label="$1" status start
+              shift
+              start="$(date +%s)"
+              echo "REMOTE TIMING BEGIN ${label}"
+              set +e
+              "$@"
+              status="$?"
+              set -e
+              echo "REMOTE TIMING END ${label}: $(( $(date +%s) - start ))s (status=${status})"
+              return "${status}"
+            }
+
+            remote_timed "Prepare app directory" sudo mkdir -p /opt/poma
             # Remove files owned by the deploy package before extracting the trimmed runtime set.
             # Preserve .env plus runtime data/report/state/log directories across deploys.
-            sudo rm -rf \
+            remote_timed "Remove old deployed package files" sudo rm -rf \
               /opt/poma/.dockerignore \
               /opt/poma/.git \
               /opt/poma/.github \
@@ -364,18 +427,18 @@ jobs:
               /opt/poma/pyproject.toml \
               /opt/poma/src \
               /opt/poma/tests
-            sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
-            sudo mv /tmp/poma.env /opt/poma/.env
-            sudo chmod 600 /opt/poma/.env
-            sudo install -d -o poma -g poma \
+            remote_timed "Extract application package" sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
+            remote_timed "Install rendered environment" sudo mv /tmp/poma.env /opt/poma/.env
+            remote_timed "Secure rendered environment" sudo chmod 600 /opt/poma/.env
+            remote_timed "Ensure runtime state directories" sudo install -d -o poma -g poma \
               /opt/poma/data \
               /opt/poma/logs \
               /opt/poma/reports \
               /opt/poma/state
             # Keep deploy fast on long-lived VMs: do not recursively chown data/reports/state/logs.
             # Only the freshly extracted package and .env need ownership fixed on each deploy.
-            sudo chown poma:poma /opt/poma /opt/poma/.env
-            sudo chown -R poma:poma \
+            remote_timed "Fix package ownership" sudo chown poma:poma /opt/poma /opt/poma/.env
+            remote_timed "Fix extracted file ownership" sudo chown -R poma:poma \
               /opt/poma/.dockerignore \
               /opt/poma/Dockerfile \
               /opt/poma/README.md \
@@ -387,9 +450,12 @@ jobs:
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (build + smoke + cron).
-            sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
-            sudo -u poma crontab ops/cron/poma.cron
+            remote_timed "Docker build and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
+            remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
+            echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
+
+          echo "TIMING Upload and install on VM total: $((SECONDS - step_start))s"
 
       - name: Notify Telegram (deployment result)
         if: ${{ always() }}
