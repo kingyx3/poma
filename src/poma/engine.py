@@ -14,7 +14,11 @@ from poma.risk import (
     generate_trades,
     validate_targets,
 )
-from poma.strategy import build_market_cap_targets, select_rank_improvers, select_top_market_cap
+from poma.strategy import (
+    build_market_cap_targets,
+    select_rank_improvers,
+    select_top_market_cap,
+)
 
 BLOCK_MARKER = "block execution"
 
@@ -89,11 +93,17 @@ class RebalanceEngine:
         warnings.extend(validate_targets(targets, settings.max_position_pct))
         warnings.extend(trade_warnings)
         warnings.extend(
-            enforce_turnover_limit(trades, settings.portfolio_value_usd, settings.max_turnover_pct)
+            enforce_turnover_limit(
+                trades,
+                settings.portfolio_value_usd,
+                settings.max_turnover_pct,
+            )
         )
         warnings.extend(
             enforce_order_limits(
-                trades, settings.max_order_notional_usd, settings.max_daily_trades
+                trades,
+                settings.max_order_notional_usd,
+                settings.max_daily_trades,
             )
         )
 
