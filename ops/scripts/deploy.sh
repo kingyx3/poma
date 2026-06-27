@@ -19,6 +19,7 @@ for dir in reports state logs data; do
   fi
 done
 
+docker compose version >/dev/null
 docker compose build \
   --build-arg "APP_UID=${POMA_UID}" \
   --build-arg "APP_GID=${POMA_GID}"
@@ -40,5 +41,9 @@ else
     exit 1
   fi
 fi
+
+# Repeated local builds on the small persistent disk can leave dangling layers from older images.
+# Keep the useful build cache, but remove untagged image leftovers after a successful deploy.
+docker image prune -f >/dev/null
 
 echo "Deploy complete. Install cron for scheduled checks; keep IB Gateway supervised separately."

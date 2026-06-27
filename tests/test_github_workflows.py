@@ -269,7 +269,7 @@ def test_deploy_package_contains_only_runtime_files() -> None:
     assert "--exclude='*.pyc'" in workflow
     for entry in (".dockerignore", "Dockerfile", "docker-compose.yml", "pyproject.toml", "src", "ops/cron", "ops/scripts/deploy.sh"):
         assert entry in workflow
-    for stale_path in ("/opt/poma/docs", "/opt/poma/infra", "/opt/poma/tests", "/opt/poma/.github"):
+    for stale_path in ("/opt/poma/docs", "/opt/poma/infra", "/opt/poma/ops", "/opt/poma/tests", "/opt/poma/.github"):
         assert stale_path in workflow
 
 

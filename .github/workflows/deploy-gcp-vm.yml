@@ -358,8 +358,7 @@ jobs:
               /opt/poma/docker-compose.yml \
               /opt/poma/docs \
               /opt/poma/infra \
-              /opt/poma/ops/cron \
-              /opt/poma/ops/scripts/deploy.sh \
+              /opt/poma/ops \
               /opt/poma/pyproject.toml \
               /opt/poma/src \
               /opt/poma/tests

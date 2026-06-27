@@ -23,6 +23,8 @@ def test_deploy_script_builds_container_with_current_host_user() -> None:
     assert 'export POMA_GID="${POMA_GID:-$(id -g)}"' in script
     assert '--build-arg "APP_UID=${POMA_UID}"' in script
     assert '--build-arg "APP_GID=${POMA_GID}"' in script
+    assert "docker compose version >/dev/null" in script
+    assert "docker image prune -f >/dev/null" in script
     assert 'if [ ! -w "${dir}" ]; then' in script
 
 
