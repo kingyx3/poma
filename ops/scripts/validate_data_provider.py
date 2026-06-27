@@ -54,7 +54,10 @@ def main() -> None:
             print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)
 
-    print(f"Data provider validation passed: current_rows={len(current)}")
+    print(
+        f"Data provider validation passed: provider={settings.data_provider} "
+        f"current_rows={len(current)}"
+    )
 
 
 if __name__ == "__main__":
