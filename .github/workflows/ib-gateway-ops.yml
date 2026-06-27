@@ -137,6 +137,7 @@ jobs:
             ops/scripts/repair_ib_gateway_runtime.py \
             ops/scripts/install_ibc_config_helper.py \
             ops/scripts/ensure_ibgateway_service.sh \
+            ops/scripts/diagnose_ib_gateway_runtime.py \
             | sha256sum | awk '{print $1}')"
           gateway_runtime_sentinel="/var/lib/poma/ib-gateway-runtime-revision"
 
@@ -220,7 +221,7 @@ jobs:
           timed "GCP project configuration" gcloud config set project "${GCP_PROJECT_ID}"
 
           gateway_runtime_current() {
-            run_remote "test -f '${gateway_runtime_sentinel}' && [ \"\$(cat '${gateway_runtime_sentinel}')\" = '${gateway_runtime_revision}' ] && test -x /usr/local/bin/poma-configure-ibc && systemctl cat ibgateway >/dev/null" 75
+            run_remote "test -f '${gateway_runtime_sentinel}' && [ \"\$(cat '${gateway_runtime_sentinel}')\" = '${gateway_runtime_revision}' ] && test -x /usr/local/bin/poma-configure-ibc && test -x /usr/local/bin/poma-run-ib-gateway && test -x /usr/local/bin/poma-diagnose-ibgateway && systemctl cat ibgateway >/dev/null" 75
           }
 
           repair_gateway_runtime() {
@@ -235,13 +236,23 @@ jobs:
               ops/scripts/repair_ib_gateway_runtime.py \
               ops/scripts/install_ibc_config_helper.py \
               ops/scripts/ensure_ibgateway_service.sh \
+              ops/scripts/diagnose_ib_gateway_runtime.py \
               "${GCP_VM_NAME}:/tmp/" \
               "${ssh_common[@]}"
-            timed "Runtime repair/install" run_remote "sudo python3 /tmp/repair_ib_gateway_runtime.py && sudo python3 /tmp/install_ibc_config_helper.py && sudo sh /tmp/ensure_ibgateway_service.sh && sudo install -d -m 755 /var/lib/poma && printf '%s\n' '${gateway_runtime_revision}' | sudo tee '${gateway_runtime_sentinel}' >/dev/null && rm -f /tmp/repair_ib_gateway_runtime.py /tmp/install_ibc_config_helper.py /tmp/ensure_ibgateway_service.sh" 900
+            timed "Runtime repair/install" run_remote "sudo python3 /tmp/repair_ib_gateway_runtime.py && sudo python3 /tmp/install_ibc_config_helper.py && sudo install -m 755 /tmp/diagnose_ib_gateway_runtime.py /usr/local/bin/poma-diagnose-ibgateway && sudo sh /tmp/ensure_ibgateway_service.sh && sudo install -d -m 755 /var/lib/poma && printf '%s\n' '${gateway_runtime_revision}' | sudo tee '${gateway_runtime_sentinel}' >/dev/null && rm -f /tmp/repair_ib_gateway_runtime.py /tmp/install_ibc_config_helper.py /tmp/ensure_ibgateway_service.sh /tmp/diagnose_ib_gateway_runtime.py" 900
           }
 
           diagnose_gateway_failure() {
-            timed "Collect gateway diagnostics" run_remote "sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true; sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true; for log in /var/log/poma/ibgateway/*.log /home/poma/ibc/logs/*.txt /home/poma/ibc/logs/*.log /tmp/poma-ibgateway/*.log; do if [ -f \"\${log}\" ]; then echo \"===== \${log} =====\"; sudo tail -n 120 \"\${log}\" | sed -E 's/(IbPassword|TWSPASSWORD|Password|password)=.*/\\1=***/g; s/(IbLoginId|TWSUSERID)=.*/\\1=***/g' || true; fi; done" 180 || true
+            timed "Collect gateway diagnostics" run_remote "if command -v poma-diagnose-ibgateway >/dev/null 2>&1; then sudo poma-diagnose-ibgateway diagnose --log-lines ${LOG_LINES}; else sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true; sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true; fi" 240 || true
+          }
+
+          validate_ibc_configuration() {
+            local mode="$1"
+            run_remote "sudo poma-diagnose-ibgateway validate --mode '${mode}'" 120
+          }
+
+          gateway_readiness_snapshot() {
+            run_remote "sudo poma-diagnose-ibgateway progress --log-lines 40" 90
           }
 
           verify_api_handshake() {
@@ -259,7 +270,7 @@ jobs:
             local timeout_seconds="${IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS:-300}"
             local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
             local deadline=$((SECONDS + timeout_seconds))
-            local elapsed=0 attempt=0 status=0
+            local elapsed=0 attempt=0 status=0 last_snapshot=0
 
             echo "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
@@ -292,7 +303,15 @@ jobs:
               esac
 
               elapsed=$((timeout_seconds - (deadline - SECONDS)))
-              if [ "${elapsed}" -gt 0 ] && [ $((elapsed % 30)) -eq 0 ]; then
+              if [ "${elapsed}" -gt 0 ] && [ $((elapsed - last_snapshot)) -ge 60 ]; then
+                echo "Gateway is active but no API listener is reachable yet (${elapsed}/${timeout_seconds}s). Capturing a redacted readiness snapshot."
+                if timed "Gateway readiness snapshot" gateway_readiness_snapshot; then
+                  :
+                else
+                  echo "Gateway readiness snapshot failed; continuing until the bounded deadline."
+                fi
+                last_snapshot="${elapsed}"
+              elif [ "${elapsed}" -gt 0 ] && [ $((elapsed % 30)) -eq 0 ]; then
                 echo "Waiting for IBKR 2FA approval / Gateway API socket... ${elapsed}/${timeout_seconds}s."
               fi
 
@@ -300,6 +319,7 @@ jobs:
             done
 
             echo "IBKR 2FA approval or Gateway API readiness timed out after ${timeout_seconds}s; socket 127.0.0.1:7497 never became API-ready." >&2
+            echo "If no IBKR mobile approval notification was received, Gateway/IBC likely never reached the IBKR login/2FA stage; diagnostics below distinguish config, runner, process, listener, and log state." >&2
             diagnose_gateway_failure
             exit 1
           }
@@ -335,6 +355,7 @@ jobs:
               chmod 600 "${input_file}"
               timed "Configure IBC credentials" run_with_timeout 180s \
                 gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
+              timed "Validate IBC configuration" validate_ibc_configuration "${mode}"
               verify_socket
               ;;
             *)
