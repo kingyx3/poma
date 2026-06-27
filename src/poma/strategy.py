@@ -11,6 +11,9 @@ def rank_by_market_cap(snapshot: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"snapshot missing required columns: {sorted(missing)}")
     ranked = snapshot.copy()
+    ranked["market_cap"] = pd.to_numeric(ranked["market_cap"], errors="coerce")
+    ranked = ranked.dropna(subset=["ticker", "market_cap"])
+    ranked = ranked[ranked["market_cap"] > 0]
     ranked["market_cap_rank"] = (
         ranked["market_cap"].rank(ascending=False, method="first").astype(int)
     )
@@ -18,14 +21,45 @@ def rank_by_market_cap(snapshot: pd.DataFrame) -> pd.DataFrame:
 
 
 def select_top_market_cap(current: pd.DataFrame, max_holdings: int) -> pd.DataFrame:
-    """Select the largest `max_holdings` names by current market cap.
-
-    Cap-weighted top-N selection. (A rank-improvement tilt can be layered back later from
-    locally accumulated daily snapshots, without per-run historical API calls.)
-    """
+    """Select the largest `max_holdings` names by current market cap."""
     if max_holdings <= 0:
         raise ValueError("max_holdings must be positive")
     return rank_by_market_cap(current).head(max_holdings)
+
+
+def select_rank_improvers(
+    current: pd.DataFrame,
+    historical: pd.DataFrame,
+    max_holdings: int,
+) -> pd.DataFrame:
+    """Select names with the strongest market-cap-rank improvement versus history.
+
+    Rank 1 is the largest company. A positive score means the current rank number is smaller
+    than the historical rank number, so the company moved up the market-cap ranking.
+    """
+    if max_holdings <= 0:
+        raise ValueError("max_holdings must be positive")
+
+    current_ranked = rank_by_market_cap(current)
+    historical_ranked = rank_by_market_cap(historical)
+    previous_ranks = historical_ranked[["ticker", "market_cap_rank"]].rename(
+        columns={"market_cap_rank": "previous_market_cap_rank"}
+    )
+    merged = current_ranked.merge(previous_ranks, on="ticker", how="left")
+
+    # Missing historical names are usually newly added symbols. Do not artificially boost them;
+    # treat them as unchanged until enough point-in-time history has accumulated.
+    merged["previous_market_cap_rank"] = merged["previous_market_cap_rank"].fillna(
+        merged["market_cap_rank"]
+    )
+    merged["previous_market_cap_rank"] = merged["previous_market_cap_rank"].astype(int)
+    merged["rank_improvement_score"] = (
+        merged["previous_market_cap_rank"] - merged["market_cap_rank"]
+    )
+    return merged.sort_values(
+        ["rank_improvement_score", "market_cap_rank"],
+        ascending=[False, True],
+    ).head(max_holdings)
 
 
 def _apply_max_weight_cap(weights: pd.Series, max_weight: float) -> pd.Series:
