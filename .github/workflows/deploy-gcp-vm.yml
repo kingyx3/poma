@@ -199,7 +199,11 @@ jobs:
           echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}"
 
       - name: Render .env from CI defaults and GitHub secrets
-        run: python ops/scripts/render_env.py --strict-env --output .env.deploy
+        run: |
+          timeout --kill-after=30s 2m python ops/scripts/render_env.py --strict-env --output .env.deploy || {
+            echo "::error::render_env.py timed out or failed while rendering deployment .env"
+            exit 1
+          }
 
       - name: Validate market data provider output
         run: |
@@ -208,8 +212,14 @@ jobs:
             echo "Skipping external provider validation because DATA_PROVIDER=${DATA_PROVIDER}"
             exit 0
           fi
-          pip install -e .
-          python ops/scripts/validate_data_provider.py
+          timeout --kill-after=30s 5m pip install -e . || {
+            echo "::error::Dependency install timed out while preparing data-provider validation"
+            exit 1
+          }
+          timeout --kill-after=30s 5m python ops/scripts/validate_data_provider.py || {
+            echo "::error::Market data provider validation timed out or failed"
+            exit 1
+          }
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -222,7 +232,11 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Configure gcloud project
-        run: gcloud config set project "${GCP_PROJECT_ID}"
+        run: |
+          timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}" || {
+            echo "::error::gcloud project configuration timed out or failed"
+            exit 1
+          }
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4
@@ -231,23 +245,36 @@ jobs:
 
       - name: Terraform init
         run: |
-          terraform -chdir=infra/gcp-free-tier init \
+          set -euo pipefail
+          timeout --kill-after=30s 5m terraform -chdir=infra/gcp-free-tier init \
             -backend-config="bucket=${TF_STATE_BUCKET}" \
-            -backend-config="prefix=poma/${DEPLOY_ENVIRONMENT}/gcp-free-tier"
+            -backend-config="prefix=poma/${DEPLOY_ENVIRONMENT}/gcp-free-tier" || {
+              echo "::error::Terraform init timed out or failed"
+              exit 1
+            }
 
       # terraform fmt -check and validate run in ci.yml on every PR (covering both modules), so
       # they are not repeated here; `terraform plan` below still surfaces any config errors.
       - name: Terraform plan
         run: |
-          terraform -chdir=infra/gcp-free-tier plan -out=tfplan \
+          set -euo pipefail
+          timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan -out=tfplan \
             -var="project_id=${GCP_PROJECT_ID}" \
             -var="region=${GCP_REGION}" \
             -var="zone=${GCP_ZONE}" \
-            -var="instance_name=${GCP_VM_NAME}"
+            -var="instance_name=${GCP_VM_NAME}" || {
+              echo "::error::Terraform plan timed out or failed"
+              exit 1
+            }
 
       - name: Terraform apply
         if: ${{ inputs.terraform_action == 'apply' }}
-        run: terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan || {
+            echo "::error::Terraform apply timed out or failed"
+            exit 1
+          }
 
       - name: Package application
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
@@ -255,7 +282,7 @@ jobs:
           set -euo pipefail
           # Ship only the runtime files required on the VM. Avoid uploading CI/test/docs/git
           # history so IAP transfer and on-VM Docker build contexts stay small.
-          tar \
+          timeout --kill-after=30s 2m tar \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             -czf /tmp/poma.tar.gz \
@@ -266,12 +293,15 @@ jobs:
             pyproject.toml \
             src \
             ops/cron \
-            ops/scripts/deploy.sh
+            ops/scripts/deploy.sh || {
+              echo "::error::Runtime package creation timed out or failed"
+              exit 1
+            }
           echo "Packaged runtime archive: $(du -h /tmp/poma.tar.gz | awk '{print $1}')"
 
       - name: Upload and install on VM
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
-        timeout-minutes: 55
+        timeout-minutes: 35
         run: |
           set -euo pipefail
 
@@ -292,6 +322,9 @@ jobs:
             set -e
             echo "::endgroup::"
             echo "TIMING ${label}: $((SECONDS - start))s (status=${status})"
+            if [ "${status}" -eq 124 ]; then
+              echo "::error::${label} timed out; check VM readiness, IAP/SSH connectivity, Docker build, or smoke-test health."
+            fi
             return "${status}"
           }
 
