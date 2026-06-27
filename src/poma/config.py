@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     universe: str = Field(default="us_top_market_cap", alias="UNIVERSE")
     rank_lookback_days: PositiveInt = Field(default=90, alias="RANK_LOOKBACK_DAYS")
-    max_holdings: PositiveInt = Field(default=30, alias="MAX_HOLDINGS")
+    max_holdings: PositiveInt = Field(default=100, alias="MAX_HOLDINGS")
 
     portfolio_value_usd: PositiveFloat = Field(default=10_000.0, alias="PORTFOLIO_VALUE_USD")
     cash_buffer_pct: float = Field(default=0.02, alias="CASH_BUFFER_PCT")
