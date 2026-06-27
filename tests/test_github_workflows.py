@@ -191,14 +191,17 @@ def test_workflows_send_env_tagged_telegram_notifications() -> None:
         assert "${{ secrets.TELEGRAM_BOT_TOKEN }}" in workflow
 
 
-def test_auto_cicd_deploys_dev_on_pr_and_stg_on_merge() -> None:
+def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
     workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
 
-    # Triggers: every PR push (opened/reopened/synchronize) for dev, push to main for stg.
+    # Triggers: every PR push (opened/reopened/synchronize) for dev, push to main for stg,
+    # published release for prd.
     assert "pull_request:" in workflow
     assert "types: [opened, reopened, synchronize]" in workflow
     assert "push:" in workflow
     assert "branches: [main]" in workflow
+    assert "release:" in workflow
+    assert "types: [published]" in workflow
 
     # A newer PR push cancels the previous push's in-progress deploy.
     assert "cancel-in-progress: true" in workflow
@@ -208,23 +211,42 @@ def test_auto_cicd_deploys_dev_on_pr_and_stg_on_merge() -> None:
     assert "uses: ./.github/workflows/ib-gateway-ops.yml" in workflow
     assert "secrets: inherit" in workflow
 
-    # dev on PR, stg on merge; both paper; gateway configured; prd never automated.
+    # dev on PR, stg on merge (both paper), prd on release (live).
     assert "deploy_environment: dev" in workflow
     assert "deploy_environment: stg" in workflow
+    assert "deploy_environment: prd" in workflow
     assert "trading_mode: paper" in workflow
-    # dev PRs use fixture data; stg-on-merge validates the real Yahoo path.
+    assert "trading_mode: live" in workflow
+    assert "allow_live_trading: true" in workflow
+    # dev PRs use fixture data; stg/prd validate the real Yahoo path.
     assert "data_provider: fixture" in workflow
     assert "data_provider: yahoo" in workflow
     assert "action: configure-paper" in workflow
-    assert "deploy_environment: prd" not in workflow
+    assert "action: configure-live" in workflow
     # dev PRs skip the slow on-VM dry-run smoke for fast feedback.
     assert "deploy_smoke: false" in workflow
 
-    # Fork PRs (no secrets) must not trigger deploys.
+    # prd only on a published, non-prerelease release; fork PRs (no secrets) never deploy.
+    assert "github.event_name == 'release' && github.event.release.prerelease == false" in workflow
     assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
     assert "github.event_name == 'push'" in workflow
+
+    # No Tailscale anywhere in the orchestrator.
+    assert "tailscale" not in workflow.lower()
 
 
 def test_deploy_workflow_passes_smoke_flag_to_vm() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
     assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" in workflow
+
+
+def test_no_workflow_references_tailscale() -> None:
+    # Tailscale was removed; operator access is via IAP SSH only. Guard against reintroduction.
+    for workflow in (
+        CI_WORKFLOW,
+        BOOTSTRAP_WORKFLOW,
+        DEPLOY_WORKFLOW,
+        GATEWAY_OPS_WORKFLOW,
+        AUTO_CICD_WORKFLOW,
+    ):
+        assert "tailscale" not in workflow.read_text(encoding="utf-8").lower()

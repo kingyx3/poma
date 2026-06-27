@@ -25,13 +25,7 @@ nc -z 127.0.0.1 7497 && echo "IB Gateway API socket is reachable"
 
 6. Only after the socket is reachable, redeploy with `trading_mode=paper` or `trading_mode=live`.
 
-Use direct SSH only for recovery or manual break-glass operations. Prefer Tailscale when available:
-
-```bash
-ssh poma@<tailscale-ip-or-hostname>
-```
-
-Use IAP as the break-glass path:
+Use direct SSH only for recovery or manual break-glass operations. IAP SSH is the access path:
 
 ```bash
 gcloud compute ssh poma-<env>-free-tier --zone us-west1-b --tunnel-through-iap
@@ -46,8 +40,6 @@ The VM startup script installs and enables:
 - `ibgateway.service` under `systemd`.
 - A headless display and localhost-only VNC for recovery.
 - `/usr/local/bin/poma-configure-ibc` for the required IBC credential setup.
-
-The deploy workflow also joins the VM to Tailscale when `tailscale_enabled=true`. The Tailscale auth key is not stored on disk after configuration completes.
 
 The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` from GitHub Environment Secrets only for `configure-paper` and `configure-live`, sends them to `sudo poma-configure-ibc` over IAP SSH stdin, and removes its temporary runner-side input file after use.
 
@@ -69,16 +61,9 @@ The service starts raw IB Gateway until `/home/poma/ibc/config.ini` exists. Afte
 sudo systemctl restart ibgateway
 sudo journalctl -u ibgateway -n 200 --no-pager
 sudo tail -n 120 /var/log/poma/ibgateway/*.log
-sudo tailscale status
 ```
 
-Open the Gateway GUI only through a local tunnel. Prefer Tailscale SSH when the node is connected:
-
-```bash
-ssh poma@<tailscale-ip-or-hostname> -L 5900:127.0.0.1:5900
-```
-
-Use IAP as the break-glass tunnel:
+Open the Gateway GUI only through a local tunnel over IAP SSH:
 
 ```bash
 gcloud compute ssh poma-<env>-free-tier \

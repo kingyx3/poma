@@ -260,7 +260,7 @@ jobs:
           1. Delete GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY from the ${DEPLOY_ENVIRONMENT} GitHub Environment.
           2. Delete or disable the temporary bootstrap service account key in GCP IAM.
           3. Normal deploys use ops/deploy/environments/${DEPLOY_ENVIRONMENT}.env plus GitHub Environment secrets.
-          4. Keep runtime secrets in GitHub Environments: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and TAILSCALE_AUTHKEY when joining Tailscale.
+          4. Keep runtime secrets in GitHub Environments: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
           5. For paper deploys, set IBKR_ACCOUNT_PAPER. For live deploys, set IBKR_ACCOUNT and require allow_live_trading=true.
           6. Set IBKR_LOGIN_ID and IBKR_LOGIN_SECRET only if using IB Gateway Ops configure actions.
           7. Manually delete old GitHub Environment Variables from earlier bootstrap runs; current workflows do not read them.

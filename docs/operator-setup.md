@@ -27,14 +27,11 @@ python ops/scripts/get_telegram_chat_id.py --timeout-seconds 120
 
 If the bot already uses a webhook, `getUpdates` cannot read updates until the webhook is removed. In GitHub Actions, set `delete_webhook=true` for this helper run, or remove the webhook temporarily yourself. The helper uses `drop_pending_updates=false` when deleting the webhook so pending messages are not intentionally discarded.
 
-## Tailscale node registration
+## VM access
 
-A password manager can store and sync the Tailscale node registration credential into a GitHub Environment secret. The value still needs to come from Tailscale, either from the Tailscale admin console or from Tailscale API automation.
+Operator access to the VM is via Google Cloud IAP SSH — no VPN, node-registration credential, or extra GitHub secret is required. The VM's only ingress is IAP SSH (TCP 22 from `35.235.240.0/20`).
 
-The simplest production path is:
+- Open a shell: `gcloud compute ssh <vm-name> --zone <zone> --tunnel-through-iap`.
+- Reach the IB Gateway VNC GUI: add `-- -L 5900:127.0.0.1:5900` to the command above, then point a local VNC client at `127.0.0.1:5900`.
 
-1. Generate the node registration credential in the Tailscale admin console.
-2. Store it in your password manager.
-3. Sync or paste it into the `TAILSCALE_AUTHKEY` GitHub Environment secret.
-
-For less manual rotation, use Tailscale OAuth/API automation later. In that model, CI stores OAuth client credentials and creates a fresh node registration credential at deploy time.
+Anyone running these commands needs the `roles/iap.tunnelResourceAccessor` role (the GitHub deployer service account already has it).

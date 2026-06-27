@@ -7,12 +7,13 @@ POMA is a low-cost Python scaffold for a personal long-only US large-cap strateg
 ```text
 Universe: Yahoo Finance US top 500 by current market cap
 Lookback: 90 days
-Score: previous_rank - current_rank
-Selection: top 30 stocks by rank improvement score
-Weighting: market-cap weighted, with risk caps
+Factors: market-cap size + rank momentum (previous_rank - current_rank), each z-scored
+Score: equal-weighted sum of the two factors (combined_score)
+Selection: top 100 stocks by combined_score
+Weighting: equal-weighted, with risk caps
 ```
 
-Rank 1 is the largest company by market cap, so a positive score means the stock moved up the market-cap ranking over the 90-day window.
+Rank 1 is the largest company by market cap, so a positive momentum score means the stock moved up the market-cap ranking over the 90-day window. The size and momentum factors are each standardized (z-scored) and summed with equal weight, so the strategy favours companies that are both large and climbing. Selected names are held at equal weight (`1/N`), with the per-position cap still binding.
 
 The production market-data provider is `DATA_PROVIDER=yahoo`. Future providers should implement the normalized `current_universe_snapshot()` contract without changing strategy or engine code.
 
