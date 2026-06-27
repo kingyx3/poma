@@ -211,25 +211,50 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
     assert "uses: ./.github/workflows/ib-gateway-ops.yml" in workflow
     assert "secrets: inherit" in workflow
 
-    # dev on PR, stg on merge (both paper), prd on release (live).
-    assert "deploy_environment: dev" in workflow
-    assert "deploy_environment: stg" in workflow
-    assert "deploy_environment: prd" in workflow
-    assert "trading_mode: paper" in workflow
-    assert "trading_mode: live" in workflow
-    assert "allow_live_trading: true" in workflow
-    # dev PRs use fixture data; stg/prd validate the real Yahoo path.
-    assert "data_provider: fixture" in workflow
-    assert "data_provider: yahoo" in workflow
-    assert "action: configure-paper" in workflow
-    assert "action: configure-live" in workflow
-    # dev PRs skip the slow on-VM dry-run smoke for fast feedback.
-    assert "deploy_smoke: false" in workflow
+    # dev on PR and stg on merge now run equivalent paper deploy + gateway paths.
+    dev_deploy = workflow.split("  dev-deploy:\n", 1)[1]
+    dev_deploy = dev_deploy.split("\n\n  dev-configure-gateway:", 1)[0]
+    stg_deploy = workflow.split("  stg-deploy:\n", 1)[1]
+    stg_deploy = stg_deploy.split("\n\n  stg-configure-gateway:", 1)[0]
+    dev_gateway = workflow.split("  dev-configure-gateway:\n", 1)[1]
+    dev_gateway = dev_gateway.split("\n\n  stg-deploy:", 1)[0]
+    stg_gateway = workflow.split("  stg-configure-gateway:\n", 1)[1]
+    stg_gateway = stg_gateway.split("\n\n  # Publishing", 1)[0]
+
+    for deploy_block in (dev_deploy, stg_deploy):
+        assert "terraform_action: apply" in deploy_block
+        assert "deploy_app: true" in deploy_block
+        assert "trading_mode: paper" in deploy_block
+        assert "data_provider: yahoo" in deploy_block
+        assert "allow_live_trading: false" in deploy_block
+        assert "deploy_smoke: true" in deploy_block
+
+    for gateway_block in (dev_gateway, stg_gateway):
+        assert "action: configure-paper" in gateway_block
+        assert "log_lines: 200" in gateway_block
+        assert "secrets: inherit" in gateway_block
+
+    assert "deploy_environment: dev" in dev_deploy
+    assert "deploy_environment: dev" in dev_gateway
+    assert "deploy_environment: stg" in stg_deploy
+    assert "deploy_environment: stg" in stg_gateway
+    assert "needs: dev-deploy" in dev_gateway
+    assert "needs: stg-deploy" in stg_gateway
+
+    # Guard against reintroducing a lighter PR-only path.
+    assert "terraform_action: plan" not in workflow
+    assert "deploy_app: false" not in workflow
+    assert "data_provider: fixture" not in workflow
+    assert "deploy_smoke: false" not in workflow
 
     # prd only on a published, non-prerelease release; fork PRs (no secrets) never deploy.
     assert "github.event_name == 'release' && github.event.release.prerelease == false" in workflow
     assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
     assert "github.event_name == 'push'" in workflow
+    assert "deploy_environment: prd" in workflow
+    assert "trading_mode: live" in workflow
+    assert "allow_live_trading: true" in workflow
+    assert "action: configure-live" in workflow
 
     # No Tailscale anywhere in the orchestrator.
     assert "tailscale" not in workflow.lower()
