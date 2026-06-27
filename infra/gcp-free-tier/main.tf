@@ -6,10 +6,17 @@ locals {
     component = "trading-vm"
   }
 
+  startup_revision = md5(join(":", [
+    file("${path.module}/startup.sh"),
+    local.app_user,
+    local.app_dir,
+  ]))
+
   # Rendered once so both the VM metadata and the replacement trigger see the same content.
   startup_script = templatefile("${path.module}/startup.sh", {
-    app_user = "poma"
-    app_dir  = "/opt/poma"
+    app_user         = local.app_user
+    app_dir          = local.app_dir
+    startup_revision = local.startup_revision
   })
 }
 
@@ -18,7 +25,7 @@ locals {
 # instance's replace_triggered_by to a hash of the rendered script makes every startup change
 # produce a clean, freshly-booted VM instead of drifting from the committed bootstrap.
 resource "terraform_data" "startup_revision" {
-  input = md5(local.startup_script)
+  input = local.startup_revision
 }
 
 resource "google_project_service" "required" {
@@ -85,6 +92,7 @@ resource "google_compute_instance" "poma" {
 
   metadata = {
     block-project-ssh-keys = "true"
+    poma-startup-revision  = local.startup_revision
     startup-script         = local.startup_script
   }
 
