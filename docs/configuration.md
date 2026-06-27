@@ -26,20 +26,20 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `APP_ENV` | yes | selected GitHub Environment in CI | Label only. CI sets this to `dev`, `stg`, or `prd`. |
 | `TRADING_MODE` | yes | `dry_run` | Set by deploy workflow input: `dry_run`, `paper`, or `live`. |
 | `ALLOW_LIVE_TRADING` | live only | `false` | Set by deploy workflow input. Must be true for live trading. |
-| `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars`. |
+| `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars` for the US equity trading session. |
 | `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
 | `DATA_PROVIDER` | yes | `yahoo` | Supported values: `yahoo` for real runs and `fixture` for tests/PR dry-runs. |
-| `YAHOO_SCREENER_LIMIT` | yahoo only | `500` | Number of largest US companies to request from Yahoo. |
+| `YAHOO_SCREENER_LIMIT` | yahoo only | `500` | Number of largest US companies to request from Yahoo before issuer/share-class dedupe and scoring. |
 | `YAHOO_SCREENER_PAGE_SIZE` | yahoo only | `250` | Yahoo screen page size. yfinance/Yahoo caps this at 250. |
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
-| `MAX_HOLDINGS` | yes | `100` | Hold the top names by combined market-cap-size + rank-momentum score, equal-weighted. |
+| `MAX_HOLDINGS` | yes | `100` | Hold the top company stocks by combined market-cap-size + rank-rising-velocity score, equal-weighted. |
 | `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. |
 | `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap. |
 | `MAX_TURNOVER_PCT` | yes | `0.35` | Blocks excessive rebalance churn. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Avoids tiny uneconomic trades. |
-| `MIN_WEIGHT_DELTA_PCT` | yes | `0.0025` | Avoids churn from tiny target changes while allowing smaller top-30 positions. |
+| `MIN_WEIGHT_DELTA_PCT` | yes | `0.0025` | Avoids churn from tiny target changes while allowing 1% top-100 target weights. |
 | `ORDER_TYPE` | yes | `limit` | Use `limit` by default. |
 | `ALLOW_MARKET_ORDERS` | live market only | `false` | Explicit opt-in for live market orders. |
 | `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset from reference price. |
@@ -60,13 +60,13 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 
 ## Market data snapshots and ranking
 
-Run this before the first rank-improvement rebalance, or let the first rebalance save only the current snapshot and fall back to current market-cap selection until lookback history exists:
+Run this before the first rank-rising-velocity rebalance, or let the first rebalance save only the current snapshot and fall back to current market-cap selection until lookback history exists:
 
 ```bash
 poma refresh-market-data
 ```
 
-Current top-500 membership comes from `yfinance.screen()` sorted by `intradaymarketcap`. Historical market caps are estimated from Yahoo close prices multiplied by the current share count from the latest snapshot.
+Current top-500 membership comes from `yfinance.screen()` sorted by `intradaymarketcap`. The strategy deduplicates share classes before ranking companies: issuer/name metadata is preferred when available, and exact duplicate market-cap buckets are used as a fallback when issuer metadata is missing. Historical market caps are estimated from Yahoo close prices multiplied by the current share count from the latest snapshot.
 
 ## Telegram alert config
 
