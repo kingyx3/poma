@@ -126,9 +126,9 @@ def _run_rebalance(
 @app.command()
 def refresh_market_data(
     lookback_days: Annotated[
-        int | None,
-        typer.Option(help="Historical lookback to refresh. Defaults to RANK_LOOKBACK_DAYS."),
-    ] = None,
+        int,
+        typer.Option(help="Historical lookback to refresh. Use 0 for RANK_LOOKBACK_DAYS."),
+    ] = 0,
 ) -> None:
     """Fetch the configured provider and store normalized snapshots under DATA_DIR."""
     settings = get_settings()
