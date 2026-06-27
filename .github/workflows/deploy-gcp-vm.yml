@@ -45,8 +45,9 @@ on:
         type: choice
         options:
           - fixture
+          - yahoo
           - fmp
-        default: fixture
+        default: yahoo
       allow_live_trading:
         description: Must be true when trading_mode=live.
         required: true
@@ -81,7 +82,7 @@ on:
       data_provider:
         required: false
         type: string
-        default: fixture
+        default: yahoo
       allow_live_trading:
         required: false
         type: boolean
@@ -142,9 +143,14 @@ jobs:
           set_env ALLOW_LIVE_TRADING "${INPUT_ALLOW_LIVE_TRADING}"
           set_default MARKET_CALENDAR "NASDAQ"
           set_default REBALANCE_AFTER_OPEN_MINUTES "10"
-          set_default UNIVERSE "sp500"
+          set_env DATA_PROVIDER "${INPUT_DATA_PROVIDER}"
+          if [ "${DATA_PROVIDER}" = "yahoo" ]; then
+            set_default UNIVERSE "us_top_market_cap"
+          else
+            set_default UNIVERSE "sp500"
+          fi
           set_default RANK_LOOKBACK_DAYS "90"
-          set_default MAX_HOLDINGS "100"
+          set_default MAX_HOLDINGS "30"
           set_default PORTFOLIO_VALUE_USD "10000"
           set_default CASH_BUFFER_PCT "0.02"
           set_default MAX_POSITION_PCT "0.10"
@@ -158,21 +164,27 @@ jobs:
           set_default MAX_DAILY_TRADES "100"
           set_default ORDER_STATUS_TIMEOUT_SECONDS "60"
           set_default CANCEL_STALE_ORDERS "true"
-          set_env DATA_PROVIDER "${INPUT_DATA_PROVIDER}"
           set_default FMP_BASE_URL "https://financialmodelingprep.com/stable"
+          set_default YAHOO_SCREENER_LIMIT "500"
+          set_default YAHOO_SCREENER_PAGE_SIZE "250"
           set_default IBKR_HOST "127.0.0.1"
           set_default IBKR_PORT "7497"
           set_default IBKR_CLIENT_ID "101"
           set_default STATE_DIR "state"
+          set_default DATA_DIR "data"
           set_default REPORT_DIR "reports"
 
           if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
             echo "::error::TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID GitHub Environment secrets are required"
             exit 1
           fi
-          if [ "${DATA_PROVIDER}" = "fmp" ] && [ -z "${FMP_API_KEY:-}" ]; then
-            echo "::error::FMP_API_KEY GitHub Environment secret is required when DATA_PROVIDER=fmp"
-            exit 1
+          if [ "${DATA_PROVIDER}" = "fmp" ]; then
+            if [ -z "${FMP_API_KEY:-}" ]; then
+              echo "::error::FMP_API_KEY GitHub Environment secret is required when DATA_PROVIDER=fmp"
+              exit 1
+            fi
+          else
+            set_default FMP_API_KEY "unused"
           fi
           case "${TRADING_MODE}" in
             paper)
@@ -211,11 +223,11 @@ jobs:
       - name: Render .env from CI defaults and GitHub secrets
         run: python ops/scripts/render_env.py --strict-env --output .env.deploy
 
-      - name: Validate FMP data provider output
+      - name: Validate market data provider output
         run: |
           set -euo pipefail
-          if [ "${DATA_PROVIDER}" != "fmp" ]; then
-            echo "Skipping FMP validation because DATA_PROVIDER=${DATA_PROVIDER}"
+          if [ "${DATA_PROVIDER}" = "fixture" ]; then
+            echo "Skipping external provider validation because DATA_PROVIDER=${DATA_PROVIDER}"
             exit 0
           fi
           pip install -e .

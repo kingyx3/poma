@@ -41,10 +41,12 @@ class Settings(BaseSettings):
         default="https://financialmodelingprep.com/stable",
         alias="FMP_BASE_URL",
     )
+    yahoo_screener_limit: PositiveInt = Field(default=500, alias="YAHOO_SCREENER_LIMIT")
+    yahoo_screener_page_size: PositiveInt = Field(default=250, alias="YAHOO_SCREENER_PAGE_SIZE")
 
-    universe: str = Field(default="sp500", alias="UNIVERSE")
+    universe: str = Field(default="us_top_market_cap", alias="UNIVERSE")
     rank_lookback_days: PositiveInt = Field(default=90, alias="RANK_LOOKBACK_DAYS")
-    max_holdings: PositiveInt = Field(default=100, alias="MAX_HOLDINGS")
+    max_holdings: PositiveInt = Field(default=30, alias="MAX_HOLDINGS")
 
     portfolio_value_usd: PositiveFloat = Field(default=10_000.0, alias="PORTFOLIO_VALUE_USD")
     cash_buffer_pct: float = Field(default=0.02, alias="CASH_BUFFER_PCT")
@@ -76,6 +78,7 @@ class Settings(BaseSettings):
     ibkr_account: str | None = Field(default=None, alias="IBKR_ACCOUNT")
 
     state_dir: Path = Field(default=Path("state"), alias="STATE_DIR")
+    data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
     report_dir: Path = Field(default=Path("reports"), alias="REPORT_DIR")
 
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")

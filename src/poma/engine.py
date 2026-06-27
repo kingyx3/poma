@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from poma.broker import Broker, build_broker
 from poma.config import Settings, TradingMode
@@ -14,7 +14,11 @@ from poma.risk import (
     generate_trades,
     validate_targets,
 )
-from poma.strategy import build_market_cap_targets, select_top_market_cap
+from poma.strategy import (
+    build_market_cap_targets,
+    select_rank_improvers,
+    select_top_market_cap,
+)
 
 BLOCK_MARKER = "block execution"
 
@@ -28,12 +32,7 @@ class RebalanceOutcome:
 
 
 class RebalanceEngine:
-    """Pure orchestration for a single rebalance.
-
-    Data and broker clients are injectable so the engine can be unit-tested without a live
-    IBKR gateway or market-data provider. Side effects that are not part of the trading
-    decision (report files, notifications, console output) live in the caller.
-    """
+    """Pure orchestration for a single rebalance."""
 
     def __init__(
         self,
@@ -51,9 +50,23 @@ class RebalanceEngine:
     def build_plan(self, session_date: str, run_id: str) -> RebalancePlan:
         settings = self.settings
         current = self.data_client.current_universe_snapshot()
+        warnings: list[str] = []
+        historical = None
+        today = datetime.now(UTC).date()
         if self.history is not None:
-            self.history.save(current, datetime.now(UTC).date())
-        selected = select_top_market_cap(current, settings.max_holdings)
+            target_date = today - timedelta(days=settings.rank_lookback_days)
+            historical = self.history.load_asof(target_date)
+            self.history.save(current, today)
+
+        if historical is None:
+            selected = select_top_market_cap(current, settings.max_holdings)
+            if self.history is not None:
+                warnings.append(
+                    "no historical market-cap snapshot found for lookback window; "
+                    "falling back to current market-cap selection"
+                )
+        else:
+            selected = select_rank_improvers(current, historical, settings.max_holdings)
         targets = build_market_cap_targets(
             selected=selected,
             portfolio_value_usd=settings.portfolio_value_usd,
@@ -77,14 +90,20 @@ class RebalanceEngine:
             limit_offset_bps=settings.limit_offset_bps,
         )
 
-        warnings = validate_targets(targets, settings.max_position_pct)
+        warnings.extend(validate_targets(targets, settings.max_position_pct))
         warnings.extend(trade_warnings)
         warnings.extend(
-            enforce_turnover_limit(trades, settings.portfolio_value_usd, settings.max_turnover_pct)
+            enforce_turnover_limit(
+                trades,
+                settings.portfolio_value_usd,
+                settings.max_turnover_pct,
+            )
         )
         warnings.extend(
             enforce_order_limits(
-                trades, settings.max_order_notional_usd, settings.max_daily_trades
+                trades,
+                settings.max_order_notional_usd,
+                settings.max_daily_trades,
             )
         )
 

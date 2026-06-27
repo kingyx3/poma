@@ -22,7 +22,15 @@ jobs:
       - name: Ruff
         run: ruff check .
       - name: Pytest
-        run: pytest
+        run: |
+          set -o pipefail
+          pytest 2>&1 | tee pytest.log
+      - name: Upload pytest log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: pytest.log
       - name: Docker build smoke test
         run: docker build -t poma:${{ github.sha }} .
 

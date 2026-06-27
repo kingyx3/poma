@@ -1,20 +1,24 @@
-# POMA — Simple S&P 500 Rebalancer
+# POMA — Simple US Top-500 Rebalancer
 
-POMA is a low-cost Python scaffold for a personal long-only S&P 500 strategy.
+POMA is a low-cost Python scaffold for a personal long-only US large-cap strategy.
 
 ## Strategy
 
 The default strategy is explicit:
 
 ```text
-Universe: S&P 500
+Universe: Yahoo Finance US top 500 by current market cap
 Lookback: 90 days
 Score: previous_rank - current_rank
-Selection: top 100 stocks by rank improvement score
+Selection: top 30 stocks by rank improvement score
 Weighting: market-cap weighted, with risk caps
 ```
 
 Rank 1 is the largest company by market cap, so a positive score means the stock moved up the market-cap ranking over the 90-day window.
+
+The market-data layer is modular. `DATA_PROVIDER=yahoo` is the default no-key provider, `DATA_PROVIDER=fmp` remains available for paid FMP plans, and future providers only need to implement the normalized `current_universe_snapshot()` contract.
+
+Yahoo's free feed does not provide a clean bulk historical market-cap endpoint. POMA therefore stores daily point-in-time snapshots under `DATA_DIR/market_snapshots/` and can backfill estimated historical market caps from Yahoo close prices using current share-count information. Use a paid point-in-time fundamentals feed later if you need institutional-grade historical market caps.
 
 ## Architecture
 
@@ -23,7 +27,7 @@ Ubuntu VPS / GCP e2-micro VM
   -> cron every 5 minutes
   -> POMA checks US market calendar
   -> if market has been open for 10+ minutes and today's run has not happened
-  -> rebalance directly through IB Gateway on the same host
+  -> refreshes/saves market snapshot and rebalances through IB Gateway on the same host
 ```
 
 No Cloud Run. No Artifact Registry. No Secret Manager. No remote executor service.
@@ -39,7 +43,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env
-# set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env
+# set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and IBKR_ACCOUNT in .env
+poma refresh-market-data
 python -m poma.cli monitor
 pytest
 ```
@@ -48,6 +53,7 @@ pytest
 
 | Command | Purpose |
 |---|---|
+| `poma refresh-market-data` | Fetch the configured provider, save current/historical snapshots under `DATA_DIR`, and prepare rank-history inputs. |
 | `poma monitor` | Cron entrypoint: rebalances once per session when the market timing and state allow it. |
 | `poma rebalance [--dry-run]` | Run a rebalance now (optionally forced to dry-run). |
 | `poma positions` | Print the broker's current stock portfolio (paper/live). |
@@ -98,7 +104,7 @@ Docker Compose is used as a one-shot runner from cron. Do not run the POMA conta
 - Failed runs become manual-review events.
 - Market-calendar timing instead of brittle DST cron logic.
 - Cash buffer.
-- Max 100 holdings by default.
+- Max 30 holdings by default.
 - Max position, turnover, order size, and trade-count limits.
 - Minimum trade notional and minimum weight-delta filters.
 - JSON reports with proposed trades and execution results.
