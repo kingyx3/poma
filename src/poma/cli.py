@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -10,7 +11,7 @@ from rich.table import Table
 
 from poma.broker import build_broker
 from poma.config import TradingMode, get_settings
-from poma.data import utc_run_id
+from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
 from poma.health import check_ibkr, run_checks
 from poma.history import CapSnapshotHistory
@@ -95,7 +96,7 @@ def _run_rebalance(
     if force_dry_run:
         settings = settings.model_copy(update={"trading_mode": TradingMode.DRY_RUN})
 
-    engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.state_dir))
+    engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.data_dir))
     plan = engine.build_plan(session_date, run_id)
     report_path = _write_report(plan, settings.report_dir)
 
@@ -120,6 +121,36 @@ def _run_rebalance(
     send_alert(settings, _portfolio_summary(session_date, plan, "completed", executed=True))
     console.print(f"Submitted {len(plan.trades)} trades. Report written to {report_path}")
     return outcome, report_path
+
+
+@app.command()
+def refresh_market_data(
+    lookback_days: Annotated[
+        int | None,
+        typer.Option(help="Historical lookback to refresh. Defaults to RANK_LOOKBACK_DAYS."),
+    ] = None,
+) -> None:
+    """Fetch the configured provider and store normalized snapshots under DATA_DIR."""
+    settings = get_settings()
+    days = lookback_days or settings.rank_lookback_days
+    client = build_data_client(settings)
+    history = CapSnapshotHistory(settings.data_dir)
+    today = datetime.now(UTC).date()
+
+    current = client.current_universe_snapshot()
+    current_path = history.save(current, today)
+    console.print(f"Saved current snapshot: {current_path} ({len(current)} rows)")
+
+    if not hasattr(client, "historical_universe_snapshots"):
+        console.print(
+            f"Provider {settings.data_provider} does not support historical backfill; "
+            "only the current snapshot was saved."
+        )
+        return
+
+    snapshots = client.historical_universe_snapshots(current, days, end_date=today)
+    paths = history.save_many(snapshots)
+    console.print(f"Saved {len(paths)} historical snapshots under {history.dir}")
 
 
 @app.command()
