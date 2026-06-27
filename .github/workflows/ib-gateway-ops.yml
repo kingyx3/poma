@@ -54,6 +54,9 @@ jobs:
   gateway-ops:
     name: IB Gateway ${{ inputs.action }} (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
+    # Hard ceiling so a stalled install, dpkg lock, SSH tunnel, or 2FA wait can never leave
+    # this job (and the auto-cicd run it gates) running for GitHub's 6-hour default.
+    timeout-minutes: 25
     environment: ${{ inputs.deploy_environment }}
     env:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
@@ -128,20 +131,24 @@ jobs:
           gcloud config set project "${GCP_PROJECT_ID}"
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
 
+          # Bound every remote call so a hung IAP SSH tunnel or remote command cannot stall
+          # the job. Callers pass a longer timeout for the install/repair step.
           run_remote() {
             local command="$1"
-            gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "${command}"
+            local seconds="${2:-180}"
+            timeout --kill-after=30s "${seconds}" \
+              gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "${command}"
           }
 
           repair_gateway_runtime() {
             echo "Repairing IB Gateway runtime helpers and installers on the VM."
-            gcloud compute scp \
+            timeout --kill-after=30s 180s gcloud compute scp \
               ops/scripts/repair_ib_gateway_runtime.py \
               ops/scripts/install_ibc_config_helper.py \
               ops/scripts/ensure_ibgateway_service.sh \
               "${GCP_VM_NAME}:/tmp/" \
               "${ssh_common[@]}"
-            run_remote "sudo python3 /tmp/repair_ib_gateway_runtime.py && sudo python3 /tmp/install_ibc_config_helper.py && sudo sh /tmp/ensure_ibgateway_service.sh && rm -f /tmp/repair_ib_gateway_runtime.py /tmp/install_ibc_config_helper.py /tmp/ensure_ibgateway_service.sh"
+            run_remote "sudo python3 /tmp/repair_ib_gateway_runtime.py && sudo python3 /tmp/install_ibc_config_helper.py && sudo sh /tmp/ensure_ibgateway_service.sh && rm -f /tmp/repair_ib_gateway_runtime.py /tmp/install_ibc_config_helper.py /tmp/ensure_ibgateway_service.sh" 900
           }
 
           diagnose_gateway_failure() {
@@ -238,7 +245,8 @@ jobs:
 
               printf '%s\n%s\n%s\n' "${IBKR_LOGIN_ID}" "${IBKR_LOGIN_SECRET}" "${mode}" > "${input_file}"
               chmod 600 "${input_file}"
-              gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
+              timeout --kill-after=30s 180s \
+                gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
               verify_socket
               ;;
             *)

@@ -42,8 +42,51 @@ REQUIRED_COMMAND_PACKAGES = {
 }
 
 
-def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=check, text=True)
+# Bounded timeouts (seconds) so a stalled network fetch, dpkg lock, or interactive
+# installer can never hang the IB Gateway Ops job indefinitely. The CI job also sets
+# timeout-minutes as a final backstop.
+APT_TIMEOUT_SECONDS = 600
+DOWNLOAD_TIMEOUT_SECONDS = 600
+INSTALLER_TIMEOUT_SECONDS = 600
+NETWORK_RETRIES = 5
+
+
+def _timeout_prefix(seconds: int) -> list[str]:
+    timeout_bin = shutil.which("timeout")
+    if timeout_bin is None:
+        return []
+    return [timeout_bin, "--kill-after=30s", str(seconds)]
+
+
+def run(
+    command: list[str],
+    *,
+    check: bool = True,
+    timeout_seconds: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    if timeout_seconds is not None:
+        command = _timeout_prefix(timeout_seconds) + command
+    # Always detach stdin: a never-prompted installer or apt-get can otherwise block
+    # forever waiting on a TTY when this runs non-interactively over SSH.
+    return subprocess.run(command, check=check, text=True, stdin=subprocess.DEVNULL)
+
+
+def run_with_retry(
+    command: list[str],
+    *,
+    timeout_seconds: int,
+    attempts: int = NETWORK_RETRIES,
+    context: str,
+) -> None:
+    for attempt in range(1, attempts + 1):
+        result = run(command, check=False, timeout_seconds=timeout_seconds)
+        if result.returncode == 0:
+            return
+        print(
+            f"{context} failed (exit {result.returncode}); "
+            f"attempt {attempt}/{attempts}."
+        )
+    raise RuntimeError(f"{context} failed after {attempts} attempts")
 
 
 def stop_gateway_service() -> None:
@@ -76,8 +119,31 @@ def ensure_runtime_packages() -> None:
         "Installing missing IB Gateway runtime packages: "
         + ", ".join(missing_packages)
     )
-    run(["apt-get", "update"])
-    run(["apt-get", "install", "-y", *APT_PACKAGES])
+    # On a freshly booted VM cloud-init/unattended-upgrades may still hold the dpkg lock.
+    # Bound the wait (DPkg::Lock::Timeout) and the whole call, and retry transient failures
+    # instead of blocking the deploy indefinitely.
+    apt_env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+    lock_opt = ["-o", "DPkg::Lock::Timeout=300"]
+    for command, context in (
+        (["apt-get", *lock_opt, "update"], "apt-get update"),
+        (["apt-get", *lock_opt, "install", "-y", *APT_PACKAGES], "apt-get install"),
+    ):
+        for attempt in range(1, NETWORK_RETRIES + 1):
+            result = subprocess.run(
+                _timeout_prefix(APT_TIMEOUT_SECONDS) + command,
+                check=False,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                env=apt_env,
+            )
+            if result.returncode == 0:
+                break
+            print(
+                f"{context} failed (exit {result.returncode}); "
+                f"attempt {attempt}/{NETWORK_RETRIES}."
+            )
+        else:
+            raise RuntimeError(f"{context} failed after {NETWORK_RETRIES} attempts")
 
 
 def ensure_runtime_dirs() -> None:
@@ -131,9 +197,33 @@ def ensure_ib_gateway_installed() -> None:
     os.close(fd)
     installer = Path(installer_name)
     try:
-        run(["curl", "-fsSL", IB_GATEWAY_INSTALLER_URL, "-o", str(installer)])
+        run_with_retry(
+            [
+                "curl",
+                "-fsSL",
+                "--connect-timeout",
+                "30",
+                "--max-time",
+                str(DOWNLOAD_TIMEOUT_SECONDS),
+                "--retry",
+                "3",
+                "--retry-delay",
+                "5",
+                "--retry-all-errors",
+                IB_GATEWAY_INSTALLER_URL,
+                "-o",
+                str(installer),
+            ],
+            timeout_seconds=DOWNLOAD_TIMEOUT_SECONDS + 60,
+            context="IB Gateway installer download",
+        )
         installer.chmod(0o700)
-        run(["bash", str(installer), "-q", "-dir", str(IB_GATEWAY_DIR)])
+        # -q is install4j unattended mode; bound it and keep stdin detached so a prompt
+        # (e.g. when the installer cannot run unattended) can never hang the job.
+        run(
+            ["bash", str(installer), "-q", "-dir", str(IB_GATEWAY_DIR)],
+            timeout_seconds=INSTALLER_TIMEOUT_SECONDS,
+        )
     finally:
         installer.unlink(missing_ok=True)
 
@@ -158,8 +248,27 @@ def ensure_ibc_installed() -> None:
     os.close(fd)
     ibc_zip = Path(zip_name)
     try:
-        run(["curl", "-fsSL", IBC_ZIP_URL, "-o", str(ibc_zip)])
-        run(["unzip", "-q", str(ibc_zip), "-d", str(IBC_DIR)])
+        run_with_retry(
+            [
+                "curl",
+                "-fsSL",
+                "--connect-timeout",
+                "30",
+                "--max-time",
+                str(DOWNLOAD_TIMEOUT_SECONDS),
+                "--retry",
+                "3",
+                "--retry-delay",
+                "5",
+                "--retry-all-errors",
+                IBC_ZIP_URL,
+                "-o",
+                str(ibc_zip),
+            ],
+            timeout_seconds=DOWNLOAD_TIMEOUT_SECONDS + 60,
+            context="IBC download",
+        )
+        run(["unzip", "-q", str(ibc_zip), "-d", str(IBC_DIR)], timeout_seconds=120)
     finally:
         ibc_zip.unlink(missing_ok=True)
 
