@@ -33,7 +33,9 @@ gcloud compute ssh poma-<env>-free-tier --zone us-west1-b --tunnel-through-iap
 
 ## What is automated
 
-The VM startup script installs and enables:
+The VM startup script keeps boot light: it installs only Docker, cron, the app user, and runtime
+directories. The IB Gateway runtime is installed and enabled by the **IB Gateway Ops** workflow
+(run automatically after every deploy), which provisions:
 
 - IB Gateway in `/opt/ibgateway`.
 - IBC in `/opt/ibc`.

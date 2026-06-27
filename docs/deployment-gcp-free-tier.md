@@ -118,7 +118,7 @@ On apply, the deploy workflow:
 
 The VM keeps Google Cloud ingress limited to IAP SSH. Operators reach a shell or tunnel the IB Gateway VNC port over the same IAP SSH path (`gcloud compute ssh --tunnel-through-iap`), so no broad public SSH/VNC firewall rules are opened. The VM still keeps an ephemeral public IP for low-cost outbound package installs and broker/data-provider traffic.
 
-The VM startup script installs Docker, cron, IB Gateway, IBC, headless GUI support, and `ibgateway.service`.
+The VM startup script keeps boot light: it installs Docker, cron, the app user, and runtime directories only. IB Gateway, IBC, headless GUI support, and `ibgateway.service` are provisioned by the IB Gateway Ops workflow, which Auto CI/CD runs after every deploy. This keeps cloud-init fast so the deploy's VM-readiness wait does not stall on the multi-minute IB Gateway install.
 
 ## Paper/live setup
 
