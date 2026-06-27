@@ -240,6 +240,15 @@ def test_deploy_workflow_passes_smoke_flag_to_vm() -> None:
     assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" in workflow
 
 
+def test_deploy_self_heals_unreachable_vm() -> None:
+    # A wedged/unreachable VM is reset once (reboot reruns the minimal startup) so deploys do not
+    # get stuck on a host whose SSH never comes back.
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "ensure_vm_ready" in workflow
+    assert "gcloud compute instances reset" in workflow
+
+
 def test_no_workflow_references_tailscale() -> None:
     # Tailscale was removed; operator access is via IAP SSH only. Guard against reintroduction.
     for workflow in (

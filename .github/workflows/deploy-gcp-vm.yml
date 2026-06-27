@@ -280,16 +280,16 @@ jobs:
           }
 
           # Poll the VM over IAP until cloud-init's startup script has finished. Each probe is a
-          # short, independently-timed SSH, so a slow cold boot (the startup script installs
-          # Docker + IB Gateway and can take several minutes on an e2-micro) or a transient
-          # IAP/SSH-key-propagation hang is retried with a fresh connection instead of blocking
-          # the whole step on one long-lived SSH. Returns within seconds on an already-warm VM.
+          # short, independently-timed SSH, so a cold boot (the minimal startup installs Docker +
+          # cron) or a transient IAP/SSH-key-propagation hang is retried with a fresh connection
+          # instead of blocking the whole step on one long-lived SSH. Returns within seconds on an
+          # already-warm VM.
           wait_for_vm_ready() {
-            local deadline=$((SECONDS + 720)) attempt=0
+            local deadline=$((SECONDS + 420)) attempt=0
             until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
                 --command 'test -f /var/lib/cloud/instance/boot-finished'; do
               if [ "${SECONDS}" -ge "${deadline}" ]; then
-                echo "VM ${instance_name} did not finish cloud-init within 12m." >&2
+                echo "VM ${instance_name} not reachable / boot not finished within 7m." >&2
                 return 1
               fi
               attempt=$((attempt + 1))
@@ -298,7 +298,21 @@ jobs:
             done
           }
 
-          wait_for_vm_ready
+          # Self-heal a wedged VM: if it never becomes reachable (e.g. a prior boot exhausted the
+          # 1 GB e2-micro and left SSH dead), reset it once. A reboot reruns the minimal startup
+          # script from metadata and clears the hung/OOM state. terraform_data.startup_revision
+          # separately recreates the VM whenever startup.sh changes, so this only covers transient
+          # or wedged states, not config drift.
+          ensure_vm_ready() {
+            if wait_for_vm_ready; then
+              return 0
+            fi
+            echo "Resetting ${instance_name} once and waiting for it to come back."
+            run_with_timeout 3m gcloud compute instances reset "${instance_name}" --zone "${zone}" --quiet || true
+            wait_for_vm_ready
+          }
+
+          ensure_vm_ready
 
           run_with_timeout 3m gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
           run_with_timeout 2m gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
