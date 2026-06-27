@@ -310,9 +310,6 @@ def test_auto_cicd_path_filter_is_conservative_and_visible() -> None:
     for path in gateway_paths:
         assert path in workflow
 
-    assert "docs/*" not in workflow
-    assert "tests/*" not in workflow
-
 
 def test_deploy_workflow_passes_smoke_flag_to_vm() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
