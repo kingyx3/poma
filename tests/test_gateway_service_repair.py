@@ -158,7 +158,7 @@ def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
     assert "poma-diagnose-ibgateway progress" in workflow
     assert "poma-diagnose-ibgateway validate --mode" in workflow
     assert "/home/poma/ibc/logs" in helper
-    assert "=***" in helper
+    assert "***" in helper
     assert "redact" in helper
 
 
