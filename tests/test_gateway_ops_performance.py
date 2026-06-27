@@ -48,6 +48,16 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
     assert "IB Gateway service stopped before the API socket became reachable" in workflow
 
 
+def test_gateway_socket_poll_is_errexit_safe() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then" in workflow
+    assert "status=0" in workflow
+    assert "status=\"$?\"" in workflow
+    assert "would otherwise abort the polling loop before the 5-minute deadline" in workflow
+    assert "set +e\n              timed \"Socket/service poll attempt" not in workflow
+
+
 def test_gateway_ops_has_explicit_five_minute_2fa_timeout() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
