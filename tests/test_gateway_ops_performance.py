@@ -48,6 +48,16 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
     assert "IB Gateway service stopped before the API socket became reachable" in workflow
 
 
+def test_gateway_ops_has_explicit_five_minute_2fa_timeout() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
+    assert "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval" in workflow
+    assert "IBKR 2FA approval or Gateway API readiness timed out" in workflow
+    assert "Waiting for IBKR 2FA approval / Gateway API socket" in workflow
+    assert "local deadline=$((SECONDS + timeout_seconds))" in workflow
+
+
 def test_gateway_ops_preserves_authenticated_api_check_and_log_redaction() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
@@ -64,6 +74,16 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
 
     assert "timeout-minutes: 25" in workflow
     assert "timeout --kill-after=30s" in workflow
-    assert "IB_GATEWAY_SOCKET_TIMEOUT_SECONDS: 300" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "run_remote" in workflow
+    assert "timed out. Check IAP/SSH reachability" in workflow
+
+
+def test_gateway_ops_loops_have_deadlines_or_bounded_attempts() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
+    assert "sleep \"${poll_seconds}\"" in workflow
+    assert "exit 1" in workflow
+    assert "diagnose_gateway_failure" in workflow
