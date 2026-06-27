@@ -5,6 +5,20 @@ locals {
     app       = "poma"
     component = "trading-vm"
   }
+
+  # Rendered once so both the VM metadata and the replacement trigger see the same content.
+  startup_script = templatefile("${path.module}/startup.sh", {
+    app_user = "poma"
+    app_dir  = "/opt/poma"
+  })
+}
+
+# Changing the startup script (or the values rendered into it) must recreate the VM: GCE only
+# runs the startup script on boot, and updating the metadata in place does not reboot. Tying the
+# instance's replace_triggered_by to a hash of the rendered script makes every startup change
+# produce a clean, freshly-booted VM instead of drifting from the committed bootstrap.
+resource "terraform_data" "startup_revision" {
+  input = md5(local.startup_script)
 }
 
 resource "google_project_service" "required" {
@@ -71,10 +85,7 @@ resource "google_compute_instance" "poma" {
 
   metadata = {
     block-project-ssh-keys = "true"
-    startup-script = templatefile("${path.module}/startup.sh", {
-      app_user = local.app_user
-      app_dir  = local.app_dir
-    })
+    startup-script         = local.startup_script
   }
 
   scheduling {
@@ -93,6 +104,12 @@ resource "google_compute_instance" "poma" {
       "https://www.googleapis.com/auth/logging.write",
       "https://www.googleapis.com/auth/monitoring.write",
     ]
+  }
+
+  lifecycle {
+    # Recreate the VM whenever the rendered startup script changes so the new bootstrap actually
+    # runs on a clean boot (an in-place metadata update would not reboot the existing VM).
+    replace_triggered_by = [terraform_data.startup_revision]
   }
 
   depends_on = [google_compute_firewall.iap_ssh]
