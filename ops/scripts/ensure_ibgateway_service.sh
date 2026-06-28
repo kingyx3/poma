@@ -35,12 +35,29 @@ new = '''if [ -s "${HOME}/ibc/config.ini" ]; then
     exit 127
   fi
   cd "${IBC_DIR}"
+  wrapper_log="${IB_GATEWAY_LOG_DIR}/gatewaystart-wrapper.log"
+  echo "Starting /opt/ibc/gatewaystart.sh for IB Gateway/TWS API on port 7497." >>"${wrapper_log}"
+  bash "${IBC_DIR}/gatewaystart.sh" -inline >>"${wrapper_log}" 2>&1
+  status="$?"
+  echo "gatewaystart.sh exited with status=${status}." >>"${wrapper_log}"
+  exit "${status}"
+fi
+'''
+marked = '''if [ -s "${HOME}/ibc/config.ini" ]; then
+  if [ ! -x "${IBC_DIR}/gatewaystart.sh" ]; then
+    echo "Config exists but /opt/ibc/gatewaystart.sh is missing or not executable; refusing raw Gateway fallback." >&2
+    echo "Run IB Gateway Ops repair/configure so IBC can reach broker login and 2FA." >&2
+    exit 127
+  fi
+  cd "${IBC_DIR}"
   echo "Starting /opt/ibc/gatewaystart.sh for IB Gateway/TWS API on port 7497." >>"${IB_GATEWAY_LOG_DIR}/gatewaystart-wrapper.log"
   exec -a poma-ibc-gatewaystart bash "${IBC_DIR}/gatewaystart.sh" -inline
 fi
 '''
 if old in text:
     text = text.replace(old, new)
+elif marked in text:
+    text = text.replace(marked, new)
 elif new not in text:
     raise SystemExit("Unable to harden IBC startup branch; runner shape changed unexpectedly.")
 if "require_command java" not in text:
