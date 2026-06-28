@@ -43,6 +43,7 @@ Bootstrap also generates environment-specific VM and deployer names, such as `po
 | `trading_mode` | choice | yes | `dry_run`, `paper`, `live`; default `dry_run` | Rendered into the VM-local `.env`. |
 | `data_provider` | choice | yes | `fixture`, `yahoo`; default `yahoo` | Yahoo is the production provider. Fixture is for tests and dry-runs; deploy validation rejects fixture for paper/live. |
 | `allow_live_trading` | boolean | yes | default `false` | Must be `true` when `trading_mode=live`. |
+| `deploy_smoke` | boolean | no | default `true` | Runs the on-VM dry-run smoke test after the Docker image is built. |
 
 ## Required setup per environment
 
@@ -73,7 +74,7 @@ After bootstrap, add only the runtime secrets needed by that environment. See [`
 | Secret | Required for | Notes |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | All deployed runs | Authenticates the Telegram bot. |
-| `TELEGRAM_CHAT_ID` | All deployed runs | Destination chat/channel/user for alerts. Required unless a future chat-discovery flow is added. |
+| `TELEGRAM_CHAT_ID` | All deployed runs | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 | `IBKR_LOGIN_ID` | IB Gateway Ops `configure-paper` / `configure-live` | IBKR username passed to the VM only during explicit Gateway configure actions, including Auto CI/CD dev/stg configure jobs and manual IB Gateway Ops dispatches. |
 | `IBKR_LOGIN_SECRET` | IB Gateway Ops `configure-paper` / `configure-live` | IBKR password passed to the VM only during explicit Gateway configure actions, including Auto CI/CD dev/stg configure jobs and manual IB Gateway Ops dispatches. |
 | `IBKR_ACCOUNT_PAPER` | Paper deploys, and preferred dry-runs | Paper trading account id. The deploy workflow writes it into the VM-local `.env` as runtime `IBKR_ACCOUNT` when `trading_mode=paper`. |
@@ -116,7 +117,7 @@ On apply, the deploy workflow:
 8. Runs Terraform for `infra/gcp-free-tier` using that environment's state prefix.
 9. Waits for the VM startup script to write `/var/lib/poma/vm-ready` with the expected startup revision and current boot id. If an older VM lacks that sentinel but cloud-init has been finished for at least two minutes, deploy continues so the app install fails fast with a concrete Docker/app error instead of polling readiness indefinitely. It resets the VM once if IAP/SSH never becomes reachable within the readiness window.
 10. Uploads a trimmed runtime package (`.dockerignore`, Dockerfile, compose file, Python package metadata/source, deploy script, and cron file) and `.env` through IAP SSH, retrying short-lived `scp` attempts to survive transient IAP backend or SSH-key propagation failures.
-11. Runs a fixture-backed dry-run smoke test.
+11. Runs a fixture-backed dry-run smoke test when `deploy_smoke=true`.
 12. Installs the cron schedule.
 
 The VM keeps Google Cloud ingress limited to IAP SSH. Operators reach a shell or tunnel the IB Gateway VNC port over the same IAP SSH path (`gcloud compute ssh --tunnel-through-iap`), so no broad public SSH/VNC firewall rules are opened. The VM still keeps an ephemeral public IP for low-cost outbound package installs and broker/data-provider traffic.
