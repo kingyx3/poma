@@ -144,8 +144,8 @@ def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
 def test_gateway_ops_workflow_verifies_real_api_handshake() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
-    # A reachable socket is not enough; the workflow must confirm a real authenticated
-    # ib_insync handshake through the deployed container.
+    # A reachable socket is not enough; configure actions must confirm a real authenticated
+    # ib_insync handshake through the deployed container after broker login completes.
     assert "verify_api_handshake" in workflow
     assert "poma ibkr-check" in workflow
     assert "nc -z 127.0.0.1 7497" in workflow
@@ -226,16 +226,18 @@ def test_auto_cicd_gateway_actions_per_environment() -> None:
     stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
     prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
 
-    # Dev runs configure-paper (requires IBKR 2FA) — same as stg, per ADR 0002.
-    assert "action: configure-paper" in dev_gateway
-    assert "action: restart" not in dev_gateway
+    # PR checks must not require human IBKR mobile 2FA. They validate that the runtime
+    # helpers install and the systemd service restarts cleanly. Staging and production keep
+    # the credentialed broker configure paths where human approval is operationally expected.
+    assert "action: restart" in dev_gateway
+    assert "action: configure-paper" not in dev_gateway
     assert "action: configure-paper" in stg_gateway
     assert "action: configure-live" in prd_gateway
 
 
-def test_adr_0002_dev_configure_paper_requires_2fa_exists() -> None:
-    adr = REPO_ROOT / "docs/adr/0002-dev-gateway-configure-paper-requires-2fa.md"
-    assert adr.exists(), "ADR 0002 must document that dev runs configure-paper with 2FA"
+def test_adr_0002_dev_gateway_pr_checks_are_2fa_free_exists() -> None:
+    adr = REPO_ROOT / "docs/adr/0002-dev-gateway-pr-checks-avoid-2fa.md"
+    assert adr.exists(), "ADR 0002 must document that PR gateway checks avoid 2FA"
     text = adr.read_text(encoding="utf-8")
-    assert "configure-paper" in text
+    assert "restart" in text
     assert "2FA" in text or "2fa" in text.lower()
