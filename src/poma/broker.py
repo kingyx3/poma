@@ -158,14 +158,19 @@ class IbkrBroker:
                         proposed,
                         self._order_result(proposed, submitted, fallback_status="Submitted", message="order submitted"),
                     )
-                    last_status = self._wait_for_terminal_status(
+                    last_status, timed_out = self._wait_for_terminal_status(
                         ib,
                         submitted,
                         proposed,
                         status_callback=status_callback,
                     )
-                    result = self._order_result(proposed, submitted)
-                    if result.status != last_status:
+                    final_message = None
+                    if timed_out:
+                        final_message = "order did not reach terminal status before timeout"
+                        if self.settings.cancel_stale_orders:
+                            final_message += "; cancel requested"
+                    result = self._order_result(proposed, submitted, message=final_message)
+                    if result.status != last_status or final_message:
                         self._emit_status(status_callback, proposed, result)
                     results.append(result)
                 except Exception as exc:  # noqa: BLE001 - report per-order failures without hiding context
@@ -192,7 +197,7 @@ class IbkrBroker:
         proposed: ProposedTrade,
         *,
         status_callback: OrderStatusCallback | None = None,
-    ) -> str:
+    ) -> tuple[str, bool]:
         deadline = time.monotonic() + self.settings.order_status_timeout_seconds
         last_status = trade.orderStatus.status or "Submitted"
         while time.monotonic() < deadline:
@@ -201,7 +206,7 @@ class IbkrBroker:
                 last_status = status
                 self._emit_status(status_callback, proposed, self._order_result(proposed, trade, fallback_status=status))
             if trade.isDone() or status in DONE_STATUSES:
-                return status
+                return status, False
             ib.sleep(1.0)
 
         timeout_message = "order did not reach terminal status before timeout"
@@ -221,9 +226,9 @@ class IbkrBroker:
                     last_status = status
                     self._emit_status(status_callback, proposed, self._order_result(proposed, trade, fallback_status=status))
                 if trade.isDone() or status in DONE_STATUSES:
-                    return status
+                    return status, False
                 ib.sleep(1.0)
-        return last_status
+        return last_status, True
 
     def _order_result(
         self,
@@ -235,10 +240,6 @@ class IbkrBroker:
     ) -> OrderResult:
         status = trade.orderStatus
         final_status = status.status or fallback_status
-        if message is None and final_status not in DONE_STATUSES and final_status not in {"Created", "Submitted"}:
-            message = "order did not reach terminal status before timeout"
-            if self.settings.cancel_stale_orders:
-                message += "; cancel requested"
         return OrderResult(
             ticker=proposed.ticker,
             side=proposed.side,
