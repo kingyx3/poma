@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-
 from conftest import make_settings
 from poma.broker import DryRunBroker, IbkrBroker, IbkrHealth, build_broker
 from poma.config import Settings
@@ -229,6 +228,15 @@ def test_effective_deploy_default_exports_full_turnover_before_rendering() -> No
 
     assert 'set_default MAX_TURNOVER_PCT "1.0"' in resolver
     assert "source ops/scripts/resolve_gcp_deploy_env.sh" in workflow
+
+
+def test_paper_deploy_maps_runtime_account_from_paper_secret() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text(encoding="utf-8")
+    paper_case = workflow.split("paper)", 1)[1].split(";;", 1)[0]
+
+    assert "IBKR_ACCOUNT_PAPER GitHub Environment secret is required when TRADING_MODE=paper" in paper_case
+    assert 'IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}' in workflow
+    assert 'set_env IBKR_ACCOUNT "${IBKR_ACCOUNT_PAPER}"' in paper_case
 
 
 def test_deploy_validates_rendered_runtime_config() -> None:
