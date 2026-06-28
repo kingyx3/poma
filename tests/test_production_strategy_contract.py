@@ -87,17 +87,16 @@ def test_share_class_dedupe_prefers_more_liquid_same_issuer() -> None:
     assert deduped["ticker"].tolist() == ["MSFT", "GOOG"]
 
 
-def test_selected_names_are_equal_weighted() -> None:
+def test_selected_names_are_equal_weighted_within_strategy_sleeve() -> None:
     selected = pd.DataFrame({"ticker": [f"T{i:03d}" for i in range(1, 101)]})
 
     targets = build_equal_weight_targets(
         selected=selected,
         portfolio_value_usd=10_000,
-        cash_buffer_pct=0.02,
         max_position_pct=0.10,
     )
 
     assert len(targets) == 100
     assert all(math.isclose(target.target_weight, 0.01) for target in targets)
     assert math.isclose(sum(target.target_weight for target in targets), 1.0)
-    assert all(math.isclose(target.target_notional, 98.0) for target in targets)
+    assert all(math.isclose(target.target_notional, 100.0) for target in targets)
