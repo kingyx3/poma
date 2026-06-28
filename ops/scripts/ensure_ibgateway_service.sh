@@ -178,5 +178,40 @@ unit_text = re.sub(r"(?m)^MemoryMax=.*\n?", "", unit_text)
 unit.write_text(unit_text, encoding="utf-8")
 PY
 
+python3 - <<'PY'
+from pathlib import Path
+
+helper = Path("/usr/local/bin/poma-diagnose-ibgateway")
+if helper.exists():
+    text = helper.read_text(encoding="utf-8")
+    text = text.replace(
+        '"gatewaystart": bool(re.search(r"gatewaystart\\.sh", process_text)),',
+        '"gatewaystart": bool(re.search(r"poma-ibc-gateway-engine|gatewaystart\\.sh", process_text)),',
+    )
+    old = '''    if classification.action == "ready":
+        return 0
+    if classification.action == "fail":
+        return 2
+    return 1
+'''
+    new = '''    if classification.stage == "ibc-not-running" and elapsed_seconds < fail_no_progress_after:
+        classification = StartupClassification(
+            "ibc-starting",
+            "continue",
+            "IBC/Gateway engine is still inside the startup grace period before broker login.",
+        )
+        print_startup_classification(classification)
+    if classification.action == "ready":
+        return 0
+    if classification.action == "fail":
+        return 2
+    return 1
+'''
+    if old in text and "ibc-starting" not in text:
+        text = text.replace(old, new)
+    helper.write_text(text, encoding="utf-8")
+    helper.chmod(0o755)
+PY
+
 systemctl daemon-reload
 systemctl enable --now ibgateway
