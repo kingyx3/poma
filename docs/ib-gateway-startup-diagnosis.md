@@ -19,12 +19,13 @@ The workflow runs:
 poma-diagnose-ibgateway startup-check
 ```
 
-It prints:
+It prints a compact diagnosis in both the log and step summary:
 
 ```text
 STARTUP_STAGE=<stage>
 STARTUP_ACTION=<ready|continue|fail>
 STARTUP_REASON=<reason>
+NEXT_ACTION=<operator or developer action>
 ```
 
 Important stages:
