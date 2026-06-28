@@ -1,0 +1,46 @@
+name: Deploy Paper GCP e2-micro VM
+
+on:
+  workflow_call:
+    inputs:
+      deploy_environment:
+        required: true
+        type: string
+      deploy_required:
+        required: false
+        type: boolean
+        default: true
+      gateway_required:
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    if: ${{ inputs.deploy_required }}
+    uses: ./.github/workflows/deploy-gcp-vm.yml
+    with:
+      deploy_environment: ${{ inputs.deploy_environment }}
+      terraform_action: apply
+      deploy_app: true
+      trading_mode: paper
+      data_provider: yahoo
+      allow_live_trading: false
+      deploy_smoke: true
+    secrets: inherit
+
+  configure-gateway:
+    needs: deploy
+    if: >-
+      ${{ always() && inputs.gateway_required &&
+          (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') }}
+    uses: ./.github/workflows/ib-gateway-ops.yml
+    with:
+      deploy_environment: ${{ inputs.deploy_environment }}
+      action: configure-paper
+      log_lines: 200
+    secrets: inherit
