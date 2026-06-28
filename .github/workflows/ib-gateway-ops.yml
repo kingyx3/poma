@@ -129,6 +129,7 @@ jobs:
 
           timing_file="$(mktemp)"
           diagnosis_file="$(mktemp)"
+          startup_check_file="$(mktemp)"
           step_started="${SECONDS}"
           input_file=""
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
@@ -156,6 +157,27 @@ jobs:
             fi
           }
 
+          compact_value() {
+            local key="$1" default="$2"
+            local value=""
+            if [ -s "${startup_check_file}" ]; then
+              value="$(grep -E "^${key}=" "${startup_check_file}" | tail -n1 | cut -d= -f2- || true)"
+            fi
+            printf '%s' "${value:-${default}}"
+          }
+
+          print_compact_startup_diagnosis() {
+            local stage action reason next_action
+            stage="$(compact_value STARTUP_STAGE startup-check-missing-stage)"
+            action="$(compact_value STARTUP_ACTION fail)"
+            reason="$(compact_value STARTUP_REASON 'startup-check returned failure without printing STARTUP_STAGE/STARTUP_REASON; inspect full diagnostics below.')"
+            next_action="$(compact_value NEXT_ACTION 'Fix startup-check output and inspect the collected systemd, process, listener, and Gateway/IBC diagnostics.')"
+            echo "STARTUP_STAGE=${stage}"
+            echo "STARTUP_ACTION=${action}"
+            echo "STARTUP_REASON=${reason}"
+            echo "NEXT_ACTION=${next_action}"
+          }
+
           write_timing_summary() {
             local total=$((SECONDS - step_started))
             {
@@ -174,6 +196,14 @@ jobs:
               fi
               echo
               echo "Total step time: **${total}s**"
+              if [ -s "${startup_check_file}" ]; then
+                echo
+                echo "### IB Gateway startup classification"
+                echo
+                echo '```text'
+                print_compact_startup_diagnosis
+                echo '```'
+              fi
               if [ -s "${diagnosis_file}" ]; then
                 echo
                 echo "### IB Gateway final diagnosis"
@@ -272,8 +302,13 @@ jobs:
           }
 
           gateway_startup_check() {
-            local elapsed="$1"
-            run_remote "sudo poma-diagnose-ibgateway startup-check --log-lines 40 --elapsed-seconds '${elapsed}' --fail-no-progress-after '${IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS}'" 120
+            local elapsed="$1" status
+            : > "${startup_check_file}"
+            set +e
+            run_remote "sudo poma-diagnose-ibgateway startup-check --log-lines 40 --elapsed-seconds '${elapsed}' --fail-no-progress-after '${IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS}'" 120 2>&1 | tee "${startup_check_file}"
+            status="${PIPESTATUS[0]}"
+            set -e
+            return "${status}"
           }
 
           verify_api_handshake() {
@@ -328,7 +363,8 @@ jobs:
                   echo "Startup classifier reports API readiness; socket poll will confirm on the next pass."
                   ;;
                 2)
-                  echo "IB Gateway failed before reaching a usable login/2FA/API state." >&2
+                  echo "::error::IB Gateway failed before reaching broker login/2FA/API readiness. Compact diagnosis follows."
+                  print_compact_startup_diagnosis
                   echo "No IBKR mobile notification is expected until this pre-login startup blocker is fixed." >&2
                   diagnose_gateway_failure
                   exit 1
@@ -355,6 +391,7 @@ jobs:
 
             echo "IBKR 2FA approval or Gateway API readiness timed out after ${timeout_seconds}s; socket 127.0.0.1:7497 never became API-ready." >&2
             echo "If no IBKR mobile approval notification was received, Gateway/IBC likely never reached the IBKR login/2FA stage; diagnostics below distinguish config, runner, process, listener, and log state." >&2
+            print_compact_startup_diagnosis
             diagnose_gateway_failure
             exit 1
           }
