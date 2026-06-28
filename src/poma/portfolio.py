@@ -117,8 +117,8 @@ def build_strategy_capital_plan(
     """Convert allocation percentages into per-strategy capital sleeves.
 
     ``portfolio_value_usd`` remains the hard cap for all strategy sleeves combined. Individual
-    strategies receive ``portfolio_value_usd * allocation_pct`` and may then apply their own cash
-    buffers/risk caps inside that sleeve.
+    strategies receive ``portfolio_value_usd * allocation_pct``. Passive cash is modeled as its own
+    ``cash`` allocation sleeve rather than as a hidden buffer inside an active trading strategy.
     """
     if portfolio_value_usd <= 0 or not math.isfinite(portfolio_value_usd):
         raise ValueError("portfolio_value_usd must be positive and finite")
