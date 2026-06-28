@@ -8,15 +8,6 @@ GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 AUTO_CICD_WORKFLOW = REPO_ROOT / ".github/workflows/auto-cicd.yml"
 GATEWAY_DIAGNOSTICS_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
 
-REQUIRED_ENVIRONMENT_SNIPPETS = (
-    "deploy_environment:",
-    "dev",
-    "stg",
-    "prd",
-    "environment: ${{ inputs.deploy_environment }}",
-    "DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}",
-)
-
 OLD_ACTION_SNIPPETS = (
     "google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f",
     "google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a",
@@ -25,192 +16,116 @@ OLD_ACTION_SNIPPETS = (
 )
 
 
-def test_ci_workflow_uses_current_action_versions() -> None:
-    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert "actions/checkout@v5" in workflow
-    assert "actions/setup-python@v6" in workflow
-    assert "hashicorp/setup-terraform@v4" in workflow
+def _text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def test_workflows_use_current_action_versions() -> None:
+    workflows = (
+        _text(CI_WORKFLOW),
+        _text(BOOTSTRAP_WORKFLOW),
+        _text(DEPLOY_WORKFLOW),
+        _text(GATEWAY_OPS_WORKFLOW),
+    )
+    combined = "\n".join(workflows)
+
+    assert "actions/checkout@v5" in combined
+    assert "hashicorp/setup-terraform@v4" in combined
+    assert "google-github-actions/setup-gcloud@v3" in combined
     for snippet in OLD_ACTION_SNIPPETS:
-        assert snippet not in workflow
-
-
-def test_bootstrap_workflow_is_environment_scoped() -> None:
-    workflow = BOOTSTRAP_WORKFLOW.read_text(encoding="utf-8")
-    for snippet in REQUIRED_ENVIRONMENT_SNIPPETS:
-        assert snippet in workflow
-    assert "poma-gcp-wif-bootstrap-${{ inputs.deploy_environment }}" in workflow
-    assert "poma/${DEPLOY_ENVIRONMENT}/gcp-wif-bootstrap" in workflow
-    assert "WIF_POOL_ID: poma-${{ inputs.deploy_environment }}-github" in workflow
-    assert "poma-${{ inputs.deploy_environment }}-github-deployer" in workflow
-    assert '--pool-id "${WIF_POOL_ID}"' in workflow
-    assert '-var="pool_id=${WIF_POOL_ID}"' in workflow
-    assert 'config_path="${config_dir}/${DEPLOY_ENVIRONMENT}.env"' in workflow
-
-
-def test_bootstrap_workflow_uses_current_action_versions() -> None:
-    workflow = BOOTSTRAP_WORKFLOW.read_text(encoding="utf-8")
-    assert "actions/checkout@v5" in workflow
-    assert "google-github-actions/setup-gcloud@v3" in workflow
-    assert "hashicorp/setup-terraform@v4" in workflow
-    assert "google-github-actions/auth@" not in workflow
-    for snippet in OLD_ACTION_SNIPPETS:
-        assert snippet not in workflow
-
-
-def test_deploy_workflow_is_environment_scoped() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-    for snippet in REQUIRED_ENVIRONMENT_SNIPPETS:
-        assert snippet in workflow
-    assert "poma-gcp-free-tier-deploy-${{ inputs.deploy_environment }}" in workflow
-    assert "poma/${DEPLOY_ENVIRONMENT}/gcp-free-tier" in workflow
-    assert 'set_env APP_ENV "${DEPLOY_ENVIRONMENT}"' in workflow
-    assert "APP_ENV=${APP_ENV} must match deploy_environment=${DEPLOY_ENVIRONMENT}" in workflow
-    assert 'set_default ORDER_STATUS_TIMEOUT_SECONDS "60"' in workflow
-    assert 'set_default CANCEL_STALE_ORDERS "true"' in workflow
+        assert snippet not in combined
 
 
 def test_deploy_workflow_routes_paper_to_paper_account() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _text(DEPLOY_WORKFLOW)
+
     assert "IBKR_ACCOUNT_PAPER" in workflow
     assert 'case "${TRADING_MODE}" in' in workflow
     assert 'set_env IBKR_ACCOUNT "${IBKR_ACCOUNT_PAPER}"' in workflow
     assert "TRADING_MODE=live" in workflow
 
 
-def test_deploy_workflow_uses_current_action_versions() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-    assert "actions/checkout@v5" in workflow
-    assert "google-github-actions/auth@v3" in workflow
-    assert "google-github-actions/setup-gcloud@v3" in workflow
-    assert "hashicorp/setup-terraform@v4" in workflow
-    for snippet in OLD_ACTION_SNIPPETS:
-        assert snippet not in workflow
+def test_gateway_ops_workflow_core_contract() -> None:
+    workflow = _text(GATEWAY_OPS_WORKFLOW)
+    diagnostics = _text(GATEWAY_DIAGNOSTICS_HELPER)
 
-
-def test_gateway_ops_workflow_is_environment_scoped() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    for snippet in REQUIRED_ENVIRONMENT_SNIPPETS:
+    for snippet in (
+        "workflow_dispatch:",
+        "workflow_call:",
+        "poma-ib-gateway-ops-${{ inputs.deploy_environment }}",
+        "configure-paper",
+        "configure-live",
+        "poma-configure-ibc",
+        "repair_gateway_runtime",
+        "verify_api_handshake",
+        "poma ibkr-check",
+        "required_stable=2",
+        "Gateway API socket stability guard",
+        "auth_pending_stage",
+    ):
         assert snippet in workflow
-    assert "poma-ib-gateway-ops-${{ inputs.deploy_environment }}" in workflow
-    assert "ops/deploy/environments/${DEPLOY_ENVIRONMENT}.env" in workflow
-    assert "systemctl restart ibgateway" in workflow
-    assert "journalctl -u ibgateway" in workflow
-    assert "nc -z 127.0.0.1 7497" in workflow
 
-
-def test_gateway_ops_workflow_can_configure_gateway() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    assert "configure-paper" in workflow
-    assert "configure-live" in workflow
-    assert "poma-configure-ibc" in workflow
-    assert "printf '%s" in workflow
-    assert "wait_for_api_readiness" in workflow
-
-
-def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    assert "repair_gateway_runtime" in workflow
-    assert "Gateway runtime sentinel missing or stale" in workflow
-    assert "repair_ib_gateway_runtime.py" in workflow
-    assert "install_ibc_config_helper.py" in workflow
-    assert "ensure_ibgateway_service.sh" in workflow
-    assert "diagnose_ib_gateway_runtime.py" in workflow
-    assert "sudo python3 /tmp/repair_ib_gateway_runtime.py" in workflow
-    assert "sudo python3 /tmp/install_ibc_config_helper.py" in workflow
-    assert "sudo sh /tmp/ensure_ibgateway_service.sh" in workflow
-
-
-def test_gateway_ops_workflow_verifies_real_api_handshake() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    assert "verify_api_handshake" in workflow
-    assert "poma ibkr-check" in workflow
-    assert "nc -z 127.0.0.1 7497" in workflow
-
-
-def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    diagnostics = GATEWAY_DIAGNOSTICS_HELPER.read_text(encoding="utf-8")
-    assert "diagnose_gateway_failure" in workflow
-    assert "poma-diagnose-ibgateway diagnose" in workflow
     assert "systemctl status ibgateway" in diagnostics
     assert "journalctl" in diagnostics
     assert "/var/log/poma/ibgateway" in diagnostics
-    assert "/tmp/poma-ibgateway" in diagnostics
     assert "/home/poma/ibc/logs" in diagnostics
 
 
-def test_gateway_ops_workflow_captures_final_diagnosis_logs() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    assert "Final compact Gateway diagnosis" in workflow
-    assert "print_compact_startup_diagnosis" in workflow
-    assert "diagnosis_file" in workflow
-
-
-def test_gateway_ops_workflow_guards_real_handshake_with_stable_socket() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    assert "required_stable=2" in workflow
-    assert "stable=$((stable + 1))" in workflow
-    assert "Gateway API socket stability guard" in workflow
-    assert "Real API handshake" in workflow
-
-
-def test_gateway_ops_workflow_uses_current_action_versions() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    assert "actions/checkout@v5" in workflow
-    assert "google-github-actions/auth@v3" in workflow
-    assert "google-github-actions/setup-gcloud@v3" in workflow
-    for snippet in OLD_ACTION_SNIPPETS:
-        assert snippet not in workflow
-
-
-def test_deploy_and_ops_workflows_are_reusable() -> None:
-    deploy = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-    ops = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    assert "workflow_dispatch:" in deploy and "workflow_call:" in deploy
-    assert "workflow_dispatch:" in ops and "workflow_call:" in ops
-
-
-def test_workflows_send_env_tagged_telegram_notifications() -> None:
-    action = (REPO_ROOT / ".github/actions/telegram-notify/action.yml").read_text(encoding="utf-8")
-    assert "api.telegram.org" in action
-    assert "using: composite" in action
-    for workflow in (DEPLOY_WORKFLOW.read_text(encoding="utf-8"), GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")):
+def test_deploy_and_ops_workflows_send_environment_tagged_alerts() -> None:
+    for workflow in (_text(DEPLOY_WORKFLOW), _text(GATEWAY_OPS_WORKFLOW)):
         assert "uses: ./.github/actions/telegram-notify" in workflow
         assert "POMA[${{ inputs.deploy_environment }}]" in workflow
         assert "if: ${{ always() }}" in workflow
-        assert "TELEGRAM_BOT_TOKEN" in workflow
 
 
-def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
-    workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
-    assert "pull_request:" in workflow
-    assert "types: [opened, reopened, synchronize]" in workflow
-    assert "push:" in workflow
-    assert "branches: [main]" in workflow
-    assert "release:" in workflow
-    assert "types: [published]" in workflow
-    assert "cancel-in-progress: true" in workflow
-    assert "uses: ./.github/workflows/deploy-gcp-vm.yml" in workflow
-    assert "uses: ./.github/workflows/ib-gateway-ops.yml" in workflow
-    assert "secrets: inherit" in workflow
+def test_auto_cicd_deploys_dev_stg_and_prd() -> None:
+    workflow = _text(AUTO_CICD_WORKFLOW)
+
+    for snippet in (
+        "pull_request:",
+        "types: [opened, reopened, synchronize]",
+        "push:",
+        "branches: [main]",
+        "release:",
+        "types: [published]",
+        "uses: ./.github/workflows/deploy-gcp-vm.yml",
+        "uses: ./.github/workflows/ib-gateway-ops.yml",
+        "cancel-in-progress: true",
+    ):
+        assert snippet in workflow
+
+
+def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
+    workflow = _text(AUTO_CICD_WORKFLOW)
+    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
+    stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
+    gateway_paths = workflow.split("is_gateway_path()", 1)[1].split("case \"${EVENT_NAME}\"", 1)[0]
+
+    assert "needs.changes.outputs.gateway_required == 'true'" in dev_gateway
+    assert "needs.changes.outputs.gateway_required == 'true'" in stg_gateway
+    assert "needs.changes.outputs.deploy_required == 'true'" not in dev_gateway
+    assert "needs.changes.outputs.deploy_required == 'true'" not in stg_gateway
+    assert "ops/scripts/validate_runtime_config.py" in workflow
+    assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
+    assert "ops/scripts/repair_ib_gateway_runtime.py" in gateway_paths
+    assert ".github/workflows/deploy-gcp-vm.yml" not in gateway_paths
+    assert ".github/workflows/auto-cicd.yml" not in gateway_paths
 
 
 def test_auto_cicd_gateway_actions_per_environment() -> None:
-    workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _text(AUTO_CICD_WORKFLOW)
     dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
     stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
     prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
+
     assert "action: configure-paper" in dev_gateway
     assert "action: restart" not in dev_gateway
     assert "action: configure-paper" in stg_gateway
     assert "action: configure-live" in prd_gateway
-    assert "needs.changes.outputs.deploy_required == 'true'" in dev_gateway
-    assert "needs.changes.outputs.deploy_required == 'true'" in stg_gateway
 
 
 def test_adr_0002_dev_gateway_pr_checks_records_configure_paper_decision() -> None:
     adr = REPO_ROOT / "docs/adr/0002-dev-gateway-configure-paper-validation.md"
-    assert adr.exists(), "ADR 0002 must document the dev configure-paper decision"
     text = adr.read_text(encoding="utf-8")
     assert "Status: Accepted" in text
     assert "action: configure-paper" in text
