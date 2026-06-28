@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 CURRENT_STRATEGY_NAME = "rank_velocity_size_equal_weight"
 
@@ -47,10 +47,7 @@ def _parse_pct(raw_value: str) -> float:
     value = raw_value.strip()
     if not value:
         raise ValueError("strategy allocation percentage must not be empty")
-    if value.endswith("%"):
-        pct = float(value[:-1].strip()) / 100.0
-    else:
-        pct = float(value)
+    pct = float(value[:-1].strip()) / 100.0 if value.endswith("%") else float(value)
     if not math.isfinite(pct):
         raise ValueError("strategy allocation percentage must be finite")
     if not 0 <= pct <= 1:
