@@ -360,6 +360,14 @@ jobs:
             run_remote "if ! test -f /opt/poma/docker-compose.yml && ! test -f /opt/poma/compose.yaml; then echo 'POMA app not deployed at /opt/poma; skipping ib_insync API handshake (socket check only).'; exit 0; fi; echo \"Confirming IBKR API handshake via 'poma ibkr-check' (real ib_insync connect).\"; sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE=paper -e DATA_PROVIDER=fixture poma ibkr-check'" 240
           }
 
+          # Pre-build the poma Docker image on the VM so the first API handshake attempt does
+          # not pay the full image-build cost (~50s on a free-tier VM) on top of the ib_insync
+          # connect timeout.  Runs while the gateway is starting up; failures are non-fatal
+          # (the handshake will trigger an on-demand build if needed).
+          warmup_poma_docker_image() {
+            run_remote "if test -f /opt/poma/docker-compose.yml || test -f /opt/poma/compose.yaml; then echo 'Pre-building poma Docker image to reduce API handshake latency...'; sudo -u poma bash -lc 'cd /opt/poma && docker compose build poma 2>&1 | tail -10' && echo 'poma Docker image ready.' || echo 'Docker image pre-build returned non-zero; handshake will build on demand.'; else echo 'POMA app not deployed at /opt/poma; skipping Docker image warmup.'; fi" 300
+          }
+
           poll_gateway_socket_once() {
             run_remote 'if nc -z 127.0.0.1 7497; then exit 0; fi; if ! systemctl is-active --quiet ibgateway; then exit 2; fi; exit 1' 45
           }
@@ -368,7 +376,8 @@ jobs:
             local timeout_seconds="${IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS:-300}"
             local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
             local deadline=$((SECONDS + timeout_seconds))
-            local elapsed=0 attempt=0 status=0 startup_status=0 last_snapshot=0
+            local elapsed=0 attempt=0 status=0 startup_status=0 last_snapshot=0 handshake_failures=0
+            local max_handshake_failures=3
 
             echo "Waiting up to ${timeout_seconds}s (6 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
@@ -386,9 +395,13 @@ jobs:
                     echo "IBKR API handshake succeeded; the gateway is authenticated and serving the API."
                     return 0
                   fi
-                  echo "IBKR API handshake failed even though the socket is open on 127.0.0.1:7497." >&2
-                  diagnose_gateway_failure
-                  exit 1
+                  handshake_failures=$((handshake_failures + 1))
+                  if [ "${handshake_failures}" -ge "${max_handshake_failures}" ]; then
+                    echo "::error::IBKR API handshake failed ${handshake_failures} time(s) even though port 7497 is open; aborting." >&2
+                    diagnose_gateway_failure
+                    exit 1
+                  fi
+                  echo "API handshake attempt ${handshake_failures} failed; port 7497 may have opened before the API was fully ready. Will retry on next poll cycle." >&2
                   ;;
                 2)
                   echo "IB Gateway service stopped before the API socket became reachable." >&2
@@ -456,6 +469,11 @@ jobs:
             verify-socket)
               repair_gateway_runtime
               timed "Restart ibgateway" run_remote "sudo systemctl restart ibgateway || true" 180
+              if timed "Pre-build poma Docker image" warmup_poma_docker_image; then
+                :
+              else
+                echo "Docker image pre-build failed; handshake will build on demand."
+              fi
               verify_socket
               ;;
             configure-paper|configure-live)
@@ -475,6 +493,13 @@ jobs:
               timed "Validate IBC configuration" validate_ibc_configuration "${mode}"
               echo "Restarting ibgateway after IBC credential/config update so IBC reads the new config and can trigger IBKR 2FA."
               timed "Restart ibgateway after IBC configuration" run_remote "sudo systemctl restart ibgateway" 180
+              # Pre-build the poma Docker image while the gateway is starting up so the first
+              # ibkr-check attempt does not wait for an on-demand build (~50s on free-tier VMs).
+              if timed "Pre-build poma Docker image" warmup_poma_docker_image; then
+                :
+              else
+                echo "Docker image pre-build failed; handshake will build on demand."
+              fi
               verify_socket
               ;;
             *)

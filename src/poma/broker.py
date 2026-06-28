@@ -37,6 +37,11 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
         account=settings.ibkr_account or "",
         timeout=timeout,
     )
+    # Apply the same timeout to post-connect API requests.  ib_insync's default
+    # RequestTimeout is 0 (falsy → no timeout), so reqCurrentTime() and portfolio()
+    # can hang indefinitely when the gateway accepts the TCP handshake but stops
+    # responding to subsequent API messages (e.g. during early-startup).
+    ib.RequestTimeout = timeout
     try:
         accounts = [account for account in ib.managedAccounts() if account]
         server_time = str(ib.reqCurrentTime())
