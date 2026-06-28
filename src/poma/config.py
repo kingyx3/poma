@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic import Field, PositiveFloat, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from poma.portfolio import CURRENT_STRATEGY_NAME, parse_strategy_allocations
+
 
 class TradingMode(StrEnum):
     DRY_RUN = "dry_run"
@@ -42,6 +44,11 @@ class Settings(BaseSettings):
     universe: str = Field(default="us_top_market_cap", alias="UNIVERSE")
     rank_lookback_days: PositiveInt = Field(default=90, alias="RANK_LOOKBACK_DAYS")
     max_holdings: PositiveInt = Field(default=100, alias="MAX_HOLDINGS")
+    active_strategy: str = Field(default=CURRENT_STRATEGY_NAME, alias="ACTIVE_STRATEGY")
+    strategy_allocations: str = Field(
+        default=f"{CURRENT_STRATEGY_NAME}=1.0",
+        alias="STRATEGY_ALLOCATIONS",
+    )
 
     portfolio_value_usd: PositiveFloat = Field(default=10_000.0, alias="PORTFOLIO_VALUE_USD")
     cash_buffer_pct: float = Field(default=0.02, alias="CASH_BUFFER_PCT")
@@ -98,11 +105,32 @@ class Settings(BaseSettings):
             raise ValueError("basis-point settings must be non-negative")
         return value
 
+    @field_validator("active_strategy")
+    @classmethod
+    def active_strategy_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ACTIVE_STRATEGY must not be empty")
+        return cleaned
+
     @model_validator(mode="after")
-    def telegram_is_required(self) -> Settings:
+    def validate_runtime_config(self) -> Settings:
         if not self.telegram_bot_token or not self.telegram_chat_id:
             raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
+
+        allocations = parse_strategy_allocations(self.strategy_allocations)
+        if self.active_strategy not in allocations:
+            available = ", ".join(allocations)
+            raise ValueError(
+                f"ACTIVE_STRATEGY={self.active_strategy!r} must be present in "
+                f"STRATEGY_ALLOCATIONS; available strategies: {available}"
+            )
+        if allocations[self.active_strategy] <= 0:
+            raise ValueError("ACTIVE_STRATEGY allocation must be greater than 0")
         return self
+
+    def strategy_allocation_map(self) -> dict[str, float]:
+        return parse_strategy_allocations(self.strategy_allocations)
 
     def assert_safe_for_execution(self) -> None:
         if self.trading_mode == TradingMode.LIVE and not self.allow_live_trading:
