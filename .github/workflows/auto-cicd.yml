@@ -63,6 +63,7 @@ jobs:
               ops/scripts/deploy.sh|\
               ops/scripts/render_env.py|\
               ops/scripts/resolve_gcp_deploy_env.sh|\
+              ops/scripts/validate_runtime_config.py|\
               ops/scripts/validate_data_provider.py)
                 return 0
                 ;;
@@ -80,8 +81,6 @@ jobs:
 
           is_gateway_path() {
             case "$1" in
-              .github/workflows/auto-cicd.yml|\
-              .github/workflows/deploy-gcp-vm.yml|\
               .github/workflows/ib-gateway-ops.yml|\
               ops/scripts/repair_ib_gateway_runtime.py|\
               ops/scripts/install_ibc_config_helper.py|\
@@ -191,7 +190,7 @@ jobs:
       ${{ always() && github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           (needs.dev-deploy.result == 'success' || needs.dev-deploy.result == 'skipped') &&
-          (needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true' || needs.changes.outputs.gateway_required == 'true') }}
+          (needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true') }}
     uses: ./.github/workflows/ib-gateway-ops.yml
     with:
       deploy_environment: dev
@@ -220,7 +219,7 @@ jobs:
     if: >-
       ${{ always() && github.event_name == 'push' &&
           (needs.stg-deploy.result == 'success' || needs.stg-deploy.result == 'skipped') &&
-          (needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true' || needs.changes.outputs.gateway_required == 'true') }}
+          (needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true') }}
     uses: ./.github/workflows/ib-gateway-ops.yml
     with:
       deploy_environment: stg
