@@ -147,7 +147,11 @@ class IbkrBroker:
         try:
             for proposed in trades:
                 try:
-                    self._emit_status(status_callback, proposed, _manual_result(proposed, "Created", "order created"))
+                    self._emit_status(
+                        status_callback,
+                        proposed,
+                        _manual_result(proposed, "Created", "order created"),
+                    )
                     contract = Stock(proposed.ticker, "SMART", "USD")
                     order = self._build_order(proposed)
                     if self.settings.ibkr_account:
@@ -156,7 +160,12 @@ class IbkrBroker:
                     self._emit_status(
                         status_callback,
                         proposed,
-                        self._order_result(proposed, submitted, fallback_status="Submitted", message="order submitted"),
+                        self._order_result(
+                            proposed,
+                            submitted,
+                            fallback_status="Submitted",
+                            message="order submitted",
+                        ),
                     )
                     last_status, timed_out = self._wait_for_terminal_status(
                         ib,
@@ -204,7 +213,11 @@ class IbkrBroker:
             status = trade.orderStatus.status or last_status
             if status != last_status:
                 last_status = status
-                self._emit_status(status_callback, proposed, self._order_result(proposed, trade, fallback_status=status))
+                self._emit_status(
+                    status_callback,
+                    proposed,
+                    self._order_result(proposed, trade, fallback_status=status),
+                )
             if trade.isDone() or status in DONE_STATUSES:
                 return status, False
             ib.sleep(1.0)
@@ -216,7 +229,12 @@ class IbkrBroker:
             self._emit_status(
                 status_callback,
                 proposed,
-                self._order_result(proposed, trade, fallback_status="PendingCancel", message=cancel_message),
+                self._order_result(
+                    proposed,
+                    trade,
+                    fallback_status="PendingCancel",
+                    message=cancel_message,
+                ),
             )
             last_status = "PendingCancel"
             cancel_deadline = time.monotonic() + min(10, self.settings.order_status_timeout_seconds)
@@ -224,7 +242,11 @@ class IbkrBroker:
                 status = trade.orderStatus.status or last_status
                 if status != last_status:
                     last_status = status
-                    self._emit_status(status_callback, proposed, self._order_result(proposed, trade, fallback_status=status))
+                    self._emit_status(
+                        status_callback,
+                        proposed,
+                        self._order_result(proposed, trade, fallback_status=status),
+                    )
                 if trade.isDone() or status in DONE_STATUSES:
                     return status, False
                 ib.sleep(1.0)
