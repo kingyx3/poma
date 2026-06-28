@@ -219,10 +219,8 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
     assert "secrets: inherit" in workflow
 
 
-def test_auto_cicd_pr_gateway_validation_does_not_require_human_2fa() -> None:
+def test_auto_cicd_gateway_actions_per_environment() -> None:
     workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "PR validation must not depend on a human IBKR mobile 2FA approval" in workflow
-    assert "action: restart" in workflow
     assert "action: configure-paper" in workflow
     assert "action: configure-live" in workflow

@@ -196,10 +196,7 @@ jobs:
     uses: ./.github/workflows/ib-gateway-ops.yml
     with:
       deploy_environment: dev
-      # PR validation must not depend on a human IBKR mobile 2FA approval. The restart path still
-      # installs/repairs the Gateway runtime and proves systemd can start from the rendered config;
-      # authenticated configure-paper remains enforced on main/stg and release/prd promotion paths.
-      action: restart
+      action: configure-paper
       log_lines: 200
     secrets: inherit
 
