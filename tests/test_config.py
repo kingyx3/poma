@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from poma.config import Settings
-from poma.portfolio import CURRENT_STRATEGY_NAME
+from poma.portfolio import CASH_STRATEGY_NAME, CURRENT_STRATEGY_NAME
 
 
 def test_telegram_config_is_required() -> None:
@@ -28,7 +28,10 @@ def test_default_strategy_is_us_top_market_cap_top_100() -> None:
     assert settings.rank_lookback_days == 90
     assert settings.max_holdings == 100
     assert settings.active_strategy == CURRENT_STRATEGY_NAME
-    assert settings.strategy_allocation_map() == {CURRENT_STRATEGY_NAME: 1.0}
+    assert settings.strategy_allocation_map() == {
+        CURRENT_STRATEGY_NAME: 0.98,
+        CASH_STRATEGY_NAME: 0.02,
+    }
     assert settings.max_daily_trades == 100
     assert settings.min_weight_delta_pct == 0.0025
 
