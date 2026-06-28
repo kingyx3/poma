@@ -12,8 +12,9 @@ def test_deploy_runs_app_install_and_cron() -> None:
 
 
 def test_deploy_does_not_provision_gateway_runtime() -> None:
-    # IB Gateway runtime is owned by the IB Gateway Ops workflow (run after every deploy), not
-    # the deploy step. Guard against reintroducing the redundant/duplicate setup here.
+    # IB Gateway runtime is owned by the IB Gateway Ops workflow, not the deploy step.
+    # Auto CI/CD invokes Gateway Ops after relevant dev/stg deploys; manual deploys run it
+    # explicitly. Guard against reintroducing the redundant/duplicate setup here.
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     assert "install_ibc_config_helper.py" not in workflow

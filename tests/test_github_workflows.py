@@ -247,18 +247,25 @@ def test_auto_cicd_gateway_actions_per_environment() -> None:
     stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
     prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
 
-    # Dev and staging run the credentialed broker paper configure path so configure-paper
-    # regressions are caught before release. Production keeps the live configure path.
+    # Dev and staging both run the credentialed paper configure path so broker-login
+    # and authenticated API regressions are caught before release. Production keeps
+    # the live configure path.
     assert "action: configure-paper" in dev_gateway
     assert "action: restart" not in dev_gateway
     assert "action: configure-paper" in stg_gateway
     assert "action: configure-live" in prd_gateway
 
+    # Gateway ops runs after deploy-required changes too, so helper/service repair is not
+    # skipped on app deploys that recreate or update the VM.
+    assert "needs.changes.outputs.deploy_required == 'true'" in dev_gateway
+    assert "needs.changes.outputs.deploy_required == 'true'" in stg_gateway
+
 
 def test_adr_0002_dev_gateway_pr_checks_records_configure_paper_decision() -> None:
-    adr = REPO_ROOT / "docs/adr/0002-dev-gateway-pr-checks-avoid-2fa.md"
+    adr = REPO_ROOT / "docs/adr/0002-dev-gateway-configure-paper-validation.md"
     assert adr.exists(), "ADR 0002 must document the dev configure-paper decision"
     text = adr.read_text(encoding="utf-8")
-    assert "Superseded" in text
-    assert "configure-paper" in text
+    assert "Status: Accepted" in text
+    assert "action: configure-paper" in text
+    assert "restart-only" in text
     assert "2FA" in text or "2fa" in text.lower()

@@ -27,7 +27,7 @@ REQUIRED_STARTUP_SNIPPETS = (
 
 # Heavy IB Gateway provisioning must NOT live in the boot path: it stalled cloud-init and
 # duplicated ops/scripts/repair_ib_gateway_runtime.py + install_ibc_config_helper.py, which the
-# IB Gateway Ops workflow runs after every deploy.
+# IB Gateway Ops workflow handles after relevant Auto CI/CD deploys or explicit manual dispatch.
 FORBIDDEN_STARTUP_SNIPPETS = (
     "ibgateway.service",
     "poma-run-ib-gateway",
