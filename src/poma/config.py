@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     portfolio_value_usd: PositiveFloat = Field(default=10_000.0, alias="PORTFOLIO_VALUE_USD")
     cash_buffer_pct: float = Field(default=0.02, alias="CASH_BUFFER_PCT")
     max_position_pct: float = Field(default=0.10, alias="MAX_POSITION_PCT")
-    max_turnover_pct: float = Field(default=0.35, alias="MAX_TURNOVER_PCT")
+    max_turnover_pct: float = Field(default=1.0, alias="MAX_TURNOVER_PCT")
     min_trade_notional_usd: PositiveFloat = Field(
         default=25.0,
         alias="MIN_TRADE_NOTIONAL_USD",

@@ -63,3 +63,6 @@ set_default GCP_REGION "us-west1"
 set_default GCP_ZONE "us-west1-b"
 set_default GCP_VM_NAME "poma-${DEPLOY_ENVIRONMENT}-free-tier"
 set_default TF_STATE_BUCKET "poma-tf-state-${project_number}"
+# Runtime default is exported here before the deploy workflow's later set_default call so CI and
+# local settings share the same initial paper/live bootstrap turnover policy.
+set_default MAX_TURNOVER_PCT "1.0"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -14,6 +15,7 @@ DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
 HEALTH_CLIENT_ID_OFFSET = 90
+OrderStatusCallback = Callable[[ProposedTrade, OrderResult], None]
 
 
 @dataclass(frozen=True)
@@ -37,10 +39,6 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
         account=settings.ibkr_account or "",
         timeout=timeout,
     )
-    # Apply the same timeout to post-connect API requests.  ib_insync's default
-    # RequestTimeout is 0 (falsy → no timeout), so reqCurrentTime() and portfolio()
-    # can hang indefinitely when the gateway accepts the TCP handshake but stops
-    # responding to subsequent API messages (e.g. during early-startup).
     ib.RequestTimeout = timeout
     try:
         accounts = [account for account in ib.managedAccounts() if account]
@@ -60,7 +58,11 @@ class Broker(Protocol):
     def positions(self) -> list[CurrentPosition]:
         ...
 
-    def submit_trades(self, trades: list[ProposedTrade]) -> list[OrderResult]:
+    def submit_trades(
+        self,
+        trades: list[ProposedTrade],
+        status_callback: OrderStatusCallback | None = None,
+    ) -> list[OrderResult]:
         ...
 
 
@@ -68,7 +70,11 @@ class DryRunBroker:
     def positions(self) -> list[CurrentPosition]:
         return []
 
-    def submit_trades(self, trades: list[ProposedTrade]) -> list[OrderResult]:
+    def submit_trades(
+        self,
+        trades: list[ProposedTrade],
+        status_callback: OrderStatusCallback | None = None,
+    ) -> list[OrderResult]:
         return [
             OrderResult(
                 ticker=trade.ticker,
@@ -124,7 +130,11 @@ class IbkrBroker:
         finally:
             ib.disconnect()
 
-    def submit_trades(self, trades: list[ProposedTrade]) -> list[OrderResult]:
+    def submit_trades(
+        self,
+        trades: list[ProposedTrade],
+        status_callback: OrderStatusCallback | None = None,
+    ) -> list[OrderResult]:
         if not trades:
             return []
         ib = self._connect()
@@ -137,7 +147,10 @@ class IbkrBroker:
                     order.account = self.settings.ibkr_account
                 submitted = ib.placeOrder(contract, order)
                 self._wait_for_terminal_status(ib, submitted)
-                results.append(self._order_result(proposed, submitted))
+                result = self._order_result(proposed, submitted)
+                if status_callback is not None:
+                    status_callback(proposed, result)
+                results.append(result)
         finally:
             ib.disconnect()
         return results

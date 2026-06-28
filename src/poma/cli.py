@@ -18,6 +18,7 @@ from poma.history import CapSnapshotHistory
 from poma.market_calendar import should_rebalance_now
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
+from poma.order_status_alerts import order_status_alert
 from poma.state import LocalState
 
 app = typer.Typer(no_args_is_help=True, help="POMA market-cap rebalancer.")
@@ -116,6 +117,8 @@ def _run_rebalance(
         return outcome, report_path
 
     plan = engine.execute(plan)
+    for result in plan.execution_results:
+        send_alert(settings, order_status_alert(session_date, result))
     outcome = RebalanceOutcome(plan=plan, executed=True, blocked=False, status="completed")
     report_path = _write_report(plan, settings.report_dir)
     send_alert(settings, _portfolio_summary(session_date, plan, "completed", executed=True))
