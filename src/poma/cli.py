@@ -74,6 +74,14 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
             {
                 "run_id": plan.run_id,
                 "session_date": plan.session_date,
+                "portfolio_value_usd": plan.portfolio_value_usd,
+                "strategy": {
+                    "name": plan.strategy_name,
+                    "allocation_pct": plan.strategy_allocation_pct,
+                    "capital_usd": plan.strategy_capital_usd,
+                    "total_allocated_pct": plan.total_allocated_pct,
+                    "total_allocated_usd": plan.total_allocated_usd,
+                },
                 "targets": [target.__dict__ for target in plan.targets],
                 "trades": [_trade_to_json(trade) for trade in plan.trades],
                 "execution_results": [

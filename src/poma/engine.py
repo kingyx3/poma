@@ -8,6 +8,7 @@ from poma.config import Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
 from poma.history import CapSnapshotHistory
 from poma.models import RebalancePlan
+from poma.portfolio import build_strategy_capital_plan
 from poma.risk import (
     enforce_order_limits,
     enforce_turnover_limit,
@@ -49,8 +50,18 @@ class RebalanceEngine:
 
     def build_plan(self, session_date: str, run_id: str) -> RebalancePlan:
         settings = self.settings
+        capital_plan = build_strategy_capital_plan(
+            settings.portfolio_value_usd,
+            settings.strategy_allocations,
+        )
+        strategy_capital = capital_plan.capital_for(settings.active_strategy)
         current = self.data_client.current_universe_snapshot()
         warnings: list[str] = []
+        if capital_plan.unallocated_pct > 1e-9:
+            warnings.append(
+                f"{capital_plan.unallocated_pct:.2%} of PORTFOLIO_VALUE_USD is not allocated "
+                "to active strategies"
+            )
         historical = None
         today = datetime.now(UTC).date()
         if self.history is not None:
@@ -69,8 +80,7 @@ class RebalanceEngine:
             selected = select_by_combined_factor(current, historical, settings.max_holdings)
         targets = build_equal_weight_targets(
             selected=selected,
-            portfolio_value_usd=settings.portfolio_value_usd,
-            cash_buffer_pct=settings.cash_buffer_pct,
+            portfolio_value_usd=strategy_capital.capital_usd,
             max_position_pct=settings.max_position_pct,
         )
 
@@ -84,7 +94,7 @@ class RebalanceEngine:
             targets=targets,
             current_positions=positions,
             latest_prices=prices,
-            portfolio_value_usd=settings.portfolio_value_usd,
+            portfolio_value_usd=strategy_capital.capital_usd,
             min_trade_notional_usd=settings.min_trade_notional_usd,
             min_weight_delta_pct=settings.min_weight_delta_pct,
             limit_offset_bps=settings.limit_offset_bps,
@@ -95,7 +105,7 @@ class RebalanceEngine:
         warnings.extend(
             enforce_turnover_limit(
                 trades,
-                settings.portfolio_value_usd,
+                strategy_capital.capital_usd,
                 settings.max_turnover_pct,
             )
         )
@@ -114,6 +124,12 @@ class RebalanceEngine:
             trades=trades,
             execution_results=[],
             warnings=warnings,
+            portfolio_value_usd=settings.portfolio_value_usd,
+            strategy_name=strategy_capital.name,
+            strategy_allocation_pct=strategy_capital.allocation_pct,
+            strategy_capital_usd=strategy_capital.capital_usd,
+            total_allocated_pct=capital_plan.total_allocated_pct,
+            total_allocated_usd=capital_plan.total_allocated_usd,
         )
 
     def is_blocked(self, plan: RebalancePlan) -> bool:

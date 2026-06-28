@@ -10,6 +10,7 @@ from poma.config import Settings
 from poma.health import check_ibkr
 from poma.models import OrderResult, OrderSide
 from poma.order_status_alerts import order_status_alert
+from poma.portfolio import CURRENT_STRATEGY_NAME, build_strategy_capital_plan
 from poma.risk import enforce_turnover_limit, generate_trades
 from poma.strategy import build_equal_weight_targets
 
@@ -38,11 +39,15 @@ def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
 
 def test_default_turnover_allows_initial_full_paper_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(monkeypatch)
+    capital_plan = build_strategy_capital_plan(
+        settings.portfolio_value_usd,
+        settings.strategy_allocations,
+    )
+    strategy_capital = capital_plan.capital_for(CURRENT_STRATEGY_NAME)
     tickers = [f"T{i:03d}" for i in range(1, settings.max_holdings + 1)]
     targets = build_equal_weight_targets(
         selected=pd.DataFrame({"ticker": tickers}),
-        portfolio_value_usd=settings.portfolio_value_usd,
-        cash_buffer_pct=settings.cash_buffer_pct,
+        portfolio_value_usd=strategy_capital.capital_usd,
         max_position_pct=settings.max_position_pct,
     )
 
@@ -50,17 +55,18 @@ def test_default_turnover_allows_initial_full_paper_bootstrap(monkeypatch: pytes
         targets=targets,
         current_positions=[],
         latest_prices={ticker: 100.0 for ticker in tickers},
-        portfolio_value_usd=settings.portfolio_value_usd,
+        portfolio_value_usd=strategy_capital.capital_usd,
         min_trade_notional_usd=settings.min_trade_notional_usd,
         min_weight_delta_pct=settings.min_weight_delta_pct,
         limit_offset_bps=settings.limit_offset_bps,
     )
 
     assert settings.max_turnover_pct == 1.0
+    assert strategy_capital.allocation_pct == pytest.approx(0.98)
     assert warnings == []
     assert len(trades) == settings.max_holdings
     assert sum(trade.notional for trade in trades) / settings.portfolio_value_usd == pytest.approx(0.98)
-    assert enforce_turnover_limit(trades, settings.portfolio_value_usd, settings.max_turnover_pct) == []
+    assert enforce_turnover_limit(trades, strategy_capital.capital_usd, settings.max_turnover_pct) == []
 
 
 def test_paper_and_live_modes_use_expected_broker(monkeypatch: pytest.MonkeyPatch) -> None:

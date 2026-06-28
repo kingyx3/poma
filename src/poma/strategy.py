@@ -213,18 +213,18 @@ def _apply_max_weight_cap(weights: pd.Series, max_weight: float) -> pd.Series:
 def build_equal_weight_targets(
     selected: pd.DataFrame,
     portfolio_value_usd: float,
-    cash_buffer_pct: float,
     max_position_pct: float,
 ) -> list[TargetPosition]:
-    """Allocate the investable value equally across the selected names.
+    """Allocate the provided strategy sleeve equally across the selected names.
 
-    Every constituent targets ``1 / N`` of the investable value. When that equal weight would
-    exceed ``max_position_pct`` (i.e. the basket is small), the cap binds on every name and the
-    uninvested remainder is held as cash rather than concentrated into fewer positions.
+    Every constituent targets ``1 / N`` of the active strategy sleeve. Portfolio-level cash is held
+    by the passive `cash` allocation sleeve, not by reducing the active strategy's investable value.
+    When equal weight would exceed ``max_position_pct`` (i.e. the basket is small), the cap binds on
+    every name and that strategy-sleeve remainder stays in cash rather than concentrating into fewer
+    positions.
     """
     if selected.empty:
         return []
-    investable_value = portfolio_value_usd * (1 - cash_buffer_pct)
     tickers = selected["ticker"].astype(str).tolist()
     equal_weight = 1.0 / len(tickers)
     raw_weights = pd.Series(equal_weight, index=tickers)
@@ -233,7 +233,7 @@ def build_equal_weight_targets(
         TargetPosition(
             ticker=str(ticker),
             target_weight=float(weight),
-            target_notional=float(weight * investable_value),
+            target_notional=float(weight * portfolio_value_usd),
         )
         for ticker, weight in weights.items()
     ]

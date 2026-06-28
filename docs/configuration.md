@@ -34,10 +34,11 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
 | `MAX_HOLDINGS` | yes | `100` | Hold the top company stocks by combined market-cap-size + rank-rising-velocity score, equal-weighted. |
-| `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. POMA does not auto-size to total IBKR account equity. |
-| `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment. |
-| `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap. |
-| `MAX_TURNOVER_PCT` | yes | `1.0` | Allows the first paper/live bootstrap allocation while still blocking impossible >100% turnover. Lower it after the initial portfolio is established if desired. |
+| `ACTIVE_STRATEGY` | yes | `rank_velocity_size_equal_weight` | Trading strategy sleeve to run. This must exist in `STRATEGY_ALLOCATIONS`. |
+| `STRATEGY_ALLOCATIONS` | yes | `rank_velocity_size_equal_weight=0.98,cash=0.02` | Comma-separated strategy capital sleeves. Values are percentages of `PORTFOLIO_VALUE_USD`; `0.98` means 98%. The passive `cash` sleeve counts toward the portfolio cap but does not generate trades. The total must be `<= 1.0`. |
+| `PORTFOLIO_VALUE_USD` | yes | `10000` | Hard cap for total capital managed across all strategy sleeves. POMA does not auto-size to total IBKR account equity. |
+| `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap within the active strategy sleeve. |
+| `MAX_TURNOVER_PCT` | yes | `1.0` | Allows the first paper/live bootstrap allocation while still blocking impossible >100% sleeve turnover. Lower it after the initial portfolio is established if desired. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Avoids tiny uneconomic trades. |
 | `MIN_WEIGHT_DELTA_PCT` | yes | `0.0025` | Avoids churn from tiny target changes while allowing 1% top-100 target weights. |
 | `ORDER_TYPE` | yes | `limit` | Use `limit` by default. |
@@ -60,7 +61,17 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 
 ## Portfolio sizing and existing account equity
 
-POMA sizes the strategy from `PORTFOLIO_VALUE_USD`, not from total IBKR account equity. With the defaults, a paper or live account with more than $10,000 still targets a roughly $9,800 strategy sleeve after the 2% cash buffer. Raise `PORTFOLIO_VALUE_USD` intentionally if you want POMA to manage a larger sleeve.
+POMA sizes from `PORTFOLIO_VALUE_USD`, not from total IBKR account equity. `PORTFOLIO_VALUE_USD` is the hard cap for all strategy sleeves combined. `STRATEGY_ALLOCATIONS` then splits that cap across strategies, and the total allocation must be `<= 100%`.
+
+With the defaults, the active trading strategy is `rank_velocity_size_equal_weight` and it receives `98%` of `PORTFOLIO_VALUE_USD`. The passive `cash` sleeve receives the remaining `2%` and does not create orders. A paper or live account with more than $10,000 therefore targets a $9,800 rank-strategy sleeve and a $200 cash sleeve by default. Raise `PORTFOLIO_VALUE_USD` intentionally if you want POMA to manage a larger total sleeve.
+
+For future strategies, add them to `STRATEGY_ALLOCATIONS`, for example:
+
+```text
+STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.60,future_strategy=0.38,cash=0.02
+```
+
+That gives the current strategy 60% of `PORTFOLIO_VALUE_USD`, gives the future strategy 38%, reserves 2% as cash, and still caps total managed capital at `PORTFOLIO_VALUE_USD`.
 
 Existing stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
 
@@ -72,7 +83,7 @@ Run this before the first rank-rising-velocity rebalance, or let the first rebal
 poma refresh-market-data
 ```
 
-Current top-500 membership comes from `yfinance.screen()` sorted by `intradaymarketcap`. The strategy deduplicates share classes before ranking companies: issuer/name metadata is preferred when available, and exact duplicate market-cap buckets are used as a fallback when issuer metadata is missing. Historical market caps are estimated from Yahoo close prices multiplied by the current share count from the latest snapshot.
+Current top-500 membership comes from `yfinance.screen()` sorted by `intradaymarketcap`. The strategy deduplicates share classes before ranking companies: issuer/name metadata is preferred when available, and exact duplicate market-cap buckets are used as a fallback when issuer metadata is unavailable. Historical market caps are estimated from Yahoo close prices multiplied by the current share count from the latest snapshot.
 
 ## Telegram alert config
 

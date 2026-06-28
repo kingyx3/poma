@@ -15,7 +15,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm `ibgateway.service` is active after reboot.
 - [ ] Confirm `127.0.0.1:7497` is reachable on the VM.
 - [ ] Add `IBKR_ACCOUNT_PAPER` before switching to `TRADING_MODE=paper`.
-- [ ] Confirm `PORTFOLIO_VALUE_USD` matches the intended paper strategy sleeve size, not necessarily total IBKR account equity.
+- [ ] Confirm `PORTFOLIO_VALUE_USD` is the intended total managed cap and `STRATEGY_ALLOCATIONS` splits no more than 100% of it.
 
 ## Required before live mode
 
