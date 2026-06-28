@@ -136,6 +136,8 @@ def test_gateway_runner_is_hardened_after_render() -> None:
     assert "refusing raw Gateway fallback" in ensure
     assert "require_command java" in ensure
     assert "MemoryMax" in ensure
+    assert "gatewaystart-wrapper.log" in ensure
+    assert "gatewaystart.sh exited with status" in ensure
 
 
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
