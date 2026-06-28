@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import Field, PositiveFloat, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from poma.portfolio import CURRENT_STRATEGY_NAME, parse_strategy_allocations
+from poma.portfolio import CURRENT_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, parse_strategy_allocations
 
 
 class TradingMode(StrEnum):
@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     max_holdings: PositiveInt = Field(default=100, alias="MAX_HOLDINGS")
     active_strategy: str = Field(default=CURRENT_STRATEGY_NAME, alias="ACTIVE_STRATEGY")
     strategy_allocations: str = Field(
-        default=f"{CURRENT_STRATEGY_NAME}=1.0",
+        default=DEFAULT_STRATEGY_ALLOCATIONS,
         alias="STRATEGY_ALLOCATIONS",
     )
 
