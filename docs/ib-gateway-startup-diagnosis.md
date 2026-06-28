@@ -39,7 +39,7 @@ Important stages:
 | `gateway-log-error` | recent logs contain a fatal Gateway or IBC error. |
 | `gateway-running-no-login-progress-timeout` | Gateway stayed alive but did not show login, 2FA, or API progress before the grace deadline. |
 | `login-reached-2fa-pending` | Gateway reached broker authentication. Approve the prompt. |
-| `api-socket-open` | port `7497` is listening; the workflow proceeds to the real API handshake. |
+| `api-socket-open` | port `7497` is listening; after two stable socket polls, the workflow proceeds to the real API handshake. |
 
 ## Manual checks
 
@@ -52,4 +52,8 @@ sudo poma-diagnose-ibgateway diagnose --log-lines 200
 sudo systemctl restart ibgateway
 ```
 
-The full diagnosis includes redacted config, launcher settings, process state, listeners, service logs, and Gateway/IBC log tails.
+The full diagnosis includes redacted config, launcher settings, process state, listeners, service logs, and Gateway/IBC log tails. Failed runs also print a final compact diagnosis and the redacted diagnostic tail directly in the job log so the actionable `STARTUP_STAGE`, `STARTUP_REASON`, and `NEXT_ACTION` are visible without opening only the step summary.
+
+## Transient socket and service restarts
+
+IB Gateway can briefly open `127.0.0.1:7497` before the authenticated API session is ready. The workflow now requires two consecutive successful socket polls before it runs `poma ibkr-check`, then captures the redacted `ibkr-check` tail if the real `ib_insync` handshake fails. If `ibgateway.service` stops after a transient socket, the workflow records a readiness snapshot and allows the systemd restart loop to recover within the bounded readiness deadline instead of failing immediately.
