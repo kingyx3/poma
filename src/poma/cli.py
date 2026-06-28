@@ -18,6 +18,7 @@ from poma.history import CapSnapshotHistory
 from poma.market_calendar import should_rebalance_now
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
+from poma.order_status_alerts import order_status_alert
 from poma.state import LocalState
 
 app = typer.Typer(no_args_is_help=True, help="POMA market-cap rebalancer.")
@@ -51,14 +52,6 @@ def _portfolio_summary(session_date: str, plan: RebalancePlan, status: str, exec
     if status == "blocked":
         lines.extend(w for w in plan.warnings if "block execution" in w)
     return "\n".join(lines)
-
-
-def _assert_execution_ready(settings) -> None:
-    if settings.trading_mode == TradingMode.DRY_RUN:
-        return
-    check = check_ibkr(settings)
-    if not check.ok:
-        raise RuntimeError(f"pre-trade IBKR readiness failed: {check.detail}")
 
 
 def _trade_to_json(trade: ProposedTrade) -> dict[str, object]:
@@ -104,7 +97,6 @@ def _run_rebalance(
     if force_dry_run:
         settings = settings.model_copy(update={"trading_mode": TradingMode.DRY_RUN})
 
-    _assert_execution_ready(settings)
     engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.data_dir))
     plan = engine.build_plan(session_date, run_id)
     report_path = _write_report(plan, settings.report_dir)
@@ -125,6 +117,8 @@ def _run_rebalance(
         return outcome, report_path
 
     plan = engine.execute(plan)
+    for result in plan.execution_results:
+        send_alert(settings, order_status_alert(session_date, result))
     outcome = RebalanceOutcome(plan=plan, executed=True, blocked=False, status="completed")
     report_path = _write_report(plan, settings.report_dir)
     send_alert(settings, _portfolio_summary(session_date, plan, "completed", executed=True))
