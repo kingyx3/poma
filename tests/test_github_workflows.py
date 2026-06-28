@@ -4,6 +4,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 BOOTSTRAP_WORKFLOW = REPO_ROOT / ".github/workflows/bootstrap-gcp-wif.yml"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
+PAPER_DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-paper-gcp-vm.yml"
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 AUTO_CICD_WORKFLOW = REPO_ROOT / ".github/workflows/auto-cicd.yml"
 GATEWAY_DIAGNOSTICS_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
@@ -25,6 +26,7 @@ def test_workflows_use_current_action_versions() -> None:
         _text(CI_WORKFLOW),
         _text(BOOTSTRAP_WORKFLOW),
         _text(DEPLOY_WORKFLOW),
+        _text(PAPER_DEPLOY_WORKFLOW),
         _text(GATEWAY_OPS_WORKFLOW),
     )
     combined = "\n".join(workflows)
@@ -42,7 +44,6 @@ def test_deploy_workflow_routes_paper_to_paper_account() -> None:
     assert "IBKR_ACCOUNT_PAPER" in workflow
     assert 'case "${TRADING_MODE}" in' in workflow
     assert 'set_env IBKR_ACCOUNT "${IBKR_ACCOUNT_PAPER}"' in workflow
-    assert "TRADING_MODE=live" in workflow
 
 
 def test_gateway_ops_workflow_core_contract() -> None:
@@ -54,7 +55,6 @@ def test_gateway_ops_workflow_core_contract() -> None:
         "workflow_call:",
         "poma-ib-gateway-ops-${{ inputs.deploy_environment }}",
         "configure-paper",
-        "configure-live",
         "poma-configure-ibc",
         "repair_gateway_runtime",
         "verify_api_handshake",
@@ -88,40 +88,49 @@ def test_auto_cicd_deploys_dev_stg_and_prd() -> None:
         "branches: [main]",
         "release:",
         "types: [published]",
+        "uses: ./.github/workflows/deploy-paper-gcp-vm.yml",
         "uses: ./.github/workflows/deploy-gcp-vm.yml",
-        "uses: ./.github/workflows/ib-gateway-ops.yml",
         "cancel-in-progress: true",
+        "deploy_environment: dev",
+        "deploy_environment: stg",
+        "deploy_environment: prd",
     ):
         assert snippet in workflow
 
 
+def test_auto_cicd_routes_dev_stg_to_paper_deployment() -> None:
+    workflow = _text(AUTO_CICD_WORKFLOW)
+    paper_workflow = _text(PAPER_DEPLOY_WORKFLOW)
+
+    assert "  dev-paper:" in workflow
+    assert "  stg-paper:" in workflow
+    assert "  prd-deploy:" in workflow
+    assert "  prd-configure-gateway:" not in workflow
+    assert "allow_live_trading: true" in workflow
+
+    assert "trading_mode: paper" in paper_workflow
+    assert "allow_live_trading: false" in paper_workflow
+    assert "action: configure-paper" in paper_workflow
+
+
 def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
     workflow = _text(AUTO_CICD_WORKFLOW)
-    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
-    stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
-    gateway_paths = workflow.split("is_gateway_path()", 1)[1].split("case \"${EVENT_NAME}\"", 1)[0]
+    paper_workflow = _text(PAPER_DEPLOY_WORKFLOW)
+    gateway_paths = workflow.split("is_gateway_path()", 1)[1].split(
+        "case \"${EVENT_NAME}\"", 1
+    )[0]
 
-    assert "needs.changes.outputs.gateway_required == 'true'" in dev_gateway
-    assert "needs.changes.outputs.gateway_required == 'true'" in stg_gateway
-    assert "needs.changes.outputs.deploy_required == 'true'" not in dev_gateway
-    assert "needs.changes.outputs.deploy_required == 'true'" not in stg_gateway
+    assert "gateway_required:" in workflow
+    assert "needs.changes.outputs.gateway_required == 'true'" in workflow
+    assert "deploy_required:" in workflow
+    assert "needs.changes.outputs.deploy_required == 'true'" in workflow
+    assert "inputs.gateway_required" in paper_workflow
     assert "ops/scripts/validate_runtime_config.py" in workflow
+    assert ".github/workflows/deploy-paper-gcp-vm.yml" in gateway_paths
     assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
     assert "ops/scripts/repair_ib_gateway_runtime.py" in gateway_paths
     assert ".github/workflows/deploy-gcp-vm.yml" not in gateway_paths
     assert ".github/workflows/auto-cicd.yml" not in gateway_paths
-
-
-def test_auto_cicd_gateway_actions_per_environment() -> None:
-    workflow = _text(AUTO_CICD_WORKFLOW)
-    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
-    stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
-    prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
-
-    assert "action: configure-paper" in dev_gateway
-    assert "action: restart" not in dev_gateway
-    assert "action: configure-paper" in stg_gateway
-    assert "action: configure-live" in prd_gateway
 
 
 def test_adr_0002_dev_gateway_pr_checks_records_configure_paper_decision() -> None:
