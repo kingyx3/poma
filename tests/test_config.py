@@ -53,3 +53,15 @@ def test_strategy_allocations_cannot_exceed_portfolio_cap() -> None:
             TELEGRAM_CHAT_ID="chat",
             STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.75,future_strategy=0.50",
         )
+
+
+def test_paper_live_execution_requires_ibkr_account() -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="",
+    )
+
+    with pytest.raises(RuntimeError, match="paper trading requires IBKR_ACCOUNT"):
+        settings.assert_safe_for_execution()
