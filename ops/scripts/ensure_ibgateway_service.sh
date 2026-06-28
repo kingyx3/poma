@@ -197,10 +197,13 @@ diag_text = diag_text.replace(
 )
 diag_text = diag_text.replace('"ibc-not-running",\n            "fail",', '"ibc-not-running",\n            "continue",')
 diag_text = diag_text.replace('"java-gateway-not-running",\n            "fail",', '"java-gateway-not-running",\n            "continue",')
+diag_text = diag_text.replace('"gateway-log-error",\n            "fail",', '"gateway-log-error",\n            "continue",')
 if '"ibc-not-running",\n            "continue",' not in diag_text:
     raise SystemExit("failed to patch ibc startup grace classification")
 if '"java-gateway-not-running",\n            "continue",' not in diag_text:
     raise SystemExit("failed to patch Java/Gateway startup grace classification")
+if '"gateway-log-error",\n            "continue",' not in diag_text:
+    raise SystemExit("failed to patch gateway log startup grace classification")
 DIAG.write_text(diag_text, encoding="utf-8")
 DIAG.chmod(0o755)
 PY
