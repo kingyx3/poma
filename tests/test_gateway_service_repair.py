@@ -166,7 +166,7 @@ def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
 def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
     workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 900" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "Waiting up to ${timeout_seconds}s for broker auth and Gateway API readiness" in workflow
     assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
