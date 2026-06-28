@@ -8,7 +8,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 
 | Variable | Required | Default | Notes |
 |---|---:|---|---|
-| `APP_ENV` | yes | `dev` | Logical environment: `dev`, `stg`, or `prd`. |
+| `APP_ENV` | yes | `development` | Local/runtime label. CI/CD deploys render `dev`, `stg`, or `prd` from the selected GitHub Environment. |
 | `TRADING_MODE` | yes | `dry_run` | Supported values: `dry_run`, `paper`, `live`. |
 | `ALLOW_LIVE_TRADING` | live only | `false` | Set by deploy workflow input. Must be true for live trading. |
 | `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars` for the US equity trading session. |
