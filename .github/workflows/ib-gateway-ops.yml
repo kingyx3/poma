@@ -45,13 +45,13 @@ jobs:
   gateway-ops:
     name: IB Gateway ${{ inputs.action }} (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     environment: ${{ inputs.deploy_environment }}
     env:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
-      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 900
+      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360
       IB_GATEWAY_SOCKET_POLL_SECONDS: 5
       IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200
       BROKER_LOGIN_ID: ${{ secrets[format('IBKR_LOGIN_{0}', 'ID')] }}
@@ -297,7 +297,6 @@ jobs:
               timed "Configure IBC auth values" run_with_timeout 180s gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo POMA_CONFIGURE_IBC_RESTART=0 poma-configure-ibc" < "${input_file}"
               timed "Validate IBC configuration" validate_ibc_configuration "${mode}"
               timed "Restart ibgateway after IBC configuration" run_remote "sudo systemctl restart ibgateway" 180
-              timed "Pre-build poma Docker image" warmup_poma_docker_image || true
               wait_for_api_readiness "${mode}" 1 1
               ;;
             *)
