@@ -35,7 +35,8 @@ new = '''if [ -s "${HOME}/ibc/config.ini" ]; then
     exit 127
   fi
   cd "${IBC_DIR}"
-  exec "${IBC_DIR}/gatewaystart.sh" -inline
+  echo "Starting /opt/ibc/gatewaystart.sh for IB Gateway/TWS API on port 7497." >>"${IB_GATEWAY_LOG_DIR}/gatewaystart-wrapper.log"
+  exec -a poma-ibc-gatewaystart bash "${IBC_DIR}/gatewaystart.sh" -inline
 fi
 '''
 if old in text:
