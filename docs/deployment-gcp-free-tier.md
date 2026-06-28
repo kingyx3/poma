@@ -41,7 +41,7 @@ Bootstrap also generates environment-specific VM and deployer names, such as `po
 | `terraform_action` | choice | yes | `plan`, `apply`; default `plan` | `apply` provisions/updates the VM and can deploy the app. |
 | `deploy_app` | boolean | yes | default `true` | Uploads app package and rendered `.env` after Terraform apply. |
 | `trading_mode` | choice | yes | `dry_run`, `paper`, `live`; default `dry_run` | Rendered into the VM-local `.env`. |
-| `data_provider` | choice | yes | `fixture`, `yahoo`; default `yahoo` | Yahoo is the production provider. Fixture is for tests and PR dry-runs. |
+| `data_provider` | choice | yes | `fixture`, `yahoo`; default `yahoo` | Yahoo is the production provider. Fixture is for tests and dry-runs; deploy validation rejects fixture for paper/live. |
 | `allow_live_trading` | boolean | yes | default `false` | Must be `true` when `trading_mode=live`. |
 
 ## Required setup per environment
@@ -94,7 +94,7 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 7. Rerun with `terraform_action=apply` and `deploy_app=true`.
 8. Keep `trading_mode=dry_run` until the deploy smoke test and Gateway setup are verified.
 
-The deploy workflow supplies safe defaults for project-derived settings, region, zone, VM name, app mode, trading defaults, risk limits, provider defaults, and local paths. Do not create GitHub Environment Variables for these defaults.
+The deploy workflow supplies safe defaults for project-derived settings, region, zone, VM name, app mode, trading defaults, risk limits, provider defaults, and local paths. Do not create GitHub Environment Variables for these defaults. After `.env` rendering, deploy validates the runtime config before Terraform/app deployment so broken account, allocation, provider, and guardrail settings fail early.
 
 ## Bootstrap state recovery
 
@@ -111,11 +111,13 @@ On apply, the deploy workflow:
 3. Derives `GCP_PROJECT_ID` from `GCP_SERVICE_ACCOUNT_EMAIL`.
 4. Authenticates to GCP through the generated Workload Identity Federation settings.
 5. Renders a VM-local `.env` from CI defaults plus the selected environment's GitHub secrets.
-6. Runs Terraform for `infra/gcp-free-tier` using that environment's state prefix.
-7. Waits for the VM startup script to write `/var/lib/poma/vm-ready` with the expected startup revision and current boot id. If an older VM lacks that sentinel but cloud-init has been finished for at least two minutes, deploy continues so the app install fails fast with a concrete Docker/app error instead of polling readiness indefinitely. It resets the VM once if IAP/SSH never becomes reachable within the readiness window.
-8. Uploads a trimmed runtime package (`.dockerignore`, Dockerfile, compose file, Python package metadata/source, deploy script, and cron file) and `.env` through IAP SSH, retrying short-lived `scp` attempts to survive transient IAP backend or SSH-key propagation failures.
-9. Runs a fixture-backed dry-run smoke test.
-10. Installs the cron schedule.
+6. Validates the rendered runtime config, including strategy allocations, paper/live account gates, provider safety, and order guardrails.
+7. Validates Yahoo market-data output when `DATA_PROVIDER=yahoo`.
+8. Runs Terraform for `infra/gcp-free-tier` using that environment's state prefix.
+9. Waits for the VM startup script to write `/var/lib/poma/vm-ready` with the expected startup revision and current boot id. If an older VM lacks that sentinel but cloud-init has been finished for at least two minutes, deploy continues so the app install fails fast with a concrete Docker/app error instead of polling readiness indefinitely. It resets the VM once if IAP/SSH never becomes reachable within the readiness window.
+10. Uploads a trimmed runtime package (`.dockerignore`, Dockerfile, compose file, Python package metadata/source, deploy script, and cron file) and `.env` through IAP SSH, retrying short-lived `scp` attempts to survive transient IAP backend or SSH-key propagation failures.
+11. Runs a fixture-backed dry-run smoke test.
+12. Installs the cron schedule.
 
 The VM keeps Google Cloud ingress limited to IAP SSH. Operators reach a shell or tunnel the IB Gateway VNC port over the same IAP SSH path (`gcloud compute ssh --tunnel-through-iap`), so no broad public SSH/VNC firewall rules are opened. The VM still keeps an ephemeral public IP for low-cost outbound package installs and broker/data-provider traffic.
 
@@ -128,7 +130,7 @@ After dry-run deploy succeeds:
 1. Follow [`ibkr-gateway-operations.md`](ibkr-gateway-operations.md).
 2. Verify `ibgateway.service` is active.
 3. Verify `127.0.0.1:7497` is reachable on the VM.
-4. Run **Deploy GCP e2-micro VM** with `trading_mode=paper`. This uses `IBKR_ACCOUNT_PAPER` and renders it as runtime `IBKR_ACCOUNT` on the VM.
+4. Run **Deploy GCP e2-micro VM** with `trading_mode=paper` and `data_provider=yahoo`. This uses `IBKR_ACCOUNT_PAPER` and renders it as runtime `IBKR_ACCOUNT` on the VM.
 5. Run paper mode for at least one full trading week before considering live mode.
 
 Live mode additionally requires `trading_mode=live`, `IBKR_ACCOUNT`, `allow_live_trading=true`, and manual review of reports, order limits, turnover limits, and position caps.

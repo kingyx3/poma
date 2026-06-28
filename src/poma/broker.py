@@ -11,6 +11,7 @@ from poma.config import OrderType, Settings, TradingMode
 from poma.models import CurrentPosition, OrderResult, ProposedTrade
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
+SUCCESS_STATUSES = {"Filled"}
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
@@ -75,7 +76,7 @@ class DryRunBroker:
         trades: list[ProposedTrade],
         status_callback: OrderStatusCallback | None = None,
     ) -> list[OrderResult]:
-        return [
+        results = [
             OrderResult(
                 ticker=trade.ticker,
                 side=trade.side,
@@ -89,6 +90,10 @@ class DryRunBroker:
             )
             for trade in trades
         ]
+        if status_callback is not None:
+            for trade, result in zip(trades, results, strict=True):
+                status_callback(trade, result)
+        return results
 
 
 class IbkrBroker:
@@ -141,45 +146,122 @@ class IbkrBroker:
         results: list[OrderResult] = []
         try:
             for proposed in trades:
-                contract = Stock(proposed.ticker, "SMART", "USD")
-                order = self._build_order(proposed)
-                if self.settings.ibkr_account:
-                    order.account = self.settings.ibkr_account
-                submitted = ib.placeOrder(contract, order)
-                self._wait_for_terminal_status(ib, submitted)
-                result = self._order_result(proposed, submitted)
-                if status_callback is not None:
-                    status_callback(proposed, result)
-                results.append(result)
+                try:
+                    self._emit_status(
+                        status_callback,
+                        proposed,
+                        _manual_result(proposed, "Created", "order created"),
+                    )
+                    contract = Stock(proposed.ticker, "SMART", "USD")
+                    order = self._build_order(proposed)
+                    if self.settings.ibkr_account:
+                        order.account = self.settings.ibkr_account
+                    submitted = ib.placeOrder(contract, order)
+                    self._emit_status(
+                        status_callback,
+                        proposed,
+                        self._order_result(
+                            proposed,
+                            submitted,
+                            fallback_status="Submitted",
+                            message="order submitted",
+                        ),
+                    )
+                    last_status, timed_out = self._wait_for_terminal_status(
+                        ib,
+                        submitted,
+                        proposed,
+                        status_callback=status_callback,
+                    )
+                    final_message = None
+                    if timed_out:
+                        final_message = "order did not reach terminal status before timeout"
+                        if self.settings.cancel_stale_orders:
+                            final_message += "; cancel requested"
+                    result = self._order_result(proposed, submitted, message=final_message)
+                    if result.status != last_status or final_message:
+                        self._emit_status(status_callback, proposed, result)
+                    results.append(result)
+                except Exception as exc:  # noqa: BLE001 - report per-order failures without hiding context
+                    result = _manual_result(proposed, "Failed", str(exc))
+                    self._emit_status(status_callback, proposed, result)
+                    results.append(result)
         finally:
             ib.disconnect()
         return results
 
-    def _wait_for_terminal_status(self, ib: IB, trade: Trade) -> None:
+    @staticmethod
+    def _emit_status(
+        callback: OrderStatusCallback | None,
+        proposed: ProposedTrade,
+        result: OrderResult,
+    ) -> None:
+        if callback is not None:
+            callback(proposed, result)
+
+    def _wait_for_terminal_status(
+        self,
+        ib: IB,
+        trade: Trade,
+        proposed: ProposedTrade,
+        *,
+        status_callback: OrderStatusCallback | None = None,
+    ) -> tuple[str, bool]:
         deadline = time.monotonic() + self.settings.order_status_timeout_seconds
+        last_status = trade.orderStatus.status or "Submitted"
         while time.monotonic() < deadline:
-            status = trade.orderStatus.status
+            status = trade.orderStatus.status or last_status
+            if status != last_status:
+                last_status = status
+                self._emit_status(
+                    status_callback,
+                    proposed,
+                    self._order_result(proposed, trade, fallback_status=status),
+                )
             if trade.isDone() or status in DONE_STATUSES:
-                return
+                return status, False
             ib.sleep(1.0)
 
+        timeout_message = "order did not reach terminal status before timeout"
         if self.settings.cancel_stale_orders:
             ib.cancelOrder(trade.order)
+            cancel_message = f"{timeout_message}; cancel requested"
+            self._emit_status(
+                status_callback,
+                proposed,
+                self._order_result(
+                    proposed,
+                    trade,
+                    fallback_status="PendingCancel",
+                    message=cancel_message,
+                ),
+            )
+            last_status = "PendingCancel"
             cancel_deadline = time.monotonic() + min(10, self.settings.order_status_timeout_seconds)
             while time.monotonic() < cancel_deadline:
-                status = trade.orderStatus.status
+                status = trade.orderStatus.status or last_status
+                if status != last_status:
+                    last_status = status
+                    self._emit_status(
+                        status_callback,
+                        proposed,
+                        self._order_result(proposed, trade, fallback_status=status),
+                    )
                 if trade.isDone() or status in DONE_STATUSES:
-                    return
+                    return status, False
                 ib.sleep(1.0)
+        return last_status, True
 
-    def _order_result(self, proposed: ProposedTrade, trade: Trade) -> OrderResult:
+    def _order_result(
+        self,
+        proposed: ProposedTrade,
+        trade: Trade,
+        *,
+        fallback_status: str = "submitted",
+        message: str | None = None,
+    ) -> OrderResult:
         status = trade.orderStatus
-        final_status = status.status or "submitted"
-        message = None
-        if final_status not in DONE_STATUSES:
-            message = "order did not reach terminal status before timeout"
-            if self.settings.cancel_stale_orders:
-                message += "; cancel requested"
+        final_status = status.status or fallback_status
         return OrderResult(
             ticker=proposed.ticker,
             side=proposed.side,
@@ -200,10 +282,28 @@ class IbkrBroker:
         return LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
 
 
+def _manual_result(proposed: ProposedTrade, status: str, message: str | None = None) -> OrderResult:
+    return OrderResult(
+        ticker=proposed.ticker,
+        side=proposed.side,
+        quantity=proposed.quantity,
+        notional=proposed.notional,
+        order_id=None,
+        status=status,
+        filled=0.0,
+        average_fill_price=None,
+        message=message,
+    )
+
+
 def _none_if_zero(value: float | None) -> float | None:
     if value is None or value == 0:
         return None
     return float(value)
+
+
+def order_results_have_issues(results: list[OrderResult]) -> bool:
+    return any(result.status not in SUCCESS_STATUSES or result.message for result in results)
 
 
 def build_broker(settings: Settings) -> Broker:

@@ -206,6 +206,18 @@ jobs:
             exit 1
           }
 
+      - name: Validate rendered runtime config
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 2m pip install -e . || {
+            echo "::error::Dependency install timed out while preparing runtime config validation"
+            exit 1
+          }
+          timeout --kill-after=30s 2m python ops/scripts/validate_runtime_config.py --env-file .env.deploy || {
+            echo "::error::Rendered runtime config failed validation"
+            exit 1
+          }
+
       - name: Validate market data provider output
         run: |
           set -euo pipefail
@@ -213,10 +225,6 @@ jobs:
             echo "Skipping external provider validation because DATA_PROVIDER=${DATA_PROVIDER}"
             exit 0
           fi
-          timeout --kill-after=30s 5m pip install -e . || {
-            echo "::error::Dependency install timed out while preparing data-provider validation"
-            exit 1
-          }
           timeout --kill-after=30s 5m python ops/scripts/validate_data_provider.py || {
             echo "::error::Market data provider validation timed out or failed"
             exit 1

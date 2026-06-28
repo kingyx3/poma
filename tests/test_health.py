@@ -48,6 +48,6 @@ def test_check_ibkr_fails_on_account_mismatch(monkeypatch) -> None:
     assert "not in" in check.detail
 
 
-def test_run_checks_covers_provider_and_ibkr() -> None:
+def test_run_checks_covers_runtime_config_provider_and_ibkr() -> None:
     names = {check.name for check in run_checks(make_settings(TRADING_MODE="dry_run"))}
-    assert names == {"data_provider", "ibkr"}
+    assert names == {"runtime_config", "data_provider", "ibkr"}

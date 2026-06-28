@@ -51,7 +51,6 @@ class Settings(BaseSettings):
     )
 
     portfolio_value_usd: PositiveFloat = Field(default=10_000.0, alias="PORTFOLIO_VALUE_USD")
-    cash_buffer_pct: float = Field(default=0.02, alias="CASH_BUFFER_PCT")
     max_position_pct: float = Field(default=0.10, alias="MAX_POSITION_PCT")
     max_turnover_pct: float = Field(default=1.0, alias="MAX_TURNOVER_PCT")
     min_trade_notional_usd: PositiveFloat = Field(
@@ -87,7 +86,6 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = Field(default=None, alias="TELEGRAM_CHAT_ID")
 
     @field_validator(
-        "cash_buffer_pct",
         "max_position_pct",
         "max_turnover_pct",
         "min_weight_delta_pct",
@@ -133,6 +131,8 @@ class Settings(BaseSettings):
         return parse_strategy_allocations(self.strategy_allocations)
 
     def assert_safe_for_execution(self) -> None:
+        if self.trading_mode in {TradingMode.PAPER, TradingMode.LIVE} and not self.ibkr_account:
+            raise RuntimeError(f"{self.trading_mode.value} trading requires IBKR_ACCOUNT")
         if self.trading_mode == TradingMode.LIVE and not self.allow_live_trading:
             raise RuntimeError("LIVE trading requires ALLOW_LIVE_TRADING=true")
         market_order_blocked = (

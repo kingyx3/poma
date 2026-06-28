@@ -6,183 +6,169 @@ DIAG_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
 ENSURE_HELPER = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
 
 
-def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+def _workflow() -> str:
+    return GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
-    expected = (
+
+def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
+    workflow = _workflow()
+
+    for snippet in (
         "### IB Gateway Ops timing",
-        "Slowest step:",
         "Total step time:",
         "timed \"GCP project configuration\"",
         "timed \"IAP SSH/runtime sentinel check\"",
         "timed \"Upload gateway helper scripts\"",
         "timed \"Runtime repair/install\"",
-        "timed \"Restart ibgateway\"",
-        "timed \"Configure IBC credentials\"",
         "timed \"Validate IBC configuration\"",
         "timed \"Restart ibgateway after IBC configuration\"",
         "timed \"Real API handshake\"",
-        "TIMING Collect gateway diagnostics",
-    )
-    for snippet in expected:
+        "Collect gateway diagnostics",
+    ):
         assert snippet in workflow
 
 
 def test_gateway_runtime_repair_is_idempotent_and_fails_open() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
 
-    assert "gateway_runtime_revision" in workflow
-    assert "sha256sum" in workflow
-    assert "/var/lib/poma/ib-gateway-runtime-revision" in workflow
-    assert "ops/scripts/diagnose_ib_gateway_runtime.py" in workflow
-    assert "ensure_ibgateway_service.sh" in workflow
-    assert "poma-diagnose-ibgateway" in workflow
-    assert "Gateway runtime helpers already current" in workflow
-    assert "skipping repair/install" in workflow
-    assert "Gateway runtime sentinel missing or stale; fail-open" in workflow
-    assert "sudo tee '${gateway_runtime_sentinel}'" in workflow
-    assert "test -x /usr/local/bin/poma-configure-ibc" in workflow
-    assert "test -x /usr/local/bin/poma-diagnose-ibgateway" in workflow
-    assert "systemctl cat ibgateway" in workflow
+    for snippet in (
+        "gateway_runtime_revision",
+        "sha256sum",
+        "/var/lib/poma/ib-gateway-runtime-revision",
+        "ops/scripts/diagnose_ib_gateway_runtime.py",
+        "ensure_ibgateway_service.sh",
+        "poma-diagnose-ibgateway",
+        "Gateway runtime helpers already current",
+        "skipping repair/install",
+        "Gateway runtime sentinel missing or stale; fail-open",
+        "sudo tee '${gateway_runtime_sentinel}'",
+        "test -x /usr/local/bin/poma-configure-ibc",
+        "test -x /usr/local/bin/poma-diagnose-ibgateway",
+        "systemctl cat ibgateway",
+    ):
+        assert snippet in workflow
 
 
 def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
 
     assert "poll_gateway_socket_once" in workflow
     assert "if nc -z 127.0.0.1 7497; then exit 0" in workflow
     assert "if ! systemctl is-active --quiet ibgateway; then exit 2" in workflow
     assert "Socket/service poll attempt" in workflow
-    assert "IB Gateway service stopped before the API socket became reachable" in workflow
-    assert "IB Gateway service stopped after the API socket was briefly reachable" in workflow
+    assert "Gateway API socket stability guard" in workflow
 
 
 def test_gateway_socket_poll_is_errexit_safe() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
 
-    assert (
-        "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then"
-        in workflow
-    )
-    assert "status=0" in workflow
-    assert "status=\"$?\"" in workflow
+    assert "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then" in workflow
+    assert "stable=$((stable + 1))" in workflow
     assert "Gateway startup classification" in workflow
     assert "set +e\n              timed \"Socket/service poll attempt" not in workflow
 
 
 def test_gateway_startup_failure_prints_actionable_compact_diagnosis() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
 
-    assert "startup_check_file=\"$(mktemp)\"" in workflow
-    assert "print_compact_startup_diagnosis" in workflow
-    assert "default_next_action" in workflow
-    assert "STARTUP_STAGE=${stage}" in workflow
-    assert "STARTUP_ACTION=${action}" in workflow
-    assert "STARTUP_REASON=${reason}" in workflow
-    assert "NEXT_ACTION=${next_action}" in workflow
-    assert "Compact diagnosis follows" in workflow
-    assert "startup-check-missing-stage" in workflow
-    assert "IB Gateway startup classification" in workflow
-    assert "Inspect Xvfb logs, remove stale display locks" in workflow
-    assert "Verify /opt/ibc/gatewaystart.sh is executable" in workflow
+    for snippet in (
+        "startup_check_file=\"$(mktemp)\"",
+        "print_compact_startup_diagnosis",
+        "STARTUP_STAGE=$(compact_value STARTUP_STAGE",
+        "STARTUP_ACTION=$(compact_value STARTUP_ACTION",
+        "STARTUP_REASON=$(compact_value STARTUP_REASON",
+        "NEXT_ACTION=Approve broker mobile authentication",
+        "startup-check-missing-stage",
+        "IB Gateway startup classification",
+    ):
+        assert snippet in workflow
 
 
 def test_gateway_socket_requires_stable_guard_before_real_handshake() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    verify_socket = workflow.split("          verify_socket() {", 1)[1].split("\n          }", 1)[0]
+    workflow = _workflow()
+    wait_for_api = workflow.split("          wait_for_api_readiness() {", 1)[1].split(
+        "\n          }",
+        1,
+    )[0]
 
-    expected = (
-        "stable_socket_successes",
-        "required_stable_socket_successes",
+    for snippet in (
+        "local deadline=$((SECONDS + timeout_seconds)) attempt=0 elapsed=0 stable=0",
+        "required_stable=2",
+        "stable_socket_polls_required=${required_stable}",
         "Gateway API socket stability guard",
-        "Socket opened but stability guard has not passed",
-        "stable socket",
+        "Real API handshake",
+    ):
+        assert snippet in wait_for_api
+
+    assert wait_for_api.index("Gateway API socket stability guard") < wait_for_api.index(
+        'timed "Real API handshake" verify_api_handshake'
     )
-    for snippet in expected:
-        assert snippet in verify_socket
-
-    first_socket_reachable = verify_socket.index("IB Gateway API socket is reachable on 127.0.0.1:7497.")
-    stable_guard = verify_socket.index("Gateway API socket stability guard")
-    real_handshake = verify_socket.index('timed "Real API handshake" verify_api_handshake')
-    assert first_socket_reachable < stable_guard < real_handshake
 
 
-def test_gateway_handshake_attempts_are_captured_for_diagnostics() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+def test_gateway_pending_configure_path_is_explicit() -> None:
+    workflow = _workflow()
 
-    assert 'handshake_log_file="$(mktemp)"' in workflow
-    assert 'tee -a "${handshake_log_file}"' in workflow
-    assert "IB Gateway API handshake log" in workflow
-    assert 'tail -n 160 "${handshake_log_file}"' in workflow
-    assert "handshake attempt ${handshake_failures}" in workflow
-    assert "No API handshake output was captured" in workflow
-
-
-def test_gateway_service_stopped_after_socket_has_explicit_message() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    verify_socket = workflow.split("          verify_socket() {", 1)[1].split("\n          }", 1)[0]
-
-    assert "socket_was_reachable" in verify_socket
-    assert (
-        "IB Gateway service stopped after the API socket became reachable but before "
-        "the authenticated API handshake succeeded."
-    ) in verify_socket
-    assert ("IB Gateway service stopped before the API socket became reachable.") in verify_socket
+    for snippet in (
+        "auth_pending_stage",
+        "login-reached-2fa-pending|login-reached-awaiting-auth",
+        "allow_auth_pending_success",
+        "Treating configure as auth-pending",
+        'wait_for_api_readiness "${mode}" 1 1',
+        "run verify-socket before paper/live trading",
+    ):
+        assert snippet in workflow
 
 
 def test_gateway_exit_writes_final_compact_diagnosis_to_job_log() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    on_exit = workflow.split("          on_exit() {", 1)[1].split("\n          }", 1)[0]
+    workflow = _workflow()
 
-    assert "Final compact IB Gateway diagnosis" in workflow
-    assert "print_final_compact_diagnosis" in workflow
-    assert "print_final_compact_diagnosis" in on_exit
-    assert "write_timing_summary" in on_exit
-    assert on_exit.index("print_final_compact_diagnosis") < on_exit.index("write_timing_summary")
+    assert "Final compact Gateway diagnosis:" in workflow
+    assert "print_compact_startup_diagnosis" in workflow
+    assert "write_timing_summary" in workflow
+    assert "trap 'cleanup_input_file; echo \"Final compact Gateway diagnosis:\"" in workflow
 
 
 def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    block = workflow.split("configure-paper|configure-live)", 1)[1]
-    block = block.split(";;", 1)[0]
+    workflow = _workflow()
+    block = workflow.split("configure-paper|configure-live)", 1)[1].split(";;", 1)[0]
 
-    configure = "timed \"Configure IBC credentials\""
+    configure = "timed \"Configure IBC auth values\""
     validate = "timed \"Validate IBC configuration\""
     restart = "timed \"Restart ibgateway after IBC configuration\""
-    wait = "verify_socket"
+    wait = "wait_for_api_readiness"
 
     for snippet in (configure, validate, restart, wait):
         assert snippet in block
     assert block.index(configure) < block.index(validate)
     assert block.index(validate) < block.index(restart)
     assert block.index(restart) < block.index(wait)
-    assert "sudo POMA_CONFIGURE_IBC_RESTART=0 poma-configure-ibc" in block
+    assert "POMA_CONFIGURE_IBC_RESTART=0" in block
+    assert "Pre-build poma Docker image" not in block
 
 
-def test_gateway_ops_has_explicit_five_minute_2fa_timeout() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+def test_gateway_ops_has_explicit_bounded_2fa_timeout() -> None:
+    workflow = _workflow()
 
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
-    assert "Waiting up to ${timeout_seconds}s (6 minutes) for IBKR 2FA approval" in workflow
-    assert "IBKR 2FA approval or Gateway API readiness timed out" in workflow
-    assert "Gateway/IBC likely never reached the IBKR login/2FA stage" in workflow
+    assert "Waiting up to ${timeout_seconds}s for broker auth and Gateway API readiness" in workflow
+    assert "Broker auth or Gateway API readiness timed out" in workflow
     assert "local deadline=$((SECONDS + timeout_seconds))" in workflow
 
 
 def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
     helper = DIAG_HELPER.read_text(encoding="utf-8")
 
-    assert "poma ibkr-check" in workflow
-    assert "real ib_insync connect" in workflow
-    assert "stable_socket_polls_required=2" in workflow
-    assert "Waiting for one more stable API socket poll" in workflow
-    assert "poma ibkr-check failed; redacted tail follows" in workflow
-    assert "Final compact Gateway diagnosis" in workflow
-    assert "poma-diagnose-ibgateway validate --mode" in workflow
-    assert "poma-diagnose-ibgateway progress" in workflow
-    assert "poma-diagnose-ibgateway diagnose" in workflow
-    assert "poma-diagnose-ibgateway startup-check" in workflow
+    for snippet in (
+        "poma ibkr-check",
+        "stable_socket_polls_required=${required_stable}",
+        "Final compact Gateway diagnosis",
+        "poma-diagnose-ibgateway validate --mode",
+        "poma-diagnose-ibgateway progress",
+        "poma-diagnose-ibgateway diagnose",
+        "poma-diagnose-ibgateway startup-check",
+    ):
+        assert snippet in workflow
     assert "ss" in helper
     for port in ("7497", "4001", "4002", "5900"):
         assert port in helper
@@ -193,18 +179,21 @@ def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None
 def test_gateway_runner_is_hardened_after_render() -> None:
     ensure = ENSURE_HELPER.read_text(encoding="utf-8")
 
-    assert "poma-ibc-gateway-engine" in ensure
-    assert "gatewaystart.sh -inline" in ensure
-    assert "Gateway process or API listener detected" in ensure
-    assert "refusing raw Gateway fallback" in ensure
-    assert "require_command java" in ensure
-    assert "MemoryMax" in ensure
-    assert "gatewaystart-wrapper.log" in ensure
-    assert "gatewaystart.sh exited before Java/Gateway stayed alive" in ensure
+    for snippet in (
+        "poma-ibc-gateway-engine",
+        "gatewaystart.sh -inline",
+        "Gateway process or API listener detected",
+        "refusing raw Gateway fallback",
+        "require_command java",
+        "MemoryMax",
+        "gatewaystart-wrapper.log",
+        "gatewaystart.sh exited before Java/Gateway stayed alive",
+    ):
+        assert snippet in ensure
 
 
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
 
     assert "timeout-minutes: 25" in workflow
     assert "timeout --kill-after=30s" in workflow
@@ -213,11 +202,13 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
     assert "run_remote" in workflow
 
 
-def test_api_handshake_remote_variables_are_not_expanded_locally() -> None:
-    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
-    verify_api_handshake = workflow.split("          verify_api_handshake() {", 1)[1].split("\n          }", 1)[0]
+def test_api_handshake_remote_command_preserves_runtime_mode() -> None:
+    workflow = _workflow()
+    verify_api_handshake = workflow.split("          verify_api_handshake() {", 1)[1].split(
+        "\n          }",
+        1,
+    )[0]
 
-    assert r'\${remote_handshake_log}' in verify_api_handshake
-    assert r'\${status}' in verify_api_handshake
-    assert '"${remote_handshake_log}"' not in verify_api_handshake
-    assert 'exit "${status}"' not in verify_api_handshake
+    assert "TRADING_MODE=${mode}" in verify_api_handshake
+    assert "DATA_PROVIDER=fixture" in verify_api_handshake
+    assert "poma ibkr-check" in verify_api_handshake

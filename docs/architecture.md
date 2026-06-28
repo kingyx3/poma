@@ -18,7 +18,19 @@ The app checks the market calendar on every run and only rebalances when:
 
 1. Today is a US trading day.
 2. The market has been open for at least `REBALANCE_AFTER_OPEN_MINUTES`.
-3. The local state file says today's rebalance has not already completed.
+3. The local state file says today's rebalance has not already completed or reached an order-issue terminal state.
+
+## Capital allocation boundary
+
+```text
+PORTFOLIO_VALUE_USD
+  -> STRATEGY_ALLOCATIONS
+      -> rank_velocity_size_equal_weight active sleeve
+      -> cash passive sleeve
+      -> future strategy sleeves
+```
+
+`PORTFOLIO_VALUE_USD` is the hard portfolio cap. `STRATEGY_ALLOCATIONS` splits that cap across named sleeves and cannot exceed 100%. The current active strategy receives only its allocated sleeve, so the default `rank_velocity_size_equal_weight=0.98,cash=0.02` uses 98% of the configured cap for trades and leaves 2% in passive cash. Cash is not a hidden active-strategy buffer.
 
 ## Market data provider boundary
 
@@ -45,19 +57,40 @@ UNIVERSE=us_top_market_cap
 
 ```text
 GitHub Actions
-  -> render .env from GitHub Variables/Secrets
+  -> resolve CI defaults and selected GitHub Environment secrets
+  -> render .env
+  -> validate rendered runtime config
+  -> validate market-data provider when DATA_PROVIDER=yahoo
   -> Terraform apply for one GCP e2-micro VM
   -> upload repo package + .env over IAP SSH
   -> run Docker Compose dry-run smoke test
   -> install cron
+  -> send Telegram deploy result
 ```
 
 Terraform creates one small VM, one standard boot disk, one dedicated VPC/subnet, and one SSH firewall rule limited to the IAP TCP forwarding range.
+
+## Runtime order flow
+
+```text
+plan rebalance
+  -> validate target/risk/order guards
+  -> dry_run: write report + Telegram summary only
+  -> paper/live: execution-start Telegram alert
+      -> broker lifecycle callbacks for created/submitted/status/final/failure states
+      -> write final report
+      -> Telegram final summary
+      -> local state status: completed or completed_with_order_issues
+```
+
+Order status notifications are best-effort. Telegram failure never causes duplicate trading attempts or changes local run-state semantics.
 
 ## Runtime files
 
 ```text
 state/rebalance_state.json       # last completed trading session
+                                     # includes completed_with_order_issues as terminal
+
 data/market_snapshots/*.csv      # provider snapshots and market-cap ranks
 reports/*.json                   # generated rebalance reports
 .env                             # host-local secrets/config; never commit
@@ -69,9 +102,11 @@ reports/*.json                   # generated rebalance reports
 |---|---|
 | US DST changes | Market calendar decides the rebalance window. |
 | US holiday / half-day | Market calendar returns the correct session schedule. |
-| Repeated cron invocations | State file allows only one rebalance per session. |
+| Repeated cron invocations | State file allows only one rebalance attempt per session. |
 | Missing rank history | Engine falls back to current market-cap selection and writes a warning. |
 | Excess turnover | Turnover guard blocks execution. |
 | Accidental live trading | `ALLOW_LIVE_TRADING=true` required for live mode. |
-| Missing deploy config | CI/CD `.env` rendering fails before deployment. |
+| Missing deploy config | CI/CD `.env` rendering and runtime validation fail before deployment. |
+| Wrong IBKR account | Deploy validation requires an account id; `poma ibkr-check` verifies it appears in managed accounts. |
+| Order timeout/cancel/failure | Order lifecycle alert plus final `completed_with_order_issues` state. |
 | Public SSH exposure | Terraform only allows SSH through IAP TCP forwarding. |

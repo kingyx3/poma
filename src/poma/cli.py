@@ -32,15 +32,19 @@ def _portfolio_summary(session_date: str, plan: RebalancePlan, status: str, exec
     items: list = plan.execution_results if executed else plan.trades
     buys = sum(1 for item in items if item.side == OrderSide.BUY)
     sells = sum(1 for item in items if item.side == OrderSide.SELL)
-    verb = "portfolio updated" if executed else f"{status}, no change"
+    if executed and status == "completed_with_order_issues":
+        verb = "portfolio execution completed with order issues"
+    else:
+        verb = "portfolio updated" if executed else f"{status}, no change"
     lines = [f"{session_date}: {verb} — {len(items)} orders ({buys} BUY / {sells} SELL)"]
 
     for item in items[:_MAX_SUMMARY_LINES]:
         if executed and isinstance(item, OrderResult):
             price = item.average_fill_price or 0.0
+            detail = f" {item.message}" if item.message else ""
             lines.append(
                 f"{item.side.value} {item.ticker} {item.filled:g}@{price:.2f} "
-                f"(${item.notional:,.0f}) {item.status}"
+                f"(${item.notional:,.0f}) {item.status}{detail}"
             )
         else:
             lines.append(
@@ -124,12 +128,16 @@ def _run_rebalance(
         send_alert(settings, _portfolio_summary(session_date, plan, outcome.status, executed=False))
         return outcome, report_path
 
-    plan = engine.execute(plan)
-    for result in plan.execution_results:
+    send_alert(settings, f"{session_date}: execution starting — {len(plan.trades)} orders")
+
+    def alert_order_status(_: ProposedTrade, result: OrderResult) -> None:
         send_alert(settings, order_status_alert(session_date, result))
-    outcome = RebalanceOutcome(plan=plan, executed=True, blocked=False, status="completed")
+
+    plan = engine.execute(plan, order_status_callback=alert_order_status)
+    status = engine.execution_status(plan.execution_results)
+    outcome = RebalanceOutcome(plan=plan, executed=True, blocked=False, status=status)
     report_path = _write_report(plan, settings.report_dir)
-    send_alert(settings, _portfolio_summary(session_date, plan, "completed", executed=True))
+    send_alert(settings, _portfolio_summary(session_date, plan, status, executed=True))
     console.print(f"Submitted {len(plan.trades)} trades. Report written to {report_path}")
     return outcome, report_path
 
@@ -202,7 +210,6 @@ def monitor(
         status = state.session_status(session_date)
         console.print(f"Skipping: session already attempted with status={status}")
         return
-
     if not decision.should_run:
         console.print(f"Skipping: {decision.reason}")
         return

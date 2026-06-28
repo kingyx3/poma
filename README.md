@@ -18,7 +18,7 @@ Weighting: equal-weighted across the selected 100 names inside the 98% rank stra
 
 Rank 1 is the largest company by market cap, so a positive rank-rising velocity score means the stock moved up the market-cap ranking over the 90-day window. The size and rank-rising velocity factors are each standardized (z-scored) and summed with equal weight, so the strategy favours companies that are both large and climbing. Selected names are held at equal weight (`1/N`) inside the rank strategy sleeve, with the per-position cap still binding.
 
-Capital is allocated through `STRATEGY_ALLOCATIONS`. Today the active trading strategy is `rank_velocity_size_equal_weight=0.98`, and the passive cash sleeve is `cash=0.02`. The cash sleeve counts toward the 100% portfolio cap but does not generate trades. Future strategies can be added as separate sleeves, and the sum of all strategy allocations must stay at or below 100%, so total managed capital never exceeds `PORTFOLIO_VALUE_USD`.
+Capital is allocated through `STRATEGY_ALLOCATIONS`. Today the active trading strategy is `rank_velocity_size_equal_weight=0.98`, and the passive cash sleeve is `cash=0.02`. The cash sleeve counts toward the 100% portfolio cap but does not generate trades. Future strategies can be added as separate sleeves, and the sum of all strategy allocations must stay at or below 100%, so total managed capital never exceeds `PORTFOLIO_VALUE_USD`. Cash is not modeled as a hidden buffer inside an active strategy; reserve cash by allocating a `cash` sleeve.
 
 The production market-data provider is `DATA_PROVIDER=yahoo`. It requests the largest 500 US-listed equities by current market cap, normalizes the feed into the provider contract, deduplicates share classes at issuer level when issuer/name metadata is present, and falls back to exact market-cap bucket dedupe when issuer metadata is unavailable. Future providers should implement the normalized `current_universe_snapshot()` contract without changing strategy or engine code.
 
@@ -35,7 +35,7 @@ Ubuntu VPS / GCP e2-micro VM
   -> refreshes/saves market snapshot and rebalances through IB Gateway on the same host
 ```
 
-The optional Terraform path provisions a GCP free-tier-aligned `e2-micro` VM and pushes the runtime `.env` from GitHub Actions variables/secrets. See [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
+The optional Terraform path provisions a GCP free-tier-aligned `e2-micro` VM and pushes the runtime `.env` from GitHub Actions variables/secrets. The deploy workflow renders `.env`, validates runtime config before Terraform/app deploy, runs a VM smoke test, and sends Telegram deploy status. See [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md) and [`docs/operations-runbook.md`](docs/operations-runbook.md).
 
 ## Local quickstart
 
@@ -64,8 +64,9 @@ pytest
 
 1. Add only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
 2. Run **Bootstrap GCP Workload Identity Federation** with `terraform_action=plan`, then `apply`.
-3. Delete the bootstrap key and add the runtime secrets from [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md).
+3. Delete the bootstrap key and add the runtime secrets from [`docs/configuration.md`](docs/configuration.md).
 4. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`, then `apply` with `deploy_app=true`.
 5. Before `paper` or `live`, configure and verify Gateway using [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md).
+6. Use [`docs/operations-runbook.md`](docs/operations-runbook.md) for paper/live activation, alerts, and troubleshooting.
 
-See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md), [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
+See [`docs/configuration.md`](docs/configuration.md), [`docs/architecture.md`](docs/architecture.md), [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md), [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md), [`docs/operations-runbook.md`](docs/operations-runbook.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
