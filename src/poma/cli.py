@@ -53,6 +53,14 @@ def _portfolio_summary(session_date: str, plan: RebalancePlan, status: str, exec
     return "\n".join(lines)
 
 
+def _assert_execution_ready(settings) -> None:
+    if settings.trading_mode == TradingMode.DRY_RUN:
+        return
+    check = check_ibkr(settings)
+    if not check.ok:
+        raise RuntimeError(f"pre-trade IBKR readiness failed: {check.detail}")
+
+
 def _trade_to_json(trade: ProposedTrade) -> dict[str, object]:
     payload = trade.__dict__.copy()
     payload["side"] = trade.side.value
@@ -96,6 +104,7 @@ def _run_rebalance(
     if force_dry_run:
         settings = settings.model_copy(update={"trading_mode": TradingMode.DRY_RUN})
 
+    _assert_execution_ready(settings)
     engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.data_dir))
     plan = engine.build_plan(session_date, run_id)
     report_path = _write_report(plan, settings.report_dir)

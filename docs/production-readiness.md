@@ -15,6 +15,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm `ibgateway.service` is active after reboot.
 - [ ] Confirm `127.0.0.1:7497` is reachable on the VM.
 - [ ] Add `IBKR_ACCOUNT_PAPER` before switching to `TRADING_MODE=paper`.
+- [ ] Confirm `PORTFOLIO_VALUE_USD` matches the intended paper strategy sleeve size, not necessarily total IBKR account equity.
 
 ## Required before live mode
 
@@ -45,6 +46,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 
 - [ ] Keep `ORDER_TYPE=limit` by default.
 - [ ] Keep `ALLOW_MARKET_ORDERS=false` unless explicitly intentional.
+- [ ] Keep `MAX_TURNOVER_PCT=1.0` for first paper bootstrap, then lower it if you want stricter ongoing churn control.
 - [ ] Keep `MAX_ORDER_NOTIONAL_USD`, `MAX_DAILY_TRADES`, `MAX_POSITION_PCT`, and `MAX_TURNOVER_PCT` within your operational tolerance.
 - [ ] Review any `failed`, blocked, timed-out, cancelled, or partial execution result manually.
 

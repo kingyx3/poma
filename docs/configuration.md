@@ -34,10 +34,10 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
 | `MAX_HOLDINGS` | yes | `100` | Hold the top company stocks by combined market-cap-size + rank-rising-velocity score, equal-weighted. |
-| `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. |
+| `PORTFOLIO_VALUE_USD` | yes | `10000` | Used for target notional generation. POMA does not auto-size to total IBKR account equity. |
 | `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap. |
-| `MAX_TURNOVER_PCT` | yes | `0.35` | Blocks excessive rebalance churn. |
+| `MAX_TURNOVER_PCT` | yes | `1.0` | Allows the first paper/live bootstrap allocation while still blocking impossible >100% turnover. Lower it after the initial portfolio is established if desired. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Avoids tiny uneconomic trades. |
 | `MIN_WEIGHT_DELTA_PCT` | yes | `0.0025` | Avoids churn from tiny target changes while allowing 1% top-100 target weights. |
 | `ORDER_TYPE` | yes | `limit` | Use `limit` by default. |
@@ -57,6 +57,12 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `REPORT_DIR` | yes | `reports` | Local report directory. |
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
+
+## Portfolio sizing and existing account equity
+
+POMA sizes the strategy from `PORTFOLIO_VALUE_USD`, not from total IBKR account equity. With the defaults, a paper or live account with more than $10,000 still targets a roughly $9,800 strategy sleeve after the 2% cash buffer. Raise `PORTFOLIO_VALUE_USD` intentionally if you want POMA to manage a larger sleeve.
+
+Existing stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
 
 ## Market data snapshots and ranking
 
