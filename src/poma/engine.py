@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-from poma.broker import Broker, OrderStatusCallback, build_broker
+from poma.broker import Broker, OrderStatusCallback, build_broker, order_results_have_issues
 from poma.config import Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
 from poma.history import CapSnapshotHistory
-from poma.models import RebalancePlan
+from poma.models import OrderResult, RebalancePlan
 from poma.portfolio import build_strategy_capital_plan
 from poma.risk import (
     enforce_order_limits,
@@ -22,6 +22,8 @@ from poma.strategy import (
 )
 
 BLOCK_MARKER = "block execution"
+COMPLETED_STATUS = "completed"
+COMPLETED_WITH_ORDER_ISSUES_STATUS = "completed_with_order_issues"
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,11 @@ class RebalanceEngine:
                     order_status_callback(trade, result)
         return replace(plan, execution_results=results)
 
+    def execution_status(self, results: list[OrderResult]) -> str:
+        if order_results_have_issues(results):
+            return COMPLETED_WITH_ORDER_ISSUES_STATUS
+        return COMPLETED_STATUS
+
     def run(self, session_date: str, run_id: str) -> RebalanceOutcome:
         plan = self.build_plan(session_date, run_id)
         blocked = self.is_blocked(plan)
@@ -161,4 +168,4 @@ class RebalanceEngine:
         if blocked:
             return RebalanceOutcome(plan=plan, executed=False, blocked=True, status="blocked")
         plan = self.execute(plan)
-        return RebalanceOutcome(plan=plan, executed=True, blocked=False, status="completed")
+        return RebalanceOutcome(plan=plan, executed=True, blocked=False, status=self.execution_status(plan.execution_results))
