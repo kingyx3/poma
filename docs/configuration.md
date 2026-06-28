@@ -34,10 +34,9 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-comparison window in days. |
 | `MAX_HOLDINGS` | yes | `100` | Hold the top company stocks by combined market-cap-size + rank-rising-velocity score, equal-weighted. |
-| `ACTIVE_STRATEGY` | yes | `rank_velocity_size_equal_weight` | Strategy sleeve to run. This must exist in `STRATEGY_ALLOCATIONS`. |
-| `STRATEGY_ALLOCATIONS` | yes | `rank_velocity_size_equal_weight=1.0` | Comma-separated strategy capital sleeves. Values are percentages of `PORTFOLIO_VALUE_USD`; `1.0` means 100%. Example: `rank_velocity_size_equal_weight=0.60,future_strategy=40%`. The total must be `<= 1.0`. |
+| `ACTIVE_STRATEGY` | yes | `rank_velocity_size_equal_weight` | Trading strategy sleeve to run. This must exist in `STRATEGY_ALLOCATIONS`. |
+| `STRATEGY_ALLOCATIONS` | yes | `rank_velocity_size_equal_weight=0.98,cash=0.02` | Comma-separated strategy capital sleeves. Values are percentages of `PORTFOLIO_VALUE_USD`; `0.98` means 98%. The passive `cash` sleeve counts toward the portfolio cap but does not generate trades. The total must be `<= 1.0`. |
 | `PORTFOLIO_VALUE_USD` | yes | `10000` | Hard cap for total capital managed across all strategy sleeves. POMA does not auto-size to total IBKR account equity. |
-| `CASH_BUFFER_PCT` | yes | `0.02` | Avoids accidental over-investment inside the active strategy sleeve. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Single-name concentration cap within the active strategy sleeve. |
 | `MAX_TURNOVER_PCT` | yes | `1.0` | Allows the first paper/live bootstrap allocation while still blocking impossible >100% sleeve turnover. Lower it after the initial portfolio is established if desired. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Avoids tiny uneconomic trades. |
@@ -64,15 +63,15 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 
 POMA sizes from `PORTFOLIO_VALUE_USD`, not from total IBKR account equity. `PORTFOLIO_VALUE_USD` is the hard cap for all strategy sleeves combined. `STRATEGY_ALLOCATIONS` then splits that cap across strategies, and the total allocation must be `<= 100%`.
 
-With the defaults, the only active strategy is `rank_velocity_size_equal_weight` and it receives `100%` of `PORTFOLIO_VALUE_USD`. A paper or live account with more than $10,000 still targets a roughly $9,800 current-strategy sleeve after the 2% cash buffer. Raise `PORTFOLIO_VALUE_USD` intentionally if you want POMA to manage a larger total sleeve.
+With the defaults, the active trading strategy is `rank_velocity_size_equal_weight` and it receives `98%` of `PORTFOLIO_VALUE_USD`. The passive `cash` sleeve receives the remaining `2%` and does not create orders. A paper or live account with more than $10,000 therefore targets a $9,800 rank-strategy sleeve and a $200 cash sleeve by default. Raise `PORTFOLIO_VALUE_USD` intentionally if you want POMA to manage a larger total sleeve.
 
 For future strategies, add them to `STRATEGY_ALLOCATIONS`, for example:
 
 ```text
-STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.60,future_strategy=0.40
+STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.60,future_strategy=0.38,cash=0.02
 ```
 
-That gives the current strategy 60% of `PORTFOLIO_VALUE_USD`, gives the future strategy 40%, and still caps total managed capital at `PORTFOLIO_VALUE_USD`.
+That gives the current strategy 60% of `PORTFOLIO_VALUE_USD`, gives the future strategy 38%, reserves 2% as cash, and still caps total managed capital at `PORTFOLIO_VALUE_USD`.
 
 Existing stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
 
