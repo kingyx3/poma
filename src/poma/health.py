@@ -13,6 +13,15 @@ class Check:
     detail: str
 
 
+def check_runtime_config(settings: Settings) -> Check:
+    """Confirm execution gates are internally safe before touching data or broker APIs."""
+    try:
+        settings.assert_safe_for_execution()
+    except Exception as exc:  # noqa: BLE001 - surface pydantic/runtime safety failures consistently
+        return Check("runtime_config", False, str(exc))
+    return Check("runtime_config", True, "execution gates ok")
+
+
 def check_data_provider(settings: Settings) -> Check:
     """Confirm the configured market-data provider returns a usable snapshot."""
     try:
@@ -36,6 +45,8 @@ def check_ibkr(settings: Settings) -> Check:
 
     if settings.trading_mode == TradingMode.DRY_RUN:
         return Check("ibkr", True, "skipped (dry_run mode does not use IBKR)")
+    if not settings.ibkr_account:
+        return Check("ibkr", False, f"{settings.trading_mode.value} trading requires IBKR_ACCOUNT")
 
     try:
         result = probe_ibkr(settings)
@@ -47,9 +58,7 @@ def check_ibkr(settings: Settings) -> Check:
         f"accounts={result.accounts or ['none']}, "
         f"server_time={result.server_time}, stock_positions={result.stock_positions}"
     )
-    account_ok = (
-        settings.ibkr_account is None or settings.ibkr_account in result.accounts
-    )
+    account_ok = settings.ibkr_account in result.accounts
     if not account_ok:
         return Check(
             "ibkr",
@@ -60,4 +69,4 @@ def check_ibkr(settings: Settings) -> Check:
 
 
 def run_checks(settings: Settings) -> list[Check]:
-    return [check_data_provider(settings), check_ibkr(settings)]
+    return [check_runtime_config(settings), check_data_provider(settings), check_ibkr(settings)]
