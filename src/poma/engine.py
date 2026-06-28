@@ -81,7 +81,6 @@ class RebalanceEngine:
         targets = build_equal_weight_targets(
             selected=selected,
             portfolio_value_usd=strategy_capital.capital_usd,
-            cash_buffer_pct=settings.cash_buffer_pct,
             max_position_pct=settings.max_position_pct,
         )
 
