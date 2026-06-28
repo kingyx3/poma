@@ -182,35 +182,74 @@ python3 - <<'PY'
 from pathlib import Path
 
 helper = Path("/usr/local/bin/poma-diagnose-ibgateway")
-if helper.exists():
-    text = helper.read_text(encoding="utf-8")
-    text = text.replace(
-        '"gatewaystart": bool(re.search(r"gatewaystart\\.sh", process_text)),',
-        '"gatewaystart": bool(re.search(r"poma-ibc-gateway-engine|gatewaystart\\.sh", process_text)),',
-    )
-    old = '''    if classification.action == "ready":
-        return 0
-    if classification.action == "fail":
-        return 2
-    return 1
-'''
-    new = '''    if classification.stage == "ibc-not-running" and elapsed_seconds < fail_no_progress_after:
-        classification = StartupClassification(
-            "ibc-starting",
-            "continue",
-            "IBC/Gateway engine is still inside the startup grace period before broker login.",
+if not helper.exists():
+    raise SystemExit("missing /usr/local/bin/poma-diagnose-ibgateway after install")
+
+text = helper.read_text(encoding="utf-8")
+text = text.replace(
+    '"gatewaystart": bool(re.search(r"gatewaystart\\.sh", process_text)),',
+    '"gatewaystart": bool(re.search(r"poma-ibc-gateway-engine|gatewaystart\\.sh", process_text)),',
+)
+text = text.replace(
+'''    if config_exists and not has_gatewaystart:
+        return StartupClassification(
+            "ibc-not-running",
+            "fail",
+            "IBC config exists but gatewaystart.sh is not running; Gateway likely never reached login.",
         )
-        print_startup_classification(classification)
-    if classification.action == "ready":
-        return 0
-    if classification.action == "fail":
-        return 2
-    return 1
-'''
-    if old in text and "ibc-starting" not in text:
-        text = text.replace(old, new)
-    helper.write_text(text, encoding="utf-8")
-    helper.chmod(0o755)
+    if not (has_java or has_ibgateway):
+        return StartupClassification(
+            "java-gateway-not-running",
+            "fail",
+            "No Java/IB Gateway process is running, so no IBKR mobile notification can be sent.",
+        )
+''',
+'''    if config_exists and not has_gatewaystart:
+        return StartupClassification(
+            "ibc-not-running",
+            "continue",
+            "IBC/Gateway engine is still within startup grace; launcher may not be visible yet.",
+        )
+    if not (has_java or has_ibgateway):
+        return StartupClassification(
+            "java-gateway-not-running",
+            "continue",
+            "IBC is starting but Java/IB Gateway has not stayed alive yet.",
+        )
+''',
+)
+text = text.replace(
+'''    if (
+        classification.stage == "gateway-running-no-login-progress"
+        and elapsed_seconds >= fail_no_progress_after
+    ):
+        classification = StartupClassification(
+            "gateway-running-no-login-progress-timeout",
+            "fail",
+            "IBC/Gateway stayed alive but did not show login, 2FA, or API progress before the "
+            f"{fail_no_progress_after}s startup-progress deadline.",
+        )
+''',
+'''    if classification.stage in {
+        "ibc-not-running",
+        "java-gateway-not-running",
+        "gateway-running-no-login-progress",
+        "gateway-starting",
+    } and elapsed_seconds >= fail_no_progress_after:
+        classification = StartupClassification(
+            f"{classification.stage}-timeout",
+            "fail",
+            "IBC/Gateway did not reach login, 2FA, or API readiness before the "
+            f"{fail_no_progress_after}s startup-progress deadline.",
+        )
+''',
+)
+if '"ibc-not-running",\n            "continue",' not in text:
+    raise SystemExit("failed to patch ibc-not-running startup grace classification")
+if '"java-gateway-not-running",\n            "continue",' not in text:
+    raise SystemExit("failed to patch java-gateway-not-running startup grace classification")
+helper.write_text(text, encoding="utf-8")
+helper.chmod(0o755)
 PY
 
 systemctl daemon-reload
