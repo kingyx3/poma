@@ -5,10 +5,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from conftest import make_settings
 from poma.broker import DryRunBroker, IbkrBroker, IbkrHealth, build_broker
 from poma.config import Settings
+from poma.data import FixtureMarketDataClient
+from poma.engine import RebalanceEngine
 from poma.health import check_ibkr
-from poma.models import OrderResult, OrderSide
+from poma.models import OrderResult, OrderSide, ProposedTrade
 from poma.order_status_alerts import order_status_alert
 from poma.portfolio import CURRENT_STRATEGY_NAME, build_strategy_capital_plan
 from poma.risk import enforce_turnover_limit, generate_trades
@@ -78,6 +81,13 @@ def test_paper_and_live_modes_use_expected_broker(monkeypatch: pytest.MonkeyPatc
     assert isinstance(build_broker(_settings(monkeypatch, TRADING_MODE="dry_run")), DryRunBroker)
 
 
+def test_paper_mode_requires_configured_ibkr_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, TRADING_MODE="paper", IBKR_ACCOUNT="")
+
+    with pytest.raises(RuntimeError, match="paper trading requires IBKR_ACCOUNT"):
+        build_broker(settings)
+
+
 def test_live_mode_requires_explicit_allowance(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(monkeypatch, TRADING_MODE="live", ALLOW_LIVE_TRADING="false")
 
@@ -124,9 +134,96 @@ def test_final_order_status_alert_message_includes_status_and_fill_details() -> 
     assert message == "2026-06-29: order status changed — Filled BUY AAPL filled=5/5 ($980) avg=196.00 id=123"
 
 
+def test_order_status_alert_includes_diagnostic_message() -> None:
+    message = order_status_alert(
+        "2026-06-29",
+        OrderResult(
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            quantity=5.0,
+            notional=980.0,
+            order_id=123,
+            status="Failed",
+            filled=0.0,
+            average_fill_price=None,
+            message="broker rejected order",
+        ),
+    )
+
+    assert message.endswith("— broker rejected order")
+
+
+def test_dry_run_broker_emits_status_callback() -> None:
+    trade = ProposedTrade(
+        ticker="AAPL",
+        side=OrderSide.BUY,
+        quantity=5.0,
+        notional=980.0,
+        reference_price=196.0,
+        limit_price=196.20,
+        reason="rebalance_to_target_weight",
+    )
+    captured: list[OrderResult] = []
+
+    results = DryRunBroker().submit_trades([trade], status_callback=lambda _trade, result: captured.append(result))
+
+    assert results[0].status == "dry_run"
+    assert [result.status for result in captured] == ["dry_run"]
+
+
+def test_engine_marks_cancelled_orders_as_completed_with_issues() -> None:
+    class CancelledBroker:
+        def positions(self) -> list:
+            return []
+
+        def submit_trades(self, trades: list[ProposedTrade], status_callback=None) -> list[OrderResult]:
+            results = [
+                OrderResult(
+                    ticker=trade.ticker,
+                    side=trade.side,
+                    quantity=trade.quantity,
+                    notional=trade.notional,
+                    order_id=index + 1,
+                    status="Cancelled",
+                    filled=0.0,
+                    average_fill_price=None,
+                    message="cancelled by broker",
+                )
+                for index, trade in enumerate(trades)
+            ]
+            if status_callback is not None:
+                for trade, result in zip(trades, results, strict=True):
+                    status_callback(trade, result)
+            return results
+
+    engine = RebalanceEngine(
+        make_settings(
+            TRADING_MODE="paper",
+            IBKR_ACCOUNT="DU1234567",
+            MAX_TURNOVER_PCT=1.0,
+            MAX_ORDER_NOTIONAL_USD=100_000.0,
+        ),
+        data_client=FixtureMarketDataClient(),
+        broker=CancelledBroker(),
+    )
+
+    outcome = engine.run("session", "run")
+
+    assert outcome.executed
+    assert outcome.status == "completed_with_order_issues"
+
+
 def test_effective_deploy_default_exports_full_turnover_before_rendering() -> None:
     resolver = (REPO_ROOT / "ops/scripts/resolve_gcp_deploy_env.sh").read_text(encoding="utf-8")
     workflow = (REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text(encoding="utf-8")
 
     assert 'set_default MAX_TURNOVER_PCT "1.0"' in resolver
     assert "source ops/scripts/resolve_gcp_deploy_env.sh" in workflow
+
+
+def test_deploy_validates_rendered_runtime_config() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text(encoding="utf-8")
+    validator = REPO_ROOT / "ops/scripts/validate_runtime_config.py"
+
+    assert validator.exists()
+    assert "python ops/scripts/validate_runtime_config.py --env-file .env.deploy" in workflow
