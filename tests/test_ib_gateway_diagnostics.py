@@ -64,6 +64,27 @@ def test_classifies_2fa_log_progress_as_wait_for_approval() -> None:
     assert result.action == "continue"
 
 
+def test_2fa_hint_takes_priority_over_fatal_log_hint() -> None:
+    # FATAL_LOG_HINTS is too broad and matches normal IBC startup output.
+    # When logs contain both noisy fatal-hint words and a 2FA keyword, the
+    # 2FA stage must win so the operator knows to approve the mobile prompt.
+    result = classify(
+        log_text="failed to connect; invalid session. Waiting for second factor authentication."
+    )
+
+    assert result.stage == "login-reached-2fa-pending"
+    assert result.action == "continue"
+
+
+def test_gateway_log_error_is_never_fail_fast() -> None:
+    # FATAL_LOG_HINTS matches too many routine startup log lines; gateway-log-error
+    # must use "continue" so the poll loop keeps running until 2FA/login is detected.
+    result = classify(log_text="failed to connect; invalid certificate")
+
+    assert result.stage == "gateway-log-error"
+    assert result.action == "continue"
+
+
 def test_classifies_open_api_socket_as_ready_for_real_handshake() -> None:
     result = classify(api_socket_open=True, has_xvfb=False, has_java=False)
 

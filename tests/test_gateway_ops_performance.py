@@ -106,8 +106,8 @@ def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
 def test_gateway_ops_has_explicit_five_minute_2fa_timeout() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
-    assert "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
+    assert "Waiting up to ${timeout_seconds}s (6 minutes) for IBKR 2FA approval" in workflow
     assert "IBKR 2FA approval or Gateway API readiness timed out" in workflow
     assert "Gateway/IBC likely never reached the IBKR login/2FA stage" in workflow
     assert "local deadline=$((SECONDS + timeout_seconds))" in workflow
@@ -148,6 +148,6 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
 
     assert "timeout-minutes: 25" in workflow
     assert "timeout --kill-after=30s" in workflow
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "run_remote" in workflow

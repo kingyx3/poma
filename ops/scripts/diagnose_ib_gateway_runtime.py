@@ -46,6 +46,23 @@ TWO_FA_HINTS = re.compile(
 )
 LOGIN_STAGE_HINTS = re.compile(r"login|authenticat|credentials|username|password", re.IGNORECASE)
 
+# Stages that are treated as "continue" during the startup grace window (processes may not have
+# spawned yet even though the service just became active).
+_STARTUP_GRACE_STAGES: frozenset[str] = frozenset(
+    {
+        "ibc-not-running",
+        "java-gateway-not-running",
+    }
+)
+
+# Stages whose "fail" action is permanently suppressed because the triggering signal is too noisy
+# during normal startup and cannot reliably distinguish a real fatal error from routine log output.
+_STARTUP_LOG_NOISY_STAGES: frozenset[str] = frozenset(
+    {
+        "gateway-log-error",
+    }
+)
+
 
 class StartupClassification(NamedTuple):
     stage: str
@@ -290,7 +307,7 @@ def process_flags(process_text: str) -> dict[str, bool]:
         "xvfb": bool(re.search(r"\bXvfb\b", process_text)),
         "fluxbox": bool(re.search(r"\bfluxbox\b", process_text)),
         "x11vnc": bool(re.search(r"\bx11vnc\b", process_text)),
-        "gatewaystart": bool(re.search(r"gatewaystart\.sh", process_text)),
+        "gatewaystart": bool(re.search(r"poma-ibc-gateway-engine|gatewaystart\.sh", process_text)),
         "java": bool(re.search(r"\bjava\b", process_text, re.IGNORECASE)),
         "ibgateway": bool(re.search(r"\bibgateway\b", process_text, re.IGNORECASE)),
     }
@@ -391,12 +408,6 @@ def classify_startup_state(
             "fail",
             "No Java/IB Gateway process is running, so no IBKR mobile notification can be sent.",
         )
-    if FATAL_LOG_HINTS.search(log_text):
-        return StartupClassification(
-            "gateway-log-error",
-            "fail",
-            "Recent IBC/Gateway logs contain a fatal startup/login error before API readiness.",
-        )
     if TWO_FA_HINTS.search(log_text):
         return StartupClassification(
             "login-reached-2fa-pending",
@@ -408,6 +419,12 @@ def classify_startup_state(
             "login-reached-awaiting-auth",
             "continue",
             "Gateway reached login/authentication but has not opened the API socket yet.",
+        )
+    if FATAL_LOG_HINTS.search(log_text):
+        return StartupClassification(
+            "gateway-log-error",
+            "continue",
+            "Recent IBC/Gateway logs contain a fatal startup/login error before API readiness.",
         )
     if config_exists and has_gatewaystart and (has_java or has_ibgateway):
         return StartupClassification(
@@ -447,8 +464,23 @@ def print_startup_classification(classification: StartupClassification) -> None:
     print(f"STARTUP_REASON={classification.reason}")
 
 
-def startup_check(log_lines: int, elapsed_seconds: int, fail_no_progress_after: int) -> int:
+def startup_check(log_lines: int, elapsed_seconds: int, fail_no_progress_after: int, grace_seconds: int = 60) -> int:
     classification = classify_startup(log_lines)
+    # During the startup grace window, downgrade pre-login process-absence blockers to continue;
+    # the engine/IBC/Java processes may not have spawned yet even though the service is active.
+    if classification.stage in _STARTUP_GRACE_STAGES and elapsed_seconds < grace_seconds:
+        classification = StartupClassification(
+            classification.stage,
+            "continue",
+            classification.reason,
+        )
+    # Noisy-log stages never trigger fail-fast; FATAL_LOG_HINTS matches routine startup text.
+    if classification.stage in _STARTUP_LOG_NOISY_STAGES and classification.action == "fail":
+        classification = StartupClassification(
+            classification.stage,
+            "continue",
+            classification.reason,
+        )
     if (
         classification.stage == "gateway-running-no-login-progress"
         and elapsed_seconds >= fail_no_progress_after

@@ -60,9 +60,9 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
-      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300
+      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360
       IB_GATEWAY_SOCKET_POLL_SECONDS: 5
-      IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 150
+      IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200
       IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
       IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
 
@@ -370,7 +370,7 @@ jobs:
             local deadline=$((SECONDS + timeout_seconds))
             local elapsed=0 attempt=0 status=0 startup_status=0 last_snapshot=0
 
-            echo "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
+            echo "Waiting up to ${timeout_seconds}s (6 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               attempt=$((attempt + 1))
               if timed "Socket/service poll attempt ${attempt}" poll_gateway_socket_once; then

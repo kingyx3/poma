@@ -191,20 +191,12 @@ UNIT.write_text(unit_text, encoding="utf-8")
 if not DIAG.exists():
     raise SystemExit("missing /usr/local/bin/poma-diagnose-ibgateway after install")
 diag_text = DIAG.read_text(encoding="utf-8")
-diag_text = diag_text.replace(
-    '"gatewaystart": bool(re.search(r"gatewaystart\\.sh", process_text)),',
-    '"gatewaystart": bool(re.search(r"poma-ibc-gateway-engine|gatewaystart\\.sh", process_text)),',
-)
-diag_text = diag_text.replace('"ibc-not-running",\n            "fail",', '"ibc-not-running",\n            "continue",')
-diag_text = diag_text.replace('"java-gateway-not-running",\n            "fail",', '"java-gateway-not-running",\n            "continue",')
-diag_text = diag_text.replace('"gateway-log-error",\n            "fail",', '"gateway-log-error",\n            "continue",')
-if '"ibc-not-running",\n            "continue",' not in diag_text:
-    raise SystemExit("failed to patch ibc startup grace classification")
-if '"java-gateway-not-running",\n            "continue",' not in diag_text:
-    raise SystemExit("failed to patch Java/Gateway startup grace classification")
-if '"gateway-log-error",\n            "continue",' not in diag_text:
-    raise SystemExit("failed to patch gateway log startup grace classification")
-DIAG.write_text(diag_text, encoding="utf-8")
+if "_STARTUP_GRACE_STAGES" not in diag_text:
+    raise SystemExit("poma-diagnose-ibgateway is missing _STARTUP_GRACE_STAGES; update the diagnose script.")
+if "_STARTUP_LOG_NOISY_STAGES" not in diag_text:
+    raise SystemExit("poma-diagnose-ibgateway is missing _STARTUP_LOG_NOISY_STAGES; update the diagnose script.")
+if 'poma-ibc-gateway-engine' not in diag_text:
+    raise SystemExit("poma-diagnose-ibgateway does not detect poma-ibc-gateway-engine as a gateway process.")
 DIAG.chmod(0o755)
 PY
 
