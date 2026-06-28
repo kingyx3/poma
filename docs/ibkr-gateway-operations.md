@@ -6,6 +6,8 @@ See [`adr/0001-ibkr-credentials-in-github-secrets.md`](adr/0001-ibkr-credentials
 
 ## Production flow
 
+Use this flow for manual paper/live setup and for production promotion. Auto CI/CD also invokes Gateway Ops automatically for dev pull requests and staging pushes when deploy or Gateway paths changed.
+
 1. Deploy the VM using [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md).
 2. Add the required GitHub Environment Secrets for the target environment:
 
@@ -36,8 +38,9 @@ For startup-stage diagnosis when no mobile approval prompt appears, see [`ib-gat
 ## What is automated
 
 The VM startup script keeps boot light: it installs only Docker, cron, the app user, and runtime
-directories. The IB Gateway runtime is installed and enabled by the **IB Gateway Ops** workflow
-(run automatically after every deploy), which provisions:
+directories. The IB Gateway runtime is installed and enabled by the **IB Gateway Ops** workflow.
+Auto CI/CD runs Gateway Ops after its dev/stg deploy jobs when deploy or Gateway paths changed;
+manual deploys require an explicit Gateway Ops action. Gateway Ops provisions:
 
 - IB Gateway in `/opt/ibgateway`.
 - IBC in `/opt/ibc`.
@@ -48,7 +51,7 @@ directories. The IB Gateway runtime is installed and enabled by the **IB Gateway
 
 The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` from GitHub Environment Secrets only for `configure-paper` and `configure-live`, sends them to `sudo poma-configure-ibc` over IAP SSH stdin, and removes its temporary runner-side input file after use.
 
-The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Configure and socket verification wait for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, print the redacted handshake tail on failure, and tolerate a transient post-socket service restart until the bounded readiness deadline.
+The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Pull-request Auto CI/CD uses `configure-paper` for the dev Gateway check so broker-login and authenticated API regressions are caught before merge when an operator approves IBKR mobile 2FA. Configure and socket verification wait for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, print the redacted handshake tail on failure, and tolerate a transient post-socket service restart until the bounded readiness deadline.
 
 The service starts raw IB Gateway until `/home/poma/ibc/config.ini` exists. After setup, it starts Gateway through IBC as one foreground systemd process and refuses to fall back to raw Gateway if the configured IBC launch path is broken.
 

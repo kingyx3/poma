@@ -211,3 +211,13 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "run_remote" in workflow
+
+
+def test_api_handshake_remote_variables_are_not_expanded_locally() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    verify_api_handshake = workflow.split("          verify_api_handshake() {", 1)[1].split("\n          }", 1)[0]
+
+    assert r'\${remote_handshake_log}' in verify_api_handshake
+    assert r'\${status}' in verify_api_handshake
+    assert '"${remote_handshake_log}"' not in verify_api_handshake
+    assert 'exit "${status}"' not in verify_api_handshake
