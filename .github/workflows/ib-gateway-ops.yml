@@ -54,16 +54,15 @@ jobs:
   gateway-ops:
     name: IB Gateway ${{ inputs.action }} (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
-    # Hard ceiling so a stalled install, dpkg lock, SSH tunnel, or 2FA wait can never leave
-    # this job (and the auto-cicd run it gates) running for GitHub's 6-hour default.
     timeout-minutes: 25
     environment: ${{ inputs.deploy_environment }}
     env:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
-      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300
+      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360
       IB_GATEWAY_SOCKET_POLL_SECONDS: 5
+      IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200
       IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
       IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
 
@@ -82,7 +81,6 @@ jobs:
           fi
 
           set -a
-          # shellcheck source=/dev/null
           . "${config_path}"
           set +a
 
@@ -130,6 +128,8 @@ jobs:
           set -euo pipefail
 
           timing_file="$(mktemp)"
+          diagnosis_file="$(mktemp)"
+          startup_check_file="$(mktemp)"
           step_started="${SECONDS}"
           input_file=""
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
@@ -157,6 +157,80 @@ jobs:
             fi
           }
 
+          compact_value() {
+            local key="$1" default="$2"
+            local value=""
+            if [ -s "${startup_check_file}" ]; then
+              value="$(grep -E "^${key}=" "${startup_check_file}" | tail -n1 | cut -d= -f2- || true)"
+            fi
+            printf '%s' "${value:-${default}}"
+          }
+
+          default_next_action() {
+            local stage="$1"
+            case "${stage}" in
+              no-systemd-service)
+                echo "Run IB Gateway Ops repair so the systemd unit and runtime helpers are installed."
+                ;;
+              service-not-active)
+                echo "Inspect systemctl status and journalctl output for the ibgateway.service start failure."
+                ;;
+              service-active-no-xvfb)
+                echo "Inspect Xvfb logs, remove stale display locks, and rerun runtime repair."
+                ;;
+              headless-gui-incomplete)
+                echo "Inspect fluxbox/x11vnc sidecar logs under /var/log/poma/ibgateway and rerun repair."
+                ;;
+              ibc-not-running)
+                echo "Verify /opt/ibc/gatewaystart.sh is executable and the configured runner refuses raw Gateway fallback."
+                ;;
+              java-gateway-not-running)
+                echo "Inspect ibgateway.service journal and Gateway logs; Java/Gateway exited before broker login."
+                ;;
+              gateway-log-error)
+                echo "Review the redacted fatal IBC/Gateway log tail below and fix the reported launcher/login error."
+                ;;
+              gateway-running-no-login-progress-timeout)
+                echo "Inspect the headless Gateway screen through IAP/VNC and fix the blocking login/window state."
+                ;;
+              login-reached-2fa-pending)
+                echo "Approve the broker mobile authentication prompt before the workflow timeout."
+                ;;
+              login-reached-awaiting-auth)
+                echo "Wait for 2FA/API readiness unless a later diagnostic reports a fatal login error."
+                ;;
+              api-socket-open)
+                echo "Run the real ib_insync managedAccounts handshake."
+                ;;
+              *)
+                echo "Inspect the collected systemd, process, listener, and Gateway/IBC diagnostics below."
+                ;;
+            esac
+          }
+
+          print_final_compact_diagnosis() {
+            if [ ! -s "${startup_check_file}" ]; then
+              return 0
+            fi
+            echo "Final compact IB Gateway diagnosis:"
+            print_compact_startup_diagnosis
+          }
+
+          print_compact_startup_diagnosis() {
+            local stage action reason next_action
+            stage="$(compact_value STARTUP_STAGE startup-check-missing-stage)"
+            action="$(compact_value STARTUP_ACTION fail)"
+            reason="$(compact_value STARTUP_REASON 'startup-check returned failure without printing STARTUP_STAGE/STARTUP_REASON; inspect full diagnostics below.')"
+            next_action="$(compact_value NEXT_ACTION '')"
+            if [ -z "${next_action}" ]; then
+              next_action="$(default_next_action "${stage}")"
+            fi
+            echo "STARTUP_STAGE=${stage}"
+            echo "STARTUP_ACTION=${action}"
+            echo "STARTUP_REASON=${reason}"
+            echo "NEXT_ACTION=${next_action}"
+          }
+
           write_timing_summary() {
             local total=$((SECONDS - step_started))
             {
@@ -175,11 +249,28 @@ jobs:
               fi
               echo
               echo "Total step time: **${total}s**"
+              if [ -s "${startup_check_file}" ]; then
+                echo
+                echo "### IB Gateway startup classification"
+                echo
+                echo '```text'
+                print_compact_startup_diagnosis
+                echo '```'
+              fi
+              if [ -s "${diagnosis_file}" ]; then
+                echo
+                echo "### IB Gateway final diagnosis"
+                echo
+                echo '```text'
+                tail -n 260 "${diagnosis_file}"
+                echo '```'
+              fi
             } >> "${GITHUB_STEP_SUMMARY}"
           }
 
           on_exit() {
             cleanup_input_file
+            print_final_compact_diagnosis
             write_timing_summary
           }
           trap on_exit EXIT
@@ -209,8 +300,6 @@ jobs:
             timeout --kill-after=30s "${seconds}" "$@"
           }
 
-          # Bound every remote call so a hung IAP SSH tunnel or remote command cannot stall
-          # the job. Callers pass a longer timeout for the install/repair step.
           run_remote() {
             local command="$1"
             local seconds="${2:-180}"
@@ -243,7 +332,18 @@ jobs:
           }
 
           diagnose_gateway_failure() {
-            timed "Collect gateway diagnostics" run_remote "if command -v poma-diagnose-ibgateway >/dev/null 2>&1; then sudo poma-diagnose-ibgateway diagnose --log-lines ${LOG_LINES}; else sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true; sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true; fi" 240 || true
+            local status start duration
+            start="${SECONDS}"
+            echo "::group::Collect gateway diagnostics"
+            set +e
+            run_remote "if command -v poma-diagnose-ibgateway >/dev/null 2>&1; then sudo poma-diagnose-ibgateway startup-check --log-lines 80 --elapsed-seconds ${IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS} --fail-no-progress-after ${IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS} || true; sudo poma-diagnose-ibgateway diagnose --log-lines ${LOG_LINES}; else sudo systemctl status ibgateway --no-pager --lines=${LOG_LINES} || true; sudo journalctl -u ibgateway -n ${LOG_LINES} --no-pager || true; fi" 240 2>&1 | tee "${diagnosis_file}"
+            status="${PIPESTATUS[0]}"
+            set -e
+            duration=$((SECONDS - start))
+            echo "::endgroup::"
+            echo "TIMING Collect gateway diagnostics: ${duration}s (status=${status})"
+            record_timing "Collect gateway diagnostics" "${duration}" "${status}"
+            return "${status}"
           }
 
           validate_ibc_configuration() {
@@ -255,11 +355,28 @@ jobs:
             run_remote "sudo poma-diagnose-ibgateway progress --log-lines 40" 90
           }
 
+          gateway_startup_check() {
+            local elapsed="$1" status
+            : > "${startup_check_file}"
+            set +e
+            run_remote "sudo poma-diagnose-ibgateway startup-check --log-lines 40 --elapsed-seconds '${elapsed}' --fail-no-progress-after '${IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS}'" 120 2>&1 | tee "${startup_check_file}"
+            status="${PIPESTATUS[0]}"
+            set -e
+            return "${status}"
+          }
+
           verify_api_handshake() {
-            # A reachable socket only proves a TCP listener. Confirm a real authenticated API
-            # handshake via the deployed POMA container (ib_insync connect + managedAccounts).
-            # Best-effort: skip cleanly when the app is not yet deployed on the VM.
-            run_remote "if ! test -f /opt/poma/docker-compose.yml && ! test -f /opt/poma/compose.yaml; then echo 'POMA app not deployed at /opt/poma; skipping ib_insync API handshake (socket check only).'; exit 0; fi; echo \"Confirming IBKR API handshake via 'poma ibkr-check' (real ib_insync connect).\"; sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE=paper -e DATA_PROVIDER=fixture poma ibkr-check'" 240
+            local mode="${1:-paper}"
+            local required="${2:-1}"
+            run_remote "if ! test -f /opt/poma/docker-compose.yml && ! test -f /opt/poma/compose.yaml; then if [ '${required}' = '1' ]; then echo 'POMA app not deployed at /opt/poma; cannot run required ib_insync API handshake.' >&2; exit 1; fi; echo 'POMA app not deployed at /opt/poma; skipping ib_insync API handshake (socket check only).'; exit 0; fi; echo \"Confirming IBKR API handshake via 'poma ibkr-check' (real ib_insync connect, mode=${mode}).\"; remote_handshake_log=\$(mktemp /tmp/poma-ibkr-check.XXXXXX.log); if sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE=${mode} -e DATA_PROVIDER=fixture poma ibkr-check' >\"${remote_handshake_log}\" 2>&1; then cat \"${remote_handshake_log}\"; rm -f \"${remote_handshake_log}\"; exit 0; fi; status=\$?; echo 'poma ibkr-check failed; redacted tail follows:' >&2; sed -E 's/(IbPassword=|IBKR_LOGIN_SECRET=|password: )[[:graph:]]+/\1***/Ig' \"${remote_handshake_log}\" | tail -n 120 >&2; rm -f \"${remote_handshake_log}\"; exit \"${status}\"" 240
+          }
+
+          # Pre-build the poma Docker image on the VM so the first API handshake attempt does
+          # not pay the full image-build cost (~50s on a free-tier VM) on top of the ib_insync
+          # connect timeout.  Runs while the gateway is starting up; failures are non-fatal
+          # (the handshake will trigger an on-demand build if needed).
+          warmup_poma_docker_image() {
+            run_remote "if test -f /opt/poma/docker-compose.yml || test -f /opt/poma/compose.yaml; then echo 'Pre-building poma Docker image to reduce API handshake latency...'; sudo -u poma bash -lc 'cd /opt/poma && docker compose build poma 2>&1 | tail -10' && echo 'poma Docker image ready.' || echo 'Docker image pre-build returned non-zero; handshake will build on demand.'; else echo 'POMA app not deployed at /opt/poma; skipping Docker image warmup.'; fi" 300
           }
 
           poll_gateway_socket_once() {
@@ -267,17 +384,19 @@ jobs:
           }
 
           verify_socket() {
+            local handshake_mode="${1:-paper}"
+            local handshake_required="${2:-1}"
             local timeout_seconds="${IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS:-300}"
             local poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
             local deadline=$((SECONDS + timeout_seconds))
-            local elapsed=0 attempt=0 status=0 last_snapshot=0
+            local elapsed=0 attempt=0 status=0 startup_status=0 last_snapshot=0 handshake_failures=0
+            local stable_socket_successes=0 required_stable_socket_successes=2 socket_was_reachable=0 service_stop_seen_after_socket=0
+            local handshake_log_file="$(mktemp)"
+            local max_handshake_failures=3
 
-            echo "Waiting up to ${timeout_seconds}s (5 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
+            echo "Waiting up to ${timeout_seconds}s (6 minutes) for IBKR 2FA approval and Gateway API readiness on 127.0.0.1:7497."
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               attempt=$((attempt + 1))
-              # Keep timed() in a conditional context: it intentionally returns 1 while the
-              # gateway is still starting, and returning non-zero after re-enabling errexit
-              # would otherwise abort the polling loop before the 5-minute deadline.
               if timed "Socket/service poll attempt ${attempt}" poll_gateway_socket_once; then
                 status=0
               else
@@ -286,23 +405,82 @@ jobs:
 
               case "${status}" in
                 0)
+                  socket_was_reachable=1
+                  stable_socket_successes=$((stable_socket_successes + 1))
                   echo "IB Gateway API socket is reachable on 127.0.0.1:7497."
-                  if timed "Real API handshake" verify_api_handshake; then
+                  echo "Gateway API socket stability guard: ${stable_socket_successes}/${required_stable_socket_successes} stable socket polls."
+                  if [ "${stable_socket_successes}" -lt "${required_stable_socket_successes}" ]; then
+                    echo "Socket opened but stability guard has not passed; waiting for stable socket before real ib_insync handshake."
+                    sleep "${poll_seconds}"
+                    continue
+                  fi
+                  if timed "Real API handshake" verify_api_handshake "${handshake_mode}" "${handshake_required}" 2>&1 | tee -a "${handshake_log_file}"; then
                     echo "IBKR API handshake succeeded; the gateway is authenticated and serving the API."
+                    rm -f "${handshake_log_file}"
                     return 0
                   fi
-                  echo "IBKR API handshake failed even though the socket is open on 127.0.0.1:7497." >&2
-                  diagnose_gateway_failure
-                  exit 1
+                  handshake_failures=$((handshake_failures + 1))
+                  echo "Captured API handshake attempt ${handshake_failures} output in ${handshake_log_file}." >&2
+                  if [ "${handshake_failures}" -ge "${max_handshake_failures}" ]; then
+                    echo "::error::IBKR API handshake failed ${handshake_failures} time(s) even though port 7497 is open; aborting." >&2
+                    if [ -s "${handshake_log_file}" ]; then
+                      echo "IB Gateway API handshake log:"
+                      tail -n 160 "${handshake_log_file}"
+                    else
+                      echo "No API handshake output was captured."
+                    fi
+                    diagnose_gateway_failure
+                    exit 1
+                  fi
+                  echo "API handshake attempt ${handshake_failures} failed; port 7497 may have opened before the API was fully ready. Will retry on next poll cycle." >&2
                   ;;
                 2)
-                  echo "IB Gateway service stopped before the API socket became reachable." >&2
-                  diagnose_gateway_failure
-                  exit 1
+                  stable_socket_successes=0
+                  if [ "${socket_was_reachable}" -eq 1 ]; then
+                    service_stop_seen_after_socket=1
+                    echo "IB Gateway service stopped after the API socket became reachable but before the authenticated API handshake succeeded; waiting within the bounded readiness window for systemd restart/recovery." >&2
+                    if timed "Gateway readiness snapshot after service stop" gateway_readiness_snapshot; then
+                      :
+                    else
+                      echo "Gateway readiness snapshot after service stop failed; continuing until startup classification or deadline decides." >&2
+                    fi
+                  else
+                    echo "IB Gateway service stopped before the API socket became reachable." >&2
+                    diagnose_gateway_failure
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  stable_socket_successes=0
                   ;;
               esac
 
               elapsed=$((timeout_seconds - (deadline - SECONDS)))
+              if timed "Gateway startup classification ${attempt}" gateway_startup_check "${elapsed}"; then
+                startup_status=0
+              else
+                startup_status="$?"
+              fi
+              case "${startup_status}" in
+                0)
+                  echo "Startup classifier reports API readiness; socket poll will confirm on the next pass."
+                  ;;
+                2)
+                  if [ "${service_stop_seen_after_socket}" -eq 1 ]; then
+                    echo "Startup classifier reports the service is currently inactive after a transient socket; allowing systemd restart/recovery until the bounded readiness deadline." >&2
+                  else
+                    echo "::error::IB Gateway failed before reaching broker login/2FA/API readiness. Compact diagnosis follows."
+                    print_compact_startup_diagnosis
+                    echo "No IBKR mobile notification is expected until this pre-login startup blocker is fixed." >&2
+                    diagnose_gateway_failure
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  :
+                  ;;
+              esac
+
               if [ "${elapsed}" -gt 0 ] && [ $((elapsed - last_snapshot)) -ge 60 ]; then
                 echo "Gateway is active but no API listener is reachable yet (${elapsed}/${timeout_seconds}s). Capturing a redacted readiness snapshot."
                 if timed "Gateway readiness snapshot" gateway_readiness_snapshot; then
@@ -318,8 +496,20 @@ jobs:
               sleep "${poll_seconds}"
             done
 
-            echo "IBKR 2FA approval or Gateway API readiness timed out after ${timeout_seconds}s; socket 127.0.0.1:7497 never became API-ready." >&2
+            if [ "${service_stop_seen_after_socket}" -eq 1 ]; then
+              echo "IBKR 2FA approval or Gateway API readiness timed out after ${timeout_seconds}s; ibgateway.service stopped after a transient API socket and did not recover to an authenticated handshake." >&2
+            else
+              echo "IBKR 2FA approval or Gateway API readiness timed out after ${timeout_seconds}s; socket 127.0.0.1:7497 never became API-ready." >&2
+            fi
+            if [ -s "${handshake_log_file}" ]; then
+              echo "IB Gateway API handshake log:"
+              tail -n 160 "${handshake_log_file}"
+            else
+              echo "No API handshake output was captured."
+            fi
+            rm -f "${handshake_log_file}"
             echo "If no IBKR mobile approval notification was received, Gateway/IBC likely never reached the IBKR login/2FA stage; diagnostics below distinguish config, runner, process, listener, and log state." >&2
+            print_compact_startup_diagnosis
             diagnose_gateway_failure
             exit 1
           }
@@ -339,7 +529,12 @@ jobs:
             verify-socket)
               repair_gateway_runtime
               timed "Restart ibgateway" run_remote "sudo systemctl restart ibgateway || true" 180
-              verify_socket
+              if timed "Pre-build poma Docker image" warmup_poma_docker_image; then
+                :
+              else
+                echo "Docker image pre-build failed; handshake will build on demand."
+              fi
+              verify_socket paper 0
               ;;
             configure-paper|configure-live)
               if [ -z "${IBKR_LOGIN_ID:-}" ] || [ -z "${IBKR_LOGIN_SECRET:-}" ]; then
@@ -354,11 +549,18 @@ jobs:
               printf '%s\n%s\n%s\n' "${IBKR_LOGIN_ID}" "${IBKR_LOGIN_SECRET}" "${mode}" > "${input_file}"
               chmod 600 "${input_file}"
               timed "Configure IBC credentials" run_with_timeout 180s \
-                gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo poma-configure-ibc" < "${input_file}"
+                gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo POMA_CONFIGURE_IBC_RESTART=0 poma-configure-ibc" < "${input_file}"
               timed "Validate IBC configuration" validate_ibc_configuration "${mode}"
               echo "Restarting ibgateway after IBC credential/config update so IBC reads the new config and can trigger IBKR 2FA."
               timed "Restart ibgateway after IBC configuration" run_remote "sudo systemctl restart ibgateway" 180
-              verify_socket
+              # Pre-build the poma Docker image while the gateway is starting up so the first
+              # ibkr-check attempt does not wait for an on-demand build (~50s on free-tier VMs).
+              if timed "Pre-build poma Docker image" warmup_poma_docker_image; then
+                :
+              else
+                echo "Docker image pre-build failed; handshake will build on demand."
+              fi
+              verify_socket "${mode}" 1
               ;;
             *)
               echo "Unknown action: ${INPUT_ACTION}" >&2
@@ -374,4 +576,5 @@ jobs:
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
             POMA[${{ inputs.deploy_environment }}] gateway ${{ inputs.action }}
-            ${{ job.status }}
+            ${{ job.status }}. Check the GitHub step summary for the startup
+            classification if Gateway did not reach IBKR login/2FA.

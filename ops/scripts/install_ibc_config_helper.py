@@ -100,10 +100,13 @@ set_ini AllowBlindTrading yes
 
 chown poma:poma "${IBC_CONFIG}"
 chmod 600 "${IBC_CONFIG}"
-systemctl restart ibgateway
-
-echo "IBC config written to ${IBC_CONFIG} and ibgateway restarted."
-echo "Approve IBKR Mobile 2FA if prompted."
+if [ "${POMA_CONFIGURE_IBC_RESTART:-1}" = "1" ]; then
+  systemctl restart ibgateway
+  echo "IBC config written to ${IBC_CONFIG} and ibgateway restarted."
+  echo "Approve IBKR Mobile 2FA if prompted."
+else
+  echo "IBC config written to ${IBC_CONFIG}; restart deferred to caller."
+fi
 '''
 
 RUNNER_TEXT = r'''#!/usr/bin/env bash

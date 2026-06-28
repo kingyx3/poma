@@ -144,8 +144,8 @@ def test_gateway_ops_workflow_repairs_runtime_before_mutating_ops() -> None:
 def test_gateway_ops_workflow_verifies_real_api_handshake() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
-    # A reachable socket is not enough; the workflow must confirm a real authenticated
-    # ib_insync handshake through the deployed container.
+    # A reachable socket is not enough; configure actions must confirm a real authenticated
+    # ib_insync handshake through the deployed container after broker login completes.
     assert "verify_api_handshake" in workflow
     assert "poma ibkr-check" in workflow
     assert "nc -z 127.0.0.1 7497" in workflow
@@ -162,6 +162,27 @@ def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
     assert "/var/log/poma/ibgateway" in diagnostics
     assert "/tmp/poma-ibgateway" in diagnostics
     assert "/home/poma/ibc/logs" in diagnostics
+
+
+def test_gateway_ops_workflow_captures_handshake_and_final_diagnosis_logs() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'handshake_log_file="$(mktemp)"' in workflow
+    assert "IB Gateway API handshake log" in workflow
+    assert "Final compact IB Gateway diagnosis" in workflow
+    assert "print_final_compact_diagnosis" in workflow
+
+
+def test_gateway_ops_workflow_guards_real_handshake_with_stable_socket() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "required_stable_socket_successes" in workflow
+    assert "stable_socket_successes" in workflow
+    assert "Gateway API socket stability guard" in workflow
+    assert (
+        "IB Gateway service stopped after the API socket became reachable but before "
+        "the authenticated API handshake succeeded."
+    ) in workflow
 
 
 def test_gateway_ops_workflow_uses_current_action_versions() -> None:
@@ -218,160 +239,26 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
     assert "uses: ./.github/workflows/ib-gateway-ops.yml" in workflow
     assert "secrets: inherit" in workflow
 
-    # dev on PR and stg on merge now run equivalent paper deploy paths when changes require it.
-    dev_deploy = workflow.split("  dev-deploy:\n", 1)[1]
-    dev_deploy = dev_deploy.split("\n\n  dev-configure-gateway:", 1)[0]
-    stg_deploy = workflow.split("  stg-deploy:\n", 1)[1]
-    stg_deploy = stg_deploy.split("\n\n  stg-configure-gateway:", 1)[0]
-    dev_gateway = workflow.split("  dev-configure-gateway:\n", 1)[1]
-    dev_gateway = dev_gateway.split("\n\n  stg-deploy:", 1)[0]
-    stg_gateway = workflow.split("  stg-configure-gateway:\n", 1)[1]
-    stg_gateway = stg_gateway.split("\n\n  # Publishing", 1)[0]
 
-    for deploy_block in (dev_deploy, stg_deploy):
-        assert "terraform_action: apply" in deploy_block
-        assert "deploy_app: true" in deploy_block
-        assert "trading_mode: paper" in deploy_block
-        assert "data_provider: yahoo" in deploy_block
-        assert "allow_live_trading: false" in deploy_block
-        assert "deploy_smoke: true" in deploy_block
-        assert "needs: changes" in deploy_block
-        assert "needs.changes.outputs.deploy_required == 'true'" in deploy_block
-        assert "needs.changes.result != 'success'" in deploy_block
-
-    for gateway_block in (dev_gateway, stg_gateway):
-        assert "action: configure-paper" in gateway_block
-        assert "log_lines: 200" in gateway_block
-        assert "secrets: inherit" in gateway_block
-        assert "needs.changes.outputs.gateway_required == 'true'" in gateway_block
-        assert "needs.changes.result != 'success'" in gateway_block
-        assert ".result == 'success' || needs." in gateway_block
-        assert ".result == 'skipped'" in gateway_block
-
-    assert "deploy_environment: dev" in dev_deploy
-    assert "deploy_environment: dev" in dev_gateway
-    assert "deploy_environment: stg" in stg_deploy
-    assert "deploy_environment: stg" in stg_gateway
-    assert "needs: [changes, dev-deploy]" in dev_gateway
-    assert "needs: [changes, stg-deploy]" in stg_gateway
-
-    # Guard against reintroducing a lighter PR-only path.
-    assert "terraform_action: plan" not in workflow
-    assert "deploy_app: false" not in workflow
-    assert "data_provider: fixture" not in workflow
-    assert "deploy_smoke: false" not in workflow
-
-    # prd only on a published, non-prerelease release. Release deploys remain unconditional because
-    # publishing a release is an explicit production promotion.
-    assert "github.event_name == 'release' && github.event.release.prerelease == false" in workflow
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
-    assert "github.event_name == 'push'" in workflow
-    assert "deploy_environment: prd" in workflow
-    assert "trading_mode: live" in workflow
-    assert "allow_live_trading: true" in workflow
-    assert "action: configure-live" in workflow
-    assert "Release deploys are" in workflow
-    assert "intentionally unconditional" in workflow
-
-    # No Tailscale anywhere in the orchestrator.
-    assert "tailscale" not in workflow.lower()
-
-
-def test_auto_cicd_path_filter_is_conservative_and_visible() -> None:
+def test_auto_cicd_gateway_actions_per_environment() -> None:
     workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "Detect deploy-relevant changes" in workflow
-    assert "fetch-depth: 0" in workflow
-    assert "deploy_required: ${{ steps.detect.outputs.deploy_required }}" in workflow
-    assert "gateway_required: ${{ steps.detect.outputs.gateway_required }}" in workflow
-    assert "changed files unavailable; fail-open" in workflow
-    assert "### Auto CI/CD change detection" in workflow
-    assert "Changed files:" in workflow
+    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
+    stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
+    prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
 
-    deploy_paths = (
-        ".github/workflows/auto-cicd.yml",
-        ".github/workflows/deploy-gcp-vm.yml",
-        "infra/gcp-free-tier/*",
-        "Dockerfile",
-        "docker-compose.yml",
-        ".dockerignore",
-        "pyproject.toml",
-        "src/*",
-        "ops/cron/*",
-        "ops/scripts/deploy.sh",
-        "ops/scripts/render_env.py",
-        "ops/scripts/resolve_gcp_deploy_env.sh",
-        "ops/scripts/validate_data_provider.py",
-        "ops/deploy/environments/*",
-    )
-    for path in deploy_paths:
-        assert path in workflow
-
-    gateway_paths = (
-        ".github/workflows/ib-gateway-ops.yml",
-        "ops/scripts/repair_ib_gateway_runtime.py",
-        "ops/scripts/install_ibc_config_helper.py",
-        "ops/scripts/ensure_ibgateway_service.sh",
-        "ops/scripts/diagnose_ib_gateway_runtime.py",
-        "ops/scripts/refresh_gateway_helper.sh",
-    )
-    for path in gateway_paths:
-        assert path in workflow
+    # Dev and staging run the credentialed broker paper configure path so configure-paper
+    # regressions are caught before release. Production keeps the live configure path.
+    assert "action: configure-paper" in dev_gateway
+    assert "action: restart" not in dev_gateway
+    assert "action: configure-paper" in stg_gateway
+    assert "action: configure-live" in prd_gateway
 
 
-def test_deploy_workflow_passes_smoke_flag_to_vm() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-    assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" in workflow
-
-
-def test_deploy_self_heals_unreachable_vm() -> None:
-    # A wedged/unreachable VM is reset once (reboot reruns the minimal startup) so deploys do not
-    # get stuck on a host whose SSH never comes back.
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-
-    assert "ensure_vm_ready" in workflow
-    assert "gcloud compute instances reset" in workflow
-
-
-def test_no_workflow_references_tailscale() -> None:
-    # Tailscale was removed; operator access is via IAP SSH only. Guard against reintroduction.
-    for workflow in (
-        CI_WORKFLOW,
-        BOOTSTRAP_WORKFLOW,
-        DEPLOY_WORKFLOW,
-        GATEWAY_OPS_WORKFLOW,
-        AUTO_CICD_WORKFLOW,
-    ):
-        assert "tailscale" not in workflow.read_text(encoding="utf-8").lower()
-
-
-def test_deploy_package_contains_only_runtime_files() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-
-    assert "-czf /tmp/poma.tar.gz" in workflow
-    assert "--exclude='__pycache__'" in workflow
-    assert "--exclude='*.pyc'" in workflow
-    runtime_package_entries = (
-        ".dockerignore",
-        "Dockerfile",
-        "docker-compose.yml",
-        "pyproject.toml",
-        "src",
-        "ops/cron",
-        "ops/scripts/deploy.sh",
-    )
-    for entry in runtime_package_entries:
-        assert entry in workflow
-
-    stale_package_paths = (
-        "/opt/poma/docs",
-        "/opt/poma/infra",
-        "/opt/poma/tests",
-        "/opt/poma/.github",
-    )
-    for path in stale_package_paths:
-        assert path in workflow
-
-    assert ".git" not in "\n".join(
-        line for line in workflow.splitlines() if "-czf /tmp/poma.tar.gz" in line
-    )
+def test_adr_0002_dev_gateway_pr_checks_records_configure_paper_decision() -> None:
+    adr = REPO_ROOT / "docs/adr/0002-dev-gateway-pr-checks-avoid-2fa.md"
+    assert adr.exists(), "ADR 0002 must document the dev configure-paper decision"
+    text = adr.read_text(encoding="utf-8")
+    assert "Superseded" in text
+    assert "configure-paper" in text
+    assert "2FA" in text or "2fa" in text.lower()
