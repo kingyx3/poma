@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-from poma.broker import Broker, build_broker
+from poma.broker import Broker, OrderStatusCallback, build_broker
 from poma.config import Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
 from poma.history import CapSnapshotHistory
@@ -119,8 +119,12 @@ class RebalanceEngine:
     def is_blocked(self, plan: RebalancePlan) -> bool:
         return any(BLOCK_MARKER in warning for warning in plan.warnings)
 
-    def execute(self, plan: RebalancePlan) -> RebalancePlan:
-        results = self.broker.submit_trades(plan.trades)
+    def execute(
+        self,
+        plan: RebalancePlan,
+        order_status_callback: OrderStatusCallback | None = None,
+    ) -> RebalancePlan:
+        results = self.broker.submit_trades(plan.trades, status_callback=order_status_callback)
         return replace(plan, execution_results=results)
 
     def run(self, session_date: str, run_id: str) -> RebalanceOutcome:
