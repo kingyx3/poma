@@ -55,6 +55,7 @@ jobs:
           is_deploy_path() {
             case "$1" in
               .github/workflows/auto-cicd.yml|\
+              .github/workflows/deploy-paper-gcp-vm.yml|\
               .github/workflows/deploy-gcp-vm.yml|\
               Dockerfile|\
               docker-compose.yml|\
@@ -81,6 +82,7 @@ jobs:
 
           is_gateway_path() {
             case "$1" in
+              .github/workflows/deploy-paper-gcp-vm.yml|\
               .github/workflows/ib-gateway-ops.yml|\
               ops/scripts/repair_ib_gateway_runtime.py|\
               ops/scripts/install_ibc_config_helper.py|\
@@ -167,64 +169,28 @@ jobs:
 
           echo "${reason}"
 
-  dev-deploy:
+  dev-paper:
+    name: Dev paper deploy/configure
     needs: changes
     if: >-
       ${{ always() && github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          (needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true') }}
-    uses: ./.github/workflows/deploy-gcp-vm.yml
+          github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/deploy-paper-gcp-vm.yml
     with:
       deploy_environment: dev
-      terraform_action: apply
-      deploy_app: true
-      trading_mode: paper
-      data_provider: yahoo
-      allow_live_trading: false
-      deploy_smoke: true
+      deploy_required: ${{ needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true' }}
+      gateway_required: ${{ needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true' }}
     secrets: inherit
 
-  dev-configure-gateway:
-    needs: [changes, dev-deploy]
-    if: >-
-      ${{ always() && github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          (needs.dev-deploy.result == 'success' || needs.dev-deploy.result == 'skipped') &&
-          (needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true') }}
-    uses: ./.github/workflows/ib-gateway-ops.yml
-    with:
-      deploy_environment: dev
-      action: configure-paper
-      log_lines: 200
-    secrets: inherit
-
-  stg-deploy:
+  stg-paper:
+    name: Staging paper deploy/configure
     needs: changes
-    if: >-
-      ${{ always() && github.event_name == 'push' &&
-          (needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true') }}
-    uses: ./.github/workflows/deploy-gcp-vm.yml
+    if: ${{ always() && github.event_name == 'push' }}
+    uses: ./.github/workflows/deploy-paper-gcp-vm.yml
     with:
       deploy_environment: stg
-      terraform_action: apply
-      deploy_app: true
-      trading_mode: paper
-      data_provider: yahoo
-      allow_live_trading: false
-      deploy_smoke: true
-    secrets: inherit
-
-  stg-configure-gateway:
-    needs: [changes, stg-deploy]
-    if: >-
-      ${{ always() && github.event_name == 'push' &&
-          (needs.stg-deploy.result == 'success' || needs.stg-deploy.result == 'skipped') &&
-          (needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true') }}
-    uses: ./.github/workflows/ib-gateway-ops.yml
-    with:
-      deploy_environment: stg
-      action: configure-paper
-      log_lines: 200
+      deploy_required: ${{ needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true' }}
+      gateway_required: ${{ needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true' }}
     secrets: inherit
 
   # Publishing a non-prerelease GitHub release promotes to live/prd. prereleases are ignored so
@@ -242,13 +208,4 @@ jobs:
       data_provider: yahoo
       allow_live_trading: true
       deploy_smoke: true
-    secrets: inherit
-
-  prd-configure-gateway:
-    needs: prd-deploy
-    uses: ./.github/workflows/ib-gateway-ops.yml
-    with:
-      deploy_environment: prd
-      action: configure-live
-      log_lines: 200
     secrets: inherit
