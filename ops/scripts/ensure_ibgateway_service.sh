@@ -41,10 +41,22 @@ LOG_DIR = Path(os.environ.get("IB_GATEWAY_LOG_DIR", "/var/log/poma/ibgateway"))
 CONFIG = HOME / "ibc" / "config.ini"
 LAUNCHER = IBC_DIR / "gatewaystart.sh"
 WRAPPER_LOG = LOG_DIR / "gatewaystart-wrapper.log"
+RUN_LOG_DIRS = (LOG_DIR, HOME / "ibc" / "logs", Path("/tmp/poma-ibgateway"))
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def reset_run_logs() -> None:
+    for directory in RUN_LOG_DIRS:
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in directory.rglob("*"):
+            if path.is_file():
+                try:
+                    path.write_text("", encoding="utf-8")
+                except OSError:
+                    pass
 
 
 def log(message: str) -> None:
@@ -72,6 +84,7 @@ def gateway_process_alive() -> bool:
 
 
 def main() -> int:
+    reset_run_logs()
     if not CONFIG.exists() or CONFIG.stat().st_size == 0:
         log(f"IBC config missing at {CONFIG}; refusing raw Gateway fallback.")
         return 127
