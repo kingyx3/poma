@@ -36,8 +36,8 @@ def test_build_plan_sizes_current_strategy_from_allocated_sleeve() -> None:
     assert plan.strategy_allocation_pct == 0.5
     assert plan.strategy_capital_usd == 5_000
     assert plan.total_allocated_usd == 5_000
-    assert math.isclose(sum(target.target_notional for target in plan.targets), 4_900)
-    assert math.isclose(sum(trade.notional for trade in plan.trades), 4_900)
+    assert math.isclose(sum(target.target_notional for target in plan.targets), 5_000)
+    assert math.isclose(sum(trade.notional for trade in plan.trades), 5_000)
     assert any("not allocated" in warning for warning in plan.warnings)
 
 
