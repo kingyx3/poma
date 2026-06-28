@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 CURRENT_STRATEGY_NAME = "rank_velocity_size_equal_weight"
+CASH_STRATEGY_NAME = "cash"
+DEFAULT_STRATEGY_ALLOCATIONS = f"{CURRENT_STRATEGY_NAME}=0.98,{CASH_STRATEGY_NAME}=0.02"
 
 
 @dataclass(frozen=True)
