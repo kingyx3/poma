@@ -54,6 +54,7 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
     assert "if ! systemctl is-active --quiet ibgateway; then exit 2" in workflow
     assert "Socket/service poll attempt" in workflow
     assert "IB Gateway service stopped before the API socket became reachable" in workflow
+    assert "IB Gateway service stopped after the API socket was briefly reachable" in workflow
 
 
 def test_gateway_socket_poll_is_errexit_safe() -> None:
@@ -86,6 +87,60 @@ def test_gateway_startup_failure_prints_actionable_compact_diagnosis() -> None:
     assert "Verify /opt/ibc/gatewaystart.sh is executable" in workflow
 
 
+def test_gateway_socket_requires_stable_guard_before_real_handshake() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    verify_socket = workflow.split("          verify_socket() {", 1)[1].split("\n          }", 1)[0]
+
+    expected = (
+        "stable_socket_successes",
+        "required_stable_socket_successes",
+        "Gateway API socket stability guard",
+        "Socket opened but stability guard has not passed",
+        "stable socket",
+    )
+    for snippet in expected:
+        assert snippet in verify_socket
+
+    first_socket_reachable = verify_socket.index("IB Gateway API socket is reachable on 127.0.0.1:7497.")
+    stable_guard = verify_socket.index("Gateway API socket stability guard")
+    real_handshake = verify_socket.index('timed "Real API handshake" verify_api_handshake')
+    assert first_socket_reachable < stable_guard < real_handshake
+
+
+def test_gateway_handshake_attempts_are_captured_for_diagnostics() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'handshake_log_file="$(mktemp)"' in workflow
+    assert 'tee -a "${handshake_log_file}"' in workflow
+    assert "IB Gateway API handshake log" in workflow
+    assert 'tail -n 160 "${handshake_log_file}"' in workflow
+    assert "handshake attempt ${handshake_failures}" in workflow
+    assert "No API handshake output was captured" in workflow
+
+
+def test_gateway_service_stopped_after_socket_has_explicit_message() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    verify_socket = workflow.split("          verify_socket() {", 1)[1].split("\n          }", 1)[0]
+
+    assert "socket_was_reachable" in verify_socket
+    assert (
+        "IB Gateway service stopped after the API socket became reachable but before "
+        "the authenticated API handshake succeeded."
+    ) in verify_socket
+    assert ("IB Gateway service stopped before the API socket became reachable.") in verify_socket
+
+
+def test_gateway_exit_writes_final_compact_diagnosis_to_job_log() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+    on_exit = workflow.split("          on_exit() {", 1)[1].split("\n          }", 1)[0]
+
+    assert "Final compact IB Gateway diagnosis" in workflow
+    assert "print_final_compact_diagnosis" in workflow
+    assert "print_final_compact_diagnosis" in on_exit
+    assert "write_timing_summary" in on_exit
+    assert on_exit.index("print_final_compact_diagnosis") < on_exit.index("write_timing_summary")
+
+
 def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
     block = workflow.split("configure-paper|configure-live)", 1)[1]
@@ -101,6 +156,7 @@ def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
     assert block.index(configure) < block.index(validate)
     assert block.index(validate) < block.index(restart)
     assert block.index(restart) < block.index(wait)
+    assert "sudo POMA_CONFIGURE_IBC_RESTART=0 poma-configure-ibc" in block
 
 
 def test_gateway_ops_has_explicit_five_minute_2fa_timeout() -> None:
@@ -119,6 +175,10 @@ def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None
 
     assert "poma ibkr-check" in workflow
     assert "real ib_insync connect" in workflow
+    assert "stable_socket_polls_required=2" in workflow
+    assert "Waiting for one more stable API socket poll" in workflow
+    assert "poma ibkr-check failed; redacted tail follows" in workflow
+    assert "Final compact Gateway diagnosis" in workflow
     assert "poma-diagnose-ibgateway validate --mode" in workflow
     assert "poma-diagnose-ibgateway progress" in workflow
     assert "poma-diagnose-ibgateway diagnose" in workflow

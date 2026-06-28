@@ -126,6 +126,7 @@ def test_install_helper_allows_missing_sample_config() -> None:
     assert "if [ -f \"${IBC_DIR}/config.ini\" ]; then" in script
     assert ": > \"${IBC_CONFIG}\"" in script
     assert "chmod 600 \"${IBC_CONFIG}\"" in script
+    assert "POMA_CONFIGURE_IBC_RESTART" in script
 
 
 def test_install_helper_pins_gateway_config_and_launcher_paths() -> None:

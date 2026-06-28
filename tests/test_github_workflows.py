@@ -164,6 +164,27 @@ def test_gateway_ops_workflow_reports_runtime_logs_on_socket_failure() -> None:
     assert "/home/poma/ibc/logs" in diagnostics
 
 
+def test_gateway_ops_workflow_captures_handshake_and_final_diagnosis_logs() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'handshake_log_file="$(mktemp)"' in workflow
+    assert "IB Gateway API handshake log" in workflow
+    assert "Final compact IB Gateway diagnosis" in workflow
+    assert "print_final_compact_diagnosis" in workflow
+
+
+def test_gateway_ops_workflow_guards_real_handshake_with_stable_socket() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "required_stable_socket_successes" in workflow
+    assert "stable_socket_successes" in workflow
+    assert "Gateway API socket stability guard" in workflow
+    assert (
+        "IB Gateway service stopped after the API socket became reachable but before "
+        "the authenticated API handshake succeeded."
+    ) in workflow
+
+
 def test_gateway_ops_workflow_uses_current_action_versions() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
@@ -226,18 +247,18 @@ def test_auto_cicd_gateway_actions_per_environment() -> None:
     stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
     prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
 
-    # PR checks must not require human IBKR mobile 2FA. They validate that the runtime
-    # helpers install and the systemd service restarts cleanly. Staging and production keep
-    # the credentialed broker configure paths where human approval is operationally expected.
-    assert "action: restart" in dev_gateway
-    assert "action: configure-paper" not in dev_gateway
+    # Dev and staging run the credentialed broker paper configure path so configure-paper
+    # regressions are caught before release. Production keeps the live configure path.
+    assert "action: configure-paper" in dev_gateway
+    assert "action: restart" not in dev_gateway
     assert "action: configure-paper" in stg_gateway
     assert "action: configure-live" in prd_gateway
 
 
-def test_adr_0002_dev_gateway_pr_checks_are_2fa_free_exists() -> None:
+def test_adr_0002_dev_gateway_pr_checks_records_configure_paper_decision() -> None:
     adr = REPO_ROOT / "docs/adr/0002-dev-gateway-pr-checks-avoid-2fa.md"
-    assert adr.exists(), "ADR 0002 must document that PR gateway checks avoid 2FA"
+    assert adr.exists(), "ADR 0002 must document the dev configure-paper decision"
     text = adr.read_text(encoding="utf-8")
-    assert "restart" in text
+    assert "Superseded" in text
+    assert "configure-paper" in text
     assert "2FA" in text or "2fa" in text.lower()
