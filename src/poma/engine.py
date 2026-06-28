@@ -124,7 +124,17 @@ class RebalanceEngine:
         plan: RebalancePlan,
         order_status_callback: OrderStatusCallback | None = None,
     ) -> RebalancePlan:
-        results = self.broker.submit_trades(plan.trades, status_callback=order_status_callback)
+        if order_status_callback is None:
+            results = self.broker.submit_trades(plan.trades)
+        else:
+            try:
+                results = self.broker.submit_trades(plan.trades, status_callback=order_status_callback)
+            except TypeError as exc:
+                if "status_callback" not in str(exc):
+                    raise
+                results = self.broker.submit_trades(plan.trades)
+                for trade, result in zip(plan.trades, results, strict=True):
+                    order_status_callback(trade, result)
         return replace(plan, execution_results=results)
 
     def run(self, session_date: str, run_id: str) -> RebalanceOutcome:
