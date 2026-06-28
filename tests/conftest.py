@@ -25,9 +25,9 @@ class FakeBroker:
     def positions(self) -> list:
         return list(self._positions)
 
-    def submit_trades(self, trades: list[ProposedTrade]) -> list[OrderResult]:
+    def submit_trades(self, trades: list[ProposedTrade], status_callback=None) -> list[OrderResult]:
         self.submitted = list(trades)
-        return [
+        results = [
             OrderResult(
                 ticker=trade.ticker,
                 side=trade.side,
@@ -40,3 +40,7 @@ class FakeBroker:
             )
             for index, trade in enumerate(trades)
         ]
+        if status_callback is not None:
+            for trade, result in zip(trades, results, strict=True):
+                status_callback(trade, result)
+        return results
