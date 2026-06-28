@@ -1,7 +1,8 @@
 import pytest
+from pydantic import ValidationError
+
 from poma.config import Settings
 from poma.portfolio import CASH_STRATEGY_NAME, CURRENT_STRATEGY_NAME
-from pydantic import ValidationError
 
 
 def test_telegram_config_is_required() -> None:
