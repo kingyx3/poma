@@ -222,5 +222,10 @@ def test_auto_cicd_deploys_dev_on_pr_stg_on_merge_and_prd_on_release() -> None:
 def test_auto_cicd_gateway_actions_per_environment() -> None:
     workflow = AUTO_CICD_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "action: configure-paper" in workflow
-    assert "action: configure-live" in workflow
+    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
+    stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
+    prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
+
+    assert "action: restart" in dev_gateway
+    assert "action: configure-paper" in stg_gateway
+    assert "action: configure-live" in prd_gateway
