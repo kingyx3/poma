@@ -143,12 +143,13 @@ def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
     assert block.index(validate) < block.index(restart)
     assert block.index(restart) < block.index(wait)
     assert "POMA_CONFIGURE_IBC_RESTART=0" in block
+    assert "Pre-build poma Docker image" not in block
 
 
 def test_gateway_ops_has_explicit_bounded_2fa_timeout() -> None:
     workflow = _workflow()
 
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 900" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "Waiting up to ${timeout_seconds}s for broker auth and Gateway API readiness" in workflow
     assert "Broker auth or Gateway API readiness timed out" in workflow
     assert "local deadline=$((SECONDS + timeout_seconds))" in workflow
@@ -194,9 +195,9 @@ def test_gateway_runner_is_hardened_after_render() -> None:
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
     workflow = _workflow()
 
-    assert "timeout-minutes: 35" in workflow
+    assert "timeout-minutes: 25" in workflow
     assert "timeout --kill-after=30s" in workflow
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 900" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "run_remote" in workflow
 
