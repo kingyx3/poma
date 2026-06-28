@@ -168,4 +168,9 @@ class RebalanceEngine:
         if blocked:
             return RebalanceOutcome(plan=plan, executed=False, blocked=True, status="blocked")
         plan = self.execute(plan)
-        return RebalanceOutcome(plan=plan, executed=True, blocked=False, status=self.execution_status(plan.execution_results))
+        return RebalanceOutcome(
+            plan=plan,
+            executed=True,
+            blocked=False,
+            status=self.execution_status(plan.execution_results),
+        )
