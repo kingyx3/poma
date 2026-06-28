@@ -133,11 +133,14 @@ def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None
 def test_gateway_runner_is_hardened_after_render() -> None:
     ensure = ENSURE_HELPER.read_text(encoding="utf-8")
 
+    assert "poma-ibc-gateway-engine" in ensure
+    assert "gatewaystart.sh -inline" in ensure
+    assert "Gateway process or API listener detected" in ensure
     assert "refusing raw Gateway fallback" in ensure
     assert "require_command java" in ensure
     assert "MemoryMax" in ensure
     assert "gatewaystart-wrapper.log" in ensure
-    assert "gatewaystart.sh exited with status" in ensure
+    assert "gatewaystart.sh exited before Java/Gateway stayed alive" in ensure
 
 
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
