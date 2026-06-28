@@ -131,7 +131,10 @@ def test_final_order_status_alert_message_includes_status_and_fill_details() -> 
         ),
     )
 
-    assert message == "2026-06-29: order status changed — Filled BUY AAPL filled=5/5 ($980) avg=196.00 id=123"
+    assert message == (
+        "2026-06-29: order status changed — Filled BUY AAPL "
+        "filled=5/5 ($980) avg=196.00 id=123"
+    )
 
 
 def test_order_status_alert_includes_diagnostic_message() -> None:
@@ -165,7 +168,10 @@ def test_dry_run_broker_emits_status_callback() -> None:
     )
     captured: list[OrderResult] = []
 
-    results = DryRunBroker().submit_trades([trade], status_callback=lambda _trade, result: captured.append(result))
+    results = DryRunBroker().submit_trades(
+        [trade],
+        status_callback=lambda _trade, result: captured.append(result),
+    )
 
     assert results[0].status == "dry_run"
     assert [result.status for result in captured] == ["dry_run"]
@@ -176,7 +182,11 @@ def test_engine_marks_cancelled_orders_as_completed_with_issues() -> None:
         def positions(self) -> list:
             return []
 
-        def submit_trades(self, trades: list[ProposedTrade], status_callback=None) -> list[OrderResult]:
+        def submit_trades(
+            self,
+            trades: list[ProposedTrade],
+            status_callback=None,
+        ) -> list[OrderResult]:
             results = [
                 OrderResult(
                     ticker=trade.ticker,
