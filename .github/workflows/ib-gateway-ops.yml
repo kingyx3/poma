@@ -166,12 +166,57 @@ jobs:
             printf '%s' "${value:-${default}}"
           }
 
+          default_next_action() {
+            local stage="$1"
+            case "${stage}" in
+              no-systemd-service)
+                echo "Run IB Gateway Ops repair so the systemd unit and runtime helpers are installed."
+                ;;
+              service-not-active)
+                echo "Inspect systemctl status and journalctl output for the ibgateway.service start failure."
+                ;;
+              service-active-no-xvfb)
+                echo "Inspect Xvfb logs, remove stale display locks, and rerun runtime repair."
+                ;;
+              headless-gui-incomplete)
+                echo "Inspect fluxbox/x11vnc sidecar logs under /var/log/poma/ibgateway and rerun repair."
+                ;;
+              ibc-not-running)
+                echo "Verify /opt/ibc/gatewaystart.sh is executable and the configured runner refuses raw Gateway fallback."
+                ;;
+              java-gateway-not-running)
+                echo "Inspect ibgateway.service journal and Gateway logs; Java/Gateway exited before broker login."
+                ;;
+              gateway-log-error)
+                echo "Review the redacted fatal IBC/Gateway log tail below and fix the reported launcher/login error."
+                ;;
+              gateway-running-no-login-progress-timeout)
+                echo "Inspect the headless Gateway screen through IAP/VNC and fix the blocking login/window state."
+                ;;
+              login-reached-2fa-pending)
+                echo "Approve the broker mobile authentication prompt before the workflow timeout."
+                ;;
+              login-reached-awaiting-auth)
+                echo "Wait for 2FA/API readiness unless a later diagnostic reports a fatal login error."
+                ;;
+              api-socket-open)
+                echo "Run the real ib_insync managedAccounts handshake."
+                ;;
+              *)
+                echo "Inspect the collected systemd, process, listener, and Gateway/IBC diagnostics below."
+                ;;
+            esac
+          }
+
           print_compact_startup_diagnosis() {
             local stage action reason next_action
             stage="$(compact_value STARTUP_STAGE startup-check-missing-stage)"
             action="$(compact_value STARTUP_ACTION fail)"
             reason="$(compact_value STARTUP_REASON 'startup-check returned failure without printing STARTUP_STAGE/STARTUP_REASON; inspect full diagnostics below.')"
-            next_action="$(compact_value NEXT_ACTION 'Fix startup-check output and inspect the collected systemd, process, listener, and Gateway/IBC diagnostics.')"
+            next_action="$(compact_value NEXT_ACTION '')"
+            if [ -z "${next_action}" ]; then
+              next_action="$(default_next_action "${stage}")"
+            fi
             echo "STARTUP_STAGE=${stage}"
             echo "STARTUP_ACTION=${action}"
             echo "STARTUP_REASON=${reason}"
