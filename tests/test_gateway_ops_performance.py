@@ -74,6 +74,7 @@ def test_gateway_startup_failure_prints_actionable_compact_diagnosis() -> None:
 
     assert "startup_check_file=\"$(mktemp)\"" in workflow
     assert "print_compact_startup_diagnosis" in workflow
+    assert "default_next_action" in workflow
     assert "STARTUP_STAGE=${stage}" in workflow
     assert "STARTUP_ACTION=${action}" in workflow
     assert "STARTUP_REASON=${reason}" in workflow
@@ -81,6 +82,8 @@ def test_gateway_startup_failure_prints_actionable_compact_diagnosis() -> None:
     assert "Compact diagnosis follows" in workflow
     assert "startup-check-missing-stage" in workflow
     assert "IB Gateway startup classification" in workflow
+    assert "Inspect Xvfb logs, remove stale display locks" in workflow
+    assert "Verify /opt/ibc/gatewaystart.sh is executable" in workflow
 
 
 def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
