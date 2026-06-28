@@ -1,5 +1,6 @@
 import pandas as pd
 
+from poma.portfolio import CASH_STRATEGY_NAME, CURRENT_STRATEGY_NAME, build_strategy_capital_plan
 from poma.strategy import (
     build_equal_weight_targets,
     deduplicate_share_classes,
@@ -137,9 +138,15 @@ def test_select_by_combined_factor_does_not_double_count_duplicate_share_classes
 
 
 def test_build_equal_weight_targets_allocates_evenly() -> None:
-    selected = pd.DataFrame([{"ticker": t, "market_cap": cap} for t, cap in
-                             [("A", 900), ("B", 100), ("C", 50), ("D", 10)]])
-    targets = build_equal_weight_targets(selected, 1_000, 0.0, 0.50)
+    selected = pd.DataFrame(
+        [
+            {"ticker": "A", "market_cap": 900},
+            {"ticker": "B", "market_cap": 100},
+            {"ticker": "C", "market_cap": 50},
+            {"ticker": "D", "market_cap": 10},
+        ]
+    )
+    targets = build_equal_weight_targets(selected, 1_000, 0.50)
     # Equal weighting ignores the (very different) market caps: every name gets 1/N.
     assert all(abs(t.target_weight - 0.25) < 1e-9 for t in targets)
     assert all(abs(t.target_notional - 250) < 1e-9 for t in targets)
@@ -148,19 +155,26 @@ def test_build_equal_weight_targets_allocates_evenly() -> None:
 def test_build_equal_weight_targets_enforces_cap_and_holds_remainder_as_cash() -> None:
     selected = pd.DataFrame([{"ticker": t, "market_cap": 100} for t in "ABCD"])
     # 1/4 = 0.25 each would exceed the 0.10 cap, so the cap binds on every name and the
-    # uninvested remainder stays in cash rather than concentrating.
-    targets = build_equal_weight_targets(selected, 1_000, 0.0, 0.10)
+    # strategy-sleeve remainder stays in cash rather than concentrating.
+    targets = build_equal_weight_targets(selected, 1_000, 0.10)
     assert all(abs(t.target_weight - 0.10) < 1e-9 for t in targets)
     assert sum(t.target_weight for t in targets) <= 0.40 + 1e-9
 
 
-def test_build_equal_weight_targets_respects_cash_buffer() -> None:
+def test_cash_is_reserved_by_portfolio_allocation_not_target_haircut() -> None:
     selected = pd.DataFrame(
         [
             {"ticker": "A", "market_cap": 100},
             {"ticker": "B", "market_cap": 100},
         ]
     )
-    targets = build_equal_weight_targets(selected, 1_000, 0.02, 0.60)
+    capital_plan = build_strategy_capital_plan(
+        1_000,
+        f"{CURRENT_STRATEGY_NAME}=0.98,{CASH_STRATEGY_NAME}=0.02",
+    )
+    sleeve = capital_plan.capital_for(CURRENT_STRATEGY_NAME)
+    targets = build_equal_weight_targets(selected, sleeve.capital_usd, 0.60)
+
     assert sum(t.target_notional for t in targets) == 980
+    assert capital_plan.capital_for(CASH_STRATEGY_NAME).capital_usd == 20
     assert all(t.target_weight <= 0.60 for t in targets)
