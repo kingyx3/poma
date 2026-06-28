@@ -28,6 +28,7 @@ def test_build_plan_sizes_current_strategy_from_allocated_sleeve() -> None:
     plan = _engine(
         PORTFOLIO_VALUE_USD=10_000,
         STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.5",
+        MAX_POSITION_PCT=1.0,
     ).build_plan("session", "rebalance-x")
 
     assert plan.portfolio_value_usd == 10_000
