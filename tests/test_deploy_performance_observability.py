@@ -29,7 +29,7 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
 
     expected_snippets = (
         "timeout --kill-after=30s 2m python ops/scripts/render_env.py",
-        "timeout --kill-after=30s 5m pip install -e .",
+        "timeout --kill-after=30s 2m pip install -e .",
         "timeout --kill-after=30s 5m python ops/scripts/validate_data_provider.py",
         "timeout --kill-after=30s 2m gcloud config set project",
         "timeout --kill-after=30s 5m terraform -chdir=infra/gcp-free-tier init",
