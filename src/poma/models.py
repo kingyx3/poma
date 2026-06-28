@@ -55,3 +55,9 @@ class RebalancePlan:
     trades: list[ProposedTrade]
     execution_results: list[OrderResult]
     warnings: list[str]
+    portfolio_value_usd: float = 0.0
+    strategy_name: str = ""
+    strategy_allocation_pct: float = 1.0
+    strategy_capital_usd: float = 0.0
+    total_allocated_pct: float = 1.0
+    total_allocated_usd: float = 0.0
