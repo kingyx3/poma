@@ -196,7 +196,7 @@ jobs:
     uses: ./.github/workflows/ib-gateway-ops.yml
     with:
       deploy_environment: dev
-      action: restart
+      action: configure-paper
       log_lines: 200
     secrets: inherit
 
