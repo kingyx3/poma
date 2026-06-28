@@ -155,7 +155,7 @@ old_marked = '''if [ -s "${HOME}/ibc/config.ini" ]; then
 fi
 '''
 new = '''if [ -s "${HOME}/ibc/config.ini" ]; then
-  # Config exists but /opt/ibc/gatewaystart.sh must remain the authenticated IBC path.
+  # Config exists but /opt/ibc/gatewaystart.sh is missing or non-executable must fail.
   # poma-ibc-gateway-engine supervises gatewaystart.sh -inline and refuses raw Gateway fallback.
   exec /usr/local/bin/poma-ibc-gateway-engine
 fi
