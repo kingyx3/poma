@@ -69,6 +69,20 @@ def test_gateway_socket_poll_is_errexit_safe() -> None:
     assert "set +e\n              timed \"Socket/service poll attempt" not in workflow
 
 
+def test_gateway_startup_failure_prints_actionable_compact_diagnosis() -> None:
+    workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "startup_check_file=\"$(mktemp)\"" in workflow
+    assert "print_compact_startup_diagnosis" in workflow
+    assert "STARTUP_STAGE=${stage}" in workflow
+    assert "STARTUP_ACTION=${action}" in workflow
+    assert "STARTUP_REASON=${reason}" in workflow
+    assert "NEXT_ACTION=${next_action}" in workflow
+    assert "Compact diagnosis follows" in workflow
+    assert "startup-check-missing-stage" in workflow
+    assert "IB Gateway startup classification" in workflow
+
+
 def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
     workflow = GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
     block = workflow.split("configure-paper|configure-live)", 1)[1]
