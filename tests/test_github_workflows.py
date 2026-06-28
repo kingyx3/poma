@@ -226,6 +226,16 @@ def test_auto_cicd_gateway_actions_per_environment() -> None:
     stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
     prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
 
-    assert "action: restart" in dev_gateway
+    # Dev runs configure-paper (requires IBKR 2FA) — same as stg, per ADR 0002.
+    assert "action: configure-paper" in dev_gateway
+    assert "action: restart" not in dev_gateway
     assert "action: configure-paper" in stg_gateway
     assert "action: configure-live" in prd_gateway
+
+
+def test_adr_0002_dev_configure_paper_requires_2fa_exists() -> None:
+    adr = REPO_ROOT / "docs/adr/0002-dev-gateway-configure-paper-requires-2fa.md"
+    assert adr.exists(), "ADR 0002 must document that dev runs configure-paper with 2FA"
+    text = adr.read_text(encoding="utf-8")
+    assert "configure-paper" in text
+    assert "2FA" in text or "2fa" in text.lower()
