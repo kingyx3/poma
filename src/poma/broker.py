@@ -109,15 +109,19 @@ class IbkrBroker:
 
     def _connect(self) -> IB:
         ib = IB()
-        ib.connect(
-            self.settings.ibkr_host,
-            self.settings.ibkr_port,
-            clientId=self.settings.ibkr_client_id,
-            account=self.settings.ibkr_account or "",
-            timeout=IBKR_CONNECT_TIMEOUT_SECONDS,
-        )
-        ib.RequestTimeout = IBKR_CONNECT_TIMEOUT_SECONDS
-        self._assert_connected(ib)
+        try:
+            ib.connect(
+                self.settings.ibkr_host,
+                self.settings.ibkr_port,
+                clientId=self.settings.ibkr_client_id,
+                account=self.settings.ibkr_account or "",
+                timeout=IBKR_CONNECT_TIMEOUT_SECONDS,
+            )
+            ib.RequestTimeout = IBKR_CONNECT_TIMEOUT_SECONDS
+            self._assert_connected(ib)
+        except Exception:
+            ib.disconnect()
+            raise
         return ib
 
     def _assert_connected(self, ib: IB) -> None:
@@ -173,10 +177,13 @@ class IbkrBroker:
     ) -> list[OrderResult]:
         if not trades:
             return []
+        ib: IB | None = None
         try:
             ib = self._connect()
             self._assert_ready_for_orders(ib)
         except Exception as exc:  # noqa: BLE001 - normalize connection/auth failures in reports
+            if ib is not None:
+                ib.disconnect()
             return self._unsubmitted_results(
                 trades,
                 status_callback,
