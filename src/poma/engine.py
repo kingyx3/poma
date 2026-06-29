@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-from poma.broker import Broker, OrderStatusCallback, build_broker, order_results_have_issues
+from poma.broker import (
+    Broker,
+    OrderStatusCallback,
+    build_broker,
+    order_results_have_issues,
+    order_results_have_no_accepted_orders,
+)
 from poma.config import Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
 from poma.history import CapSnapshotHistory
@@ -24,6 +30,7 @@ from poma.strategy import (
 BLOCK_MARKER = "block execution"
 COMPLETED_STATUS = "completed"
 COMPLETED_WITH_ORDER_ISSUES_STATUS = "completed_with_order_issues"
+NO_ORDERS_ACCEPTED_STATUS = "no_orders_accepted"
 
 
 @dataclass(frozen=True)
@@ -156,6 +163,8 @@ class RebalanceEngine:
         return replace(plan, execution_results=results)
 
     def execution_status(self, results: list[OrderResult]) -> str:
+        if order_results_have_no_accepted_orders(results):
+            return NO_ORDERS_ACCEPTED_STATUS
         if order_results_have_issues(results):
             return COMPLETED_WITH_ORDER_ISSUES_STATUS
         return COMPLETED_STATUS
