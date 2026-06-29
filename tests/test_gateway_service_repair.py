@@ -189,3 +189,12 @@ def test_ops_workflow_waits_for_gateway_socket_and_trading_readiness() -> None:
         "Broker auth, Gateway API, or trading permission readiness timed out",
     ):
         assert snippet in runner
+
+
+def test_ops_workflow_can_manually_clear_rebalance_state() -> None:
+    workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
+    runner = GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
+
+    assert "clear-rebalance-state" in workflow
+    assert "/opt/poma/state/rebalance_state.json" in runner
+    assert "next eligible monitor run may rebalance again" in runner
