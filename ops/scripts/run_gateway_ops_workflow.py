@@ -185,6 +185,13 @@ def main() -> int:
         return remote("sudo systemctl restart ibgateway", timeout=180)
     if action == "logs":
         return remote(f"sudo journalctl -u ibgateway -n {log_lines} --no-pager", timeout=180)
+    if action == "clear-rebalance-state":
+        return remote(
+            "sudo install -d -o poma -g poma /opt/poma/state && "
+            "sudo rm -f /opt/poma/state/rebalance_state.json && "
+            "echo 'Cleared /opt/poma/state/rebalance_state.json; next eligible monitor run may rebalance again.'",
+            timeout=180,
+        )
     if action == "verify-socket":
         if repair_runtime() != 0:
             return 1
