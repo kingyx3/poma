@@ -1,0 +1,79 @@
+name: Clear Rebalance Run State
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: Dev/stg GitHub Environment whose VM rebalance run-state should be cleared.
+        required: true
+        type: choice
+        options: [dev, stg]
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: poma-clear-rebalance-state-${{ inputs.deploy_environment }}
+  cancel-in-progress: false
+
+jobs:
+  clear-state:
+    name: Clear rebalance run state (${{ inputs.deploy_environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.deploy_environment }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Resolve generated deployment config
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source ops/scripts/resolve_gcp_deploy_env.sh
+
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, zone=${GCP_ZONE}, vm=${GCP_VM_NAME}"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          create_credentials_file: true
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Clear VM rebalance run-state
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}"
+          ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+
+          timeout --kill-after=30s 5m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command '
+            set -euo pipefail
+            sudo install -d -o poma -g poma /opt/poma/state
+            if [ -f /opt/poma/state/rebalance_state.json ]; then
+              echo "Clearing existing rebalance state file."
+            else
+              echo "No existing rebalance state file found."
+            fi
+            sudo rm -f /opt/poma/state/rebalance_state.json
+            sudo chown -R poma:poma /opt/poma/state
+            echo "Cleared /opt/poma/state/rebalance_state.json"
+          '
+
+      - name: Notify Telegram (clear state result)
+        if: ${{ always() }}
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: >-
+            POMA[${{ inputs.deploy_environment }}] clear-rebalance-state
+            ${{ job.status }} — removed /opt/poma/state/rebalance_state.json

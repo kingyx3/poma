@@ -86,7 +86,13 @@ def test_gateway_configure_requires_fresh_2fa_only_for_live_before_api_handshake
     assert "Fresh live 2FA challenge wait" in runner
     assert "No fresh IBKR mobile 2FA evidence appeared" in runner
     assert "poma ibkr-check" in runner
-    assert runner.index("Fresh live 2FA challenge wait") < runner.index("return api_ready(mode, required=True)", runner.index("Fresh live 2FA challenge wait"))
+
+    wait_start = runner.index("Fresh live 2FA challenge wait")
+    api_ready_after_wait = runner.index(
+        "return api_ready(mode, required=True)",
+        wait_start,
+    )
+    assert wait_start < api_ready_after_wait
 
 
 def test_gateway_runner_restarts_after_config_write_before_mode_specific_readiness() -> None:

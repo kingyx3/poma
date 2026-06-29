@@ -197,6 +197,8 @@ def main() -> int:
     if timed("Validate IBC configuration", lambda: remote(f"sudo poma-diagnose-ibgateway validate --mode {mode}", timeout=120)) != 0:
         return 1
     timed("Clear stale Gateway auth logs", lambda: remote("sudo poma-wait-ibgateway-2fa --truncate-logs-only", timeout=120))
+    print("Force fresh ibgateway login after IBC configuration")
+    # Fresh 2FA challenge wait is enforced for live configure only; paper skips it.
     if timed("Restart ibgateway after IBC configuration", lambda: remote("sudo systemctl restart ibgateway", timeout=240)) != 0:
         diagnose()
         return 1
