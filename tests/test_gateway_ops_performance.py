@@ -50,7 +50,7 @@ def test_gateway_runtime_repair_installs_all_helpers_idempotently() -> None:
     runner = _runner()
 
     for snippet in (
-        "gateway_runtime_revision",
+        "revision = helper_revision()",
         "helper_revision",
         "/var/lib/poma/ib-gateway-runtime-revision",
         "ops/scripts/diagnose_ib_gateway_runtime.py",
