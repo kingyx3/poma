@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -12,11 +12,17 @@ from poma.models import CurrentPosition, OrderResult, ProposedTrade
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 SUCCESS_STATUSES = {"Filled"}
+BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
 HEALTH_CLIENT_ID_OFFSET = 90
+IBKR_CONNECT_TIMEOUT_SECONDS = 20.0
 OrderStatusCallback = Callable[[ProposedTrade, OrderResult], None]
+
+
+class BrokerUnavailable(RuntimeError):
+    """Raised when the IBKR API is not ready enough to safely submit orders."""
 
 
 @dataclass(frozen=True)
@@ -108,8 +114,33 @@ class IbkrBroker:
             self.settings.ibkr_port,
             clientId=self.settings.ibkr_client_id,
             account=self.settings.ibkr_account or "",
+            timeout=IBKR_CONNECT_TIMEOUT_SECONDS,
         )
+        ib.RequestTimeout = IBKR_CONNECT_TIMEOUT_SECONDS
+        self._assert_connected(ib)
         return ib
+
+    def _assert_connected(self, ib: IB) -> None:
+        if not ib.isConnected():
+            raise BrokerUnavailable(
+                f"IBKR API is not connected at {self.settings.ibkr_host}:{self.settings.ibkr_port}"
+            )
+
+    def _assert_ready_for_orders(self, ib: IB) -> None:
+        """Validate the API handshake before creating any order objects.
+
+        A listening socket is not enough; Gateway must be authenticated, expose the configured
+        account, and answer a lightweight server-time request. Failing here is safe because no
+        order has been accepted by IBKR yet.
+        """
+        self._assert_connected(ib)
+        accounts = [account for account in ib.managedAccounts() if account]
+        if self.settings.ibkr_account and self.settings.ibkr_account not in accounts:
+            raise BrokerUnavailable(
+                f"configured IBKR_ACCOUNT={self.settings.ibkr_account} not in {accounts}"
+            )
+        ib.reqCurrentTime()
+        self._assert_connected(ib)
 
     def positions(self) -> list[CurrentPosition]:
         ib = self._connect()
@@ -142,16 +173,21 @@ class IbkrBroker:
     ) -> list[OrderResult]:
         if not trades:
             return []
-        ib = self._connect()
+        try:
+            ib = self._connect()
+            self._assert_ready_for_orders(ib)
+        except Exception as exc:  # noqa: BLE001 - normalize connection/auth failures in reports
+            return self._unsubmitted_results(
+                trades,
+                status_callback,
+                f"broker unavailable before submitting orders; no orders submitted: {exc}",
+            )
+
         results: list[OrderResult] = []
         try:
-            for proposed in trades:
+            for index, proposed in enumerate(trades):
                 try:
-                    self._emit_status(
-                        status_callback,
-                        proposed,
-                        _manual_result(proposed, "Created", "order created"),
-                    )
+                    self._assert_connected(ib)
                     contract = Stock(proposed.ticker, "SMART", "USD")
                     order = self._build_order(proposed)
                     if self.settings.ibkr_account:
@@ -183,11 +219,33 @@ class IbkrBroker:
                         self._emit_status(status_callback, proposed, result)
                     results.append(result)
                 except Exception as exc:  # noqa: BLE001 - report per-order failures without hiding context
-                    result = _manual_result(proposed, "Failed", str(exc))
+                    if _looks_like_connection_failure(ib, exc):
+                        results.extend(
+                            self._unsubmitted_results(
+                                trades[index:],
+                                status_callback,
+                                f"broker connection lost before order acceptance; no further "
+                                f"orders submitted: {exc}",
+                            )
+                        )
+                        break
+                    result = _manual_result(proposed, "Failed", f"order not accepted by broker: {exc}")
                     self._emit_status(status_callback, proposed, result)
                     results.append(result)
         finally:
             ib.disconnect()
+        return results
+
+    def _unsubmitted_results(
+        self,
+        trades: Sequence[ProposedTrade],
+        status_callback: OrderStatusCallback | None,
+        message: str,
+    ) -> list[OrderResult]:
+        results = [_manual_result(trade, BROKER_UNAVAILABLE_STATUS, message) for trade in trades]
+        if status_callback is not None:
+            for trade, result in zip(trades, results, strict=True):
+                status_callback(trade, result)
         return results
 
     @staticmethod
@@ -280,6 +338,18 @@ class IbkrBroker:
         if trade.limit_price is None:
             raise ValueError(f"missing limit price for {trade.ticker}")
         return LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
+
+
+def _looks_like_connection_failure(ib: IB, exc: Exception) -> bool:
+    if isinstance(exc, BrokerUnavailable):
+        return True
+    try:
+        if not ib.isConnected():
+            return True
+    except Exception:  # noqa: BLE001 - an unreadable connection state is also unsafe
+        return True
+    message = str(exc).lower()
+    return "not connected" in message or "connection" in message
 
 
 def _manual_result(proposed: ProposedTrade, status: str, message: str | None = None) -> OrderResult:
