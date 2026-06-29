@@ -11,8 +11,10 @@ from poma.config import OrderType, Settings, TradingMode
 from poma.models import CurrentPosition, OrderResult, ProposedTrade
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
-SUCCESS_STATUSES = {"Filled"}
+ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
+SUCCESS_STATUSES = ACCEPTED_STATUSES
 BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
+ORDER_NOT_ACCEPTED_STATUS = "OrderNotAccepted"
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
@@ -191,6 +193,7 @@ class IbkrBroker:
             )
 
         results: list[OrderResult] = []
+        consecutive_acceptance_failures = 0
         try:
             for index, proposed in enumerate(trades):
                 try:
@@ -210,21 +213,35 @@ class IbkrBroker:
                             message="order submitted",
                         ),
                     )
-                    last_status, timed_out = self._wait_for_terminal_status(
+                    result = self._wait_for_acceptance_or_terminal_status(
                         ib,
                         submitted,
                         proposed,
                         status_callback=status_callback,
                     )
-                    final_message = None
-                    if timed_out:
-                        final_message = "order did not reach terminal status before timeout"
-                        if self.settings.cancel_stale_orders:
-                            final_message += "; cancel requested"
-                    result = self._order_result(proposed, submitted, message=final_message)
-                    if result.status != last_status or final_message:
-                        self._emit_status(status_callback, proposed, result)
                     results.append(result)
+
+                    if result.status in ACCEPTED_STATUSES or result.filled > 0:
+                        consecutive_acceptance_failures = 0
+                        continue
+
+                    consecutive_acceptance_failures += 1
+                    if (
+                        consecutive_acceptance_failures
+                        >= self.settings.max_consecutive_order_acceptance_failures
+                    ):
+                        remaining = trades[index + 1 :]
+                        if remaining:
+                            results.extend(
+                                self._unsubmitted_results(
+                                    remaining,
+                                    status_callback,
+                                    "stopped after "
+                                    f"{consecutive_acceptance_failures} consecutive orders were "
+                                    "not accepted by IBKR; no further orders submitted",
+                                )
+                            )
+                        break
                 except Exception as exc:  # noqa: BLE001 - report per-order failures without hiding context
                     if _looks_like_connection_failure(ib, exc):
                         results.extend(
@@ -264,14 +281,20 @@ class IbkrBroker:
         if callback is not None:
             callback(proposed, result)
 
-    def _wait_for_terminal_status(
+    def _wait_for_acceptance_or_terminal_status(
         self,
         ib: IB,
         trade: Trade,
         proposed: ProposedTrade,
         *,
         status_callback: OrderStatusCallback | None = None,
-    ) -> tuple[str, bool]:
+    ) -> OrderResult:
+        """Wait only until IBKR accepts the order or proves it was not accepted.
+
+        A working ``Submitted``/``PreSubmitted`` limit order is already accepted by IBKR. The
+        rebalance run should not cancel it merely because it has not filled within the process
+        timeout; subsequent broker/order-status telemetry can report final fills or cancellations.
+        """
         deadline = time.monotonic() + self.settings.order_status_timeout_seconds
         last_status = trade.orderStatus.status or "Submitted"
         while time.monotonic() < deadline:
@@ -283,11 +306,16 @@ class IbkrBroker:
                     proposed,
                     self._order_result(proposed, trade, fallback_status=status),
                 )
+            if status in ACCEPTED_STATUSES:
+                return self._order_result(proposed, trade, fallback_status=status)
             if trade.isDone() or status in DONE_STATUSES:
-                return status, False
+                message = None
+                if status != "Filled" and trade.orderStatus.filled == 0:
+                    message = _trade_log_message(trade) or "order reached terminal status before acceptance"
+                return self._order_result(proposed, trade, fallback_status=status, message=message)
             ib.sleep(1.0)
 
-        timeout_message = "order did not reach terminal status before timeout"
+        timeout_message = "order did not reach broker accepted/working status before timeout"
         if self.settings.cancel_stale_orders:
             ib.cancelOrder(trade.order)
             cancel_message = f"{timeout_message}; cancel requested"
@@ -313,9 +341,20 @@ class IbkrBroker:
                         self._order_result(proposed, trade, fallback_status=status),
                     )
                 if trade.isDone() or status in DONE_STATUSES:
-                    return status, False
+                    return self._order_result(
+                        proposed,
+                        trade,
+                        fallback_status=status,
+                        message=cancel_message,
+                    )
                 ib.sleep(1.0)
-        return last_status, True
+            timeout_message = cancel_message
+        return self._order_result(
+            proposed,
+            trade,
+            fallback_status=ORDER_NOT_ACCEPTED_STATUS,
+            message=timeout_message,
+        )
 
     def _order_result(
         self,
@@ -327,6 +366,9 @@ class IbkrBroker:
     ) -> OrderResult:
         status = trade.orderStatus
         final_status = status.status or fallback_status
+        diagnostic = message
+        if diagnostic is None and final_status not in ACCEPTED_STATUSES:
+            diagnostic = _trade_log_message(trade)
         return OrderResult(
             ticker=proposed.ticker,
             side=proposed.side,
@@ -336,7 +378,7 @@ class IbkrBroker:
             status=final_status,
             filled=float(status.filled or 0.0),
             average_fill_price=_none_if_zero(status.avgFillPrice),
-            message=message,
+            message=diagnostic,
         )
 
     def _build_order(self, trade: ProposedTrade) -> MarketOrder | LimitOrder:
@@ -357,6 +399,27 @@ def _looks_like_connection_failure(ib: IB, exc: Exception) -> bool:
         return True
     message = str(exc).lower()
     return "not connected" in message or "connection" in message
+
+
+def _trade_log_message(trade: Trade) -> str | None:
+    messages: list[str] = []
+    for entry in getattr(trade, "log", []) or []:
+        message = str(getattr(entry, "message", "") or "").strip()
+        if not message:
+            continue
+        status = str(getattr(entry, "status", "") or "").strip()
+        error_code = getattr(entry, "errorCode", None)
+        prefix = ""
+        if status:
+            prefix += f"{status}: "
+        if error_code not in (None, 0, "0"):
+            prefix += f"{error_code}: "
+        rendered = f"{prefix}{message}"
+        if rendered not in messages:
+            messages.append(rendered)
+    if not messages:
+        return None
+    return "; ".join(messages[-3:])
 
 
 def _manual_result(proposed: ProposedTrade, status: str, message: str | None = None) -> OrderResult:
@@ -381,6 +444,12 @@ def _none_if_zero(value: float | None) -> float | None:
 
 def order_results_have_issues(results: list[OrderResult]) -> bool:
     return any(result.status not in SUCCESS_STATUSES or result.message for result in results)
+
+
+def order_results_have_no_accepted_orders(results: list[OrderResult]) -> bool:
+    return bool(results) and all(
+        result.filled <= 0 and result.status not in SUCCESS_STATUSES for result in results
+    )
 
 
 def build_broker(settings: Settings) -> Broker:
