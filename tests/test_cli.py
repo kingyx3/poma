@@ -20,7 +20,7 @@ def test_portfolio_summary_reports_executed_fills() -> None:
     msg = _portfolio_summary("2026-06-26", plan, "completed", executed=True)
 
     assert "📊 Rebalance summary" in msg
-    assert "Status: Portfolio updated" in msg
+    assert "Status: Orders accepted/submitted" in msg
     assert "Orders: 2 total · 1 buy · 1 sell" in msg
     assert "• BUY AAPL: 10/10 shares @ $195.00 · $1,950 · Filled" in msg
     assert "• SELL NVDA: 5/5 shares @ $125.00 · $625 · Filled" in msg
