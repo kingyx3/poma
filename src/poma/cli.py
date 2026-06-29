@@ -29,7 +29,7 @@ _MAX_SUMMARY_LINES = 15
 
 def _portfolio_status_label(status: str, executed: bool) -> str:
     if status == "no_orders_accepted":
-        return "No orders accepted by IBKR — safe to retry"
+        return "No orders accepted by IBKR — session marked attempted"
     if executed and status == "completed_with_order_issues":
         return "Completed with order issues"
     if executed:
