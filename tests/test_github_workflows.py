@@ -7,6 +7,8 @@ DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 AUTO_CICD_WORKFLOW = REPO_ROOT / ".github/workflows/auto-cicd.yml"
 GATEWAY_DIAGNOSTICS_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
+GATEWAY_OPS_RUNNER = REPO_ROOT / "ops/scripts/run_gateway_ops_workflow.py"
+GATEWAY_WAIT_HELPER = REPO_ROOT / "ops/scripts/wait_ib_gateway_2fa.py"
 
 OLD_ACTION_SNIPPETS = (
     "google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f",
@@ -47,6 +49,8 @@ def test_deploy_workflow_routes_paper_to_paper_account() -> None:
 
 def test_gateway_ops_workflow_core_contract() -> None:
     workflow = _text(GATEWAY_OPS_WORKFLOW)
+    runner = _text(GATEWAY_OPS_RUNNER)
+    wait_helper = _text(GATEWAY_WAIT_HELPER)
     diagnostics = _text(GATEWAY_DIAGNOSTICS_HELPER)
 
     for snippet in (
@@ -55,16 +59,20 @@ def test_gateway_ops_workflow_core_contract() -> None:
         "poma-ib-gateway-ops-${{ inputs.deploy_environment }}",
         "configure-paper",
         "configure-live",
-        "poma-configure-ibc",
-        "repair_gateway_runtime",
-        "verify_api_handshake",
-        "poma ibkr-check",
-        "required_stable=2",
-        "Gateway API socket stability guard",
-        "auth_pending_stage",
+        "python3 ops/scripts/run_gateway_ops_workflow.py",
     ):
         assert snippet in workflow
 
+    for snippet in (
+        "poma-configure-ibc",
+        "repair_runtime",
+        "poma ibkr-check",
+        "Gateway API socket stability guard",
+        "poma-wait-ibgateway-2fa",
+    ):
+        assert snippet in runner
+
+    assert "Fresh 2FA startup classification" in wait_helper
     assert "systemctl status ibgateway" in diagnostics
     assert "journalctl" in diagnostics
     assert "/var/log/poma/ibgateway" in diagnostics
@@ -108,6 +116,8 @@ def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
     assert "ops/scripts/validate_runtime_config.py" in workflow
     assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
     assert "ops/scripts/repair_ib_gateway_runtime.py" in gateway_paths
+    assert "ops/scripts/wait_ib_gateway_2fa.py" in gateway_paths
+    assert "ops/scripts/run_gateway_ops_workflow.py" in gateway_paths
     assert ".github/workflows/deploy-gcp-vm.yml" not in gateway_paths
     assert ".github/workflows/auto-cicd.yml" not in gateway_paths
 

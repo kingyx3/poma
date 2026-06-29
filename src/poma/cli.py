@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from poma.broker import build_broker
+from poma.broker import BROKER_UNAVAILABLE_STATUS, build_broker
 from poma.config import TradingMode, get_settings
 from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
@@ -56,6 +56,18 @@ def _order_result_summary_line(result: OrderResult) -> str:
         f"{result.filled:g}/{result.quantity:g} shares"
         f"{average_fill} · ${result.notional:,.0f} · {result.status}{detail}"
     )
+
+
+def _broker_unavailable_alert(session_date: str, result: OrderResult) -> str:
+    """Single Telegram alert when IBKR is unavailable before order acceptance."""
+    lines = [
+        "🚫 Broker unavailable",
+        f"Session: {session_date}",
+        "Status: no orders accepted by IBKR for this batch",
+    ]
+    if result.message:
+        lines.append(f"Detail: {result.message}")
+    return "\n".join(lines)
 
 
 def _portfolio_summary(
@@ -181,7 +193,16 @@ def _run_rebalance(
         ),
     )
 
+    broker_unavailable_alert_sent = False
+
     def alert_order_status(_: ProposedTrade, result: OrderResult) -> None:
+        nonlocal broker_unavailable_alert_sent
+        if result.status == BROKER_UNAVAILABLE_STATUS:
+            if broker_unavailable_alert_sent:
+                return
+            broker_unavailable_alert_sent = True
+            send_alert(settings, _broker_unavailable_alert(session_date, result))
+            return
         send_alert(settings, order_status_alert(session_date, result))
 
     plan = engine.execute(plan, order_status_callback=alert_order_status)

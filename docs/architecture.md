@@ -77,7 +77,9 @@ plan rebalance
   -> validate target/risk/order guards
   -> dry_run: write report + Telegram summary only
   -> paper/live: execution-start Telegram alert
-      -> broker lifecycle callbacks for created/submitted/status/final/failure states
+      -> broker readiness check: connected, authenticated, configured account visible
+      -> if unavailable: deduplicated broker-unavailable alert + no order-created spam
+      -> if ready: submit orders and emit broker-accepted status/final/failure callbacks
       -> write final report
       -> Telegram final summary
       -> local state status: completed or completed_with_order_issues
@@ -108,5 +110,6 @@ reports/*.json                   # generated rebalance reports
 | Accidental live trading | `ALLOW_LIVE_TRADING=true` required for live mode. |
 | Missing deploy config | CI/CD `.env` rendering and runtime validation fail before deployment. |
 | Wrong IBKR account | Deploy validation requires an account id; `poma ibkr-check` verifies it appears in managed accounts. |
+| Gateway not authenticated or connection lost before order acceptance | Broker readiness and per-order connection guards mark the batch `BrokerUnavailable` without emitting misleading `Created` alerts. |
 | Order timeout/cancel/failure | Order lifecycle alert plus final `completed_with_order_issues` state. |
 | Public SSH exposure | Terraform only allows SSH through IAP TCP forwarding. |

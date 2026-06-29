@@ -6,7 +6,13 @@ import pandas as pd
 import pytest
 from conftest import make_settings
 
-from poma.broker import DryRunBroker, IbkrBroker, IbkrHealth, build_broker
+from poma.broker import (
+    BROKER_UNAVAILABLE_STATUS,
+    DryRunBroker,
+    IbkrBroker,
+    IbkrHealth,
+    build_broker,
+)
 from poma.config import Settings
 from poma.data import FixtureMarketDataClient
 from poma.engine import RebalanceEngine
@@ -181,6 +187,64 @@ def test_dry_run_broker_emits_status_callback() -> None:
 
     assert results[0].status == "dry_run"
     assert [result.status for result in captured] == ["dry_run"]
+
+
+def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeIB:
+        def __init__(self) -> None:
+            self.connected = False
+            self.place_order_calls = 0
+            self.RequestTimeout = None
+
+        def connect(self, *_args, **_kwargs) -> None:
+            self.connected = True
+
+        def isConnected(self) -> bool:  # noqa: N802 - mirrors ib_insync API
+            return self.connected
+
+        def managedAccounts(self) -> list[str]:  # noqa: N802 - mirrors ib_insync API
+            return ["DU1234567"]
+
+        def reqCurrentTime(self) -> str:  # noqa: N802 - mirrors ib_insync API
+            return "2026-06-29T13:40:00Z"
+
+        def placeOrder(self, *_args, **_kwargs):  # noqa: N802, ANN202 - ib_insync shape
+            self.place_order_calls += 1
+            self.connected = False
+            raise RuntimeError("Not connected")
+
+        def disconnect(self) -> None:
+            self.connected = False
+
+    instances: list[FakeIB] = []
+
+    def fake_ib() -> FakeIB:
+        instance = FakeIB()
+        instances.append(instance)
+        return instance
+
+    monkeypatch.setattr("poma.broker.IB", fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+    trades = [
+        ProposedTrade("NVDA", OrderSide.BUY, 0.5, 98.0, 196.0, 196.20, "rebalance"),
+        ProposedTrade("NVS", OrderSide.BUY, 0.6, 98.0, 160.0, 160.16, "rebalance"),
+    ]
+    captured: list[OrderResult] = []
+
+    results = broker.submit_trades(
+        trades,
+        status_callback=lambda _trade, result: captured.append(result),
+    )
+
+    assert instances[0].place_order_calls == 1
+    assert [result.status for result in results] == [BROKER_UNAVAILABLE_STATUS] * 2
+    assert [result.status for result in captured] == [BROKER_UNAVAILABLE_STATUS] * 2
+    assert all(result.order_id is None for result in results)
+    assert all(result.filled == 0 for result in results)
+    assert "Created" not in [result.status for result in captured]
+    assert "no further orders submitted" in str(results[0].message)
 
 
 def test_engine_marks_cancelled_orders_as_completed_with_issues() -> None:

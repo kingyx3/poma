@@ -2,173 +2,145 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
+GATEWAY_OPS_RUNNER = REPO_ROOT / "ops/scripts/run_gateway_ops_workflow.py"
 DIAG_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
 ENSURE_HELPER = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
+WAIT_HELPER = REPO_ROOT / "ops/scripts/wait_ib_gateway_2fa.py"
 
 
 def _workflow() -> str:
     return GATEWAY_OPS_WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
+def _runner() -> str:
+    return GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
+
+
+def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     workflow = _workflow()
 
+    assert "python3 ops/scripts/run_gateway_ops_workflow.py" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
+    assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
+    assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200" in workflow
+    assert "BROKER_LOGIN_ID" in workflow
+    assert "BROKER_LOGIN_VALUE" in workflow
+
+
+def test_gateway_runner_records_timing_summary_for_expensive_steps() -> None:
+    runner = _runner()
+
     for snippet in (
-        "### IB Gateway Ops timing",
-        "Total step time:",
-        "timed \"GCP project configuration\"",
-        "timed \"IAP SSH/runtime sentinel check\"",
-        "timed \"Upload gateway helper scripts\"",
-        "timed \"Runtime repair/install\"",
-        "timed \"Validate IBC configuration\"",
-        "timed \"Restart ibgateway after IBC configuration\"",
-        "timed \"Real API handshake\"",
+        "TIMING {label}",
+        "GCP project configuration",
+        "IAP SSH/runtime sentinel check",
+        "Upload gateway helper scripts",
+        "Runtime repair/install",
+        "Configure IBC auth values",
+        "Validate IBC configuration",
+        "Clear stale Gateway auth logs",
+        "Force fresh ibgateway login after IBC configuration",
+        "Fresh 2FA challenge wait",
         "Collect gateway diagnostics",
     ):
-        assert snippet in workflow
+        assert snippet in runner
 
 
-def test_gateway_runtime_repair_is_idempotent_and_fails_open() -> None:
-    workflow = _workflow()
+def test_gateway_runtime_repair_installs_all_helpers_idempotently() -> None:
+    runner = _runner()
 
     for snippet in (
-        "gateway_runtime_revision",
-        "sha256sum",
+        "revision = helper_revision()",
+        "helper_revision",
         "/var/lib/poma/ib-gateway-runtime-revision",
         "ops/scripts/diagnose_ib_gateway_runtime.py",
+        "ops/scripts/wait_ib_gateway_2fa.py",
         "ensure_ibgateway_service.sh",
         "poma-diagnose-ibgateway",
+        "poma-wait-ibgateway-2fa",
         "Gateway runtime helpers already current",
         "skipping repair/install",
         "Gateway runtime sentinel missing or stale; fail-open",
-        "sudo tee '${gateway_runtime_sentinel}'",
-        "test -x /usr/local/bin/poma-configure-ibc",
-        "test -x /usr/local/bin/poma-diagnose-ibgateway",
         "systemctl cat ibgateway",
     ):
-        assert snippet in workflow
+        assert snippet in runner
 
 
 def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
-    workflow = _workflow()
+    runner = _runner()
 
-    assert "poll_gateway_socket_once" in workflow
-    assert "if nc -z 127.0.0.1 7497; then exit 0" in workflow
-    assert "if ! systemctl is-active --quiet ibgateway; then exit 2" in workflow
-    assert "Socket/service poll attempt" in workflow
-    assert "Gateway API socket stability guard" in workflow
-
-
-def test_gateway_socket_poll_is_errexit_safe() -> None:
-    workflow = _workflow()
-
-    assert "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then" in workflow
-    assert "stable=$((stable + 1))" in workflow
-    assert "Gateway startup classification" in workflow
-    assert "set +e\n              timed \"Socket/service poll attempt" not in workflow
+    assert "nc -z 127.0.0.1 7497" in runner
+    assert "systemctl is-active --quiet ibgateway" in runner
+    assert "Gateway API socket stability guard" in runner
+    assert "stable >= 2" in runner
 
 
-def test_gateway_startup_failure_prints_actionable_compact_diagnosis() -> None:
-    workflow = _workflow()
+def test_gateway_configure_requires_fresh_2fa_before_api_handshake() -> None:
+    runner = _runner()
 
-    for snippet in (
-        "startup_check_file=\"$(mktemp)\"",
-        "print_compact_startup_diagnosis",
-        "STARTUP_STAGE=$(compact_value STARTUP_STAGE",
-        "STARTUP_ACTION=$(compact_value STARTUP_ACTION",
-        "STARTUP_REASON=$(compact_value STARTUP_REASON",
-        "NEXT_ACTION=Approve broker mobile authentication",
-        "startup-check-missing-stage",
-        "IB Gateway startup classification",
-    ):
-        assert snippet in workflow
+    assert "poma-wait-ibgateway-2fa --log-lines 80" in runner
+    assert "Fresh 2FA challenge wait" in runner
+    assert "No fresh IBKR mobile 2FA evidence appeared" in runner
+    assert "poma ibkr-check" in runner
+    assert runner.index("Fresh 2FA challenge wait") < runner.index("api_ready(mode, required=True)")
 
 
-def test_gateway_socket_requires_stable_guard_before_real_handshake() -> None:
-    workflow = _workflow()
-    wait_for_api = workflow.split("          wait_for_api_readiness() {", 1)[1].split(
-        "\n          }",
-        1,
-    )[0]
+def test_gateway_runner_restarts_after_config_write_before_waiting() -> None:
+    runner = _runner()
+
+    configure = "Configure IBC auth values"
+    validate = "Validate IBC configuration"
+    clear_logs = "Clear stale Gateway auth logs"
+    force_login = "Force fresh ibgateway login after IBC configuration"
+    fresh_2fa = "Fresh 2FA challenge wait"
+
+    for snippet in (configure, validate, clear_logs, force_login, fresh_2fa):
+        assert snippet in runner
+    assert runner.index(configure) < runner.index(validate)
+    assert runner.index(validate) < runner.index(clear_logs)
+    assert runner.index(clear_logs) < runner.index(force_login)
+    assert runner.index(force_login) < runner.index(fresh_2fa)
+    assert "POMA_CONFIGURE_IBC_RESTART=0" in runner
+
+
+def test_gateway_wait_helper_runs_locally_on_vm_and_prints_progress() -> None:
+    helper = WAIT_HELPER.read_text(encoding="utf-8")
 
     for snippet in (
-        "local deadline=$((SECONDS + timeout_seconds)) attempt=0 elapsed=0 stable=0",
-        "required_stable=2",
-        "stable_socket_polls_required=${required_stable}",
-        "Gateway API socket stability guard",
-        "Real API handshake",
+        "configure_requires_fresh_2fa=true",
+        "Fresh 2FA startup classification",
+        "Fresh IBKR mobile 2FA/login-auth evidence detected",
+        "Gateway API socket opened before fresh IBKR mobile 2FA evidence",
+        "No fresh IBKR mobile 2FA evidence appeared after configure",
+        "--truncate-logs-only",
+        "TWO_FA_HINTS",
     ):
-        assert snippet in wait_for_api
-
-    assert wait_for_api.index("Gateway API socket stability guard") < wait_for_api.index(
-        'timed "Real API handshake" verify_api_handshake'
-    )
-
-
-def test_gateway_pending_configure_path_is_explicit() -> None:
-    workflow = _workflow()
-
-    for snippet in (
-        "auth_pending_stage",
-        "login-reached-2fa-pending|login-reached-awaiting-auth",
-        "allow_auth_pending_success",
-        "Treating configure as auth-pending",
-        'wait_for_api_readiness "${mode}" 1 1',
-        "run verify-socket before paper/live trading",
-    ):
-        assert snippet in workflow
-
-
-def test_gateway_exit_writes_final_compact_diagnosis_to_job_log() -> None:
-    workflow = _workflow()
-
-    assert "Final compact Gateway diagnosis:" in workflow
-    assert "print_compact_startup_diagnosis" in workflow
-    assert "write_timing_summary" in workflow
-    assert "trap 'cleanup_input_file; echo \"Final compact Gateway diagnosis:\"" in workflow
-
-
-def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
-    workflow = _workflow()
-    block = workflow.split("configure-paper|configure-live)", 1)[1].split(";;", 1)[0]
-
-    configure = "timed \"Configure IBC auth values\""
-    validate = "timed \"Validate IBC configuration\""
-    restart = "timed \"Restart ibgateway after IBC configuration\""
-    wait = "wait_for_api_readiness"
-
-    for snippet in (configure, validate, restart, wait):
-        assert snippet in block
-    assert block.index(configure) < block.index(validate)
-    assert block.index(validate) < block.index(restart)
-    assert block.index(restart) < block.index(wait)
-    assert "POMA_CONFIGURE_IBC_RESTART=0" in block
-    assert "Pre-build poma Docker image" not in block
+        assert snippet in helper
 
 
 def test_gateway_ops_has_explicit_bounded_2fa_timeout() -> None:
     workflow = _workflow()
+    runner = _runner()
+    helper = WAIT_HELPER.read_text(encoding="utf-8")
 
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
-    assert "Waiting up to ${timeout_seconds}s for broker auth and Gateway API readiness" in workflow
-    assert "Broker auth or Gateway API readiness timed out" in workflow
-    assert "local deadline=$((SECONDS + timeout_seconds))" in workflow
+    assert "timeout_seconds=args.timeout_seconds" in helper
+    assert "poll_seconds=args.poll_seconds" in helper
+    assert "Broker auth or Gateway API readiness timed out" in runner
+    assert "No fresh IBKR mobile 2FA evidence appeared" in helper
 
 
 def test_gateway_ops_preserves_authenticated_api_check_and_diagnostics() -> None:
-    workflow = _workflow()
+    runner = _runner()
     helper = DIAG_HELPER.read_text(encoding="utf-8")
 
     for snippet in (
         "poma ibkr-check",
-        "stable_socket_polls_required=${required_stable}",
-        "Final compact Gateway diagnosis",
         "poma-diagnose-ibgateway validate --mode",
-        "poma-diagnose-ibgateway progress",
         "poma-diagnose-ibgateway diagnose",
         "poma-diagnose-ibgateway startup-check",
     ):
-        assert snippet in workflow
+        assert snippet in runner
     assert "ss" in helper
     for port in ("7497", "4001", "4002", "5900"):
         assert port in helper
@@ -194,21 +166,18 @@ def test_gateway_runner_is_hardened_after_render() -> None:
 
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
     workflow = _workflow()
+    runner = _runner()
 
     assert "timeout-minutes: 25" in workflow
-    assert "timeout --kill-after=30s" in workflow
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
-    assert "run_remote" in workflow
+    assert "timeout=480" in runner
+    assert "timeout=900" in runner
 
 
 def test_api_handshake_remote_command_preserves_runtime_mode() -> None:
-    workflow = _workflow()
-    verify_api_handshake = workflow.split("          verify_api_handshake() {", 1)[1].split(
-        "\n          }",
-        1,
-    )[0]
+    runner = _runner()
 
-    assert "TRADING_MODE=${mode}" in verify_api_handshake
-    assert "DATA_PROVIDER=fixture" in verify_api_handshake
-    assert "poma ibkr-check" in verify_api_handshake
+    assert "TRADING_MODE=" in runner
+    assert "DATA_PROVIDER=fixture" in runner
+    assert "poma ibkr-check" in runner
