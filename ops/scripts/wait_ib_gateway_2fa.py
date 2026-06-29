@@ -79,7 +79,13 @@ def print_progress(log_lines: int) -> None:
     print(result.stdout.rstrip())
 
 
-def wait_for_2fa(timeout_seconds: int, poll_seconds: int, log_lines: int, fail_no_progress_after: int) -> int:
+def wait_for_2fa(
+    *,
+    timeout_seconds: int,
+    poll_seconds: int,
+    log_lines: int,
+    fail_no_progress_after: int,
+) -> int:
     deadline = time.monotonic() + timeout_seconds
     attempt = 0
     print("configure_requires_fresh_2fa=true")
@@ -106,13 +112,10 @@ def wait_for_2fa(timeout_seconds: int, poll_seconds: int, log_lines: int, fail_n
         action = extract(STARTUP_ACTION, result.stdout)
         log_text = tail_log_text(log_lines)
         if TWO_FA_HINTS.search(log_text) or stage == "login-reached-2fa-pending":
-            print("Fresh IBKR mobile 2FA/login-auth evidence detected in current Gateway/IBC logs.")
+            print("Fresh IBKR mobile 2FA/login-auth evidence detected in current logs.")
             return 0
         if stage == "api-socket-open":
-            print(
-                "Gateway API socket opened before fresh IBKR mobile 2FA evidence was observed; "
-                "refusing false-positive configure success."
-            )
+            print("Gateway API socket opened before fresh IBKR mobile 2FA evidence.")
             print_progress(log_lines)
             return 3
         if action == "fail":
@@ -122,7 +125,7 @@ def wait_for_2fa(timeout_seconds: int, poll_seconds: int, log_lines: int, fail_n
         if elapsed > 0 and elapsed % 60 < poll_seconds:
             print_progress(log_lines)
         time.sleep(poll_seconds)
-    print("No fresh IBKR mobile 2FA evidence appeared after configure; refusing configure success.")
+    print("No fresh IBKR mobile 2FA evidence appeared after configure.")
     print_progress(log_lines)
     return 1
 
