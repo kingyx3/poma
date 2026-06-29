@@ -111,15 +111,26 @@ def main() -> int:
         command = (
             f"sudo poma-diagnose-ibgateway startup-check --log-lines 80 --elapsed-seconds {twofa_timeout} "
             f"--fail-no-progress-after {no_progress_after} || true; "
+            "sudo poma-diagnose-ibgateway progress --log-lines 80 || true; "
             f"sudo poma-diagnose-ibgateway diagnose --log-lines {log_lines}"
         )
         timed("Collect gateway diagnostics", lambda: remote(command, timeout=240))
 
     def api_ready(mode: str, required: bool) -> int:
-        deadline = time.monotonic() + int(twofa_timeout)
+        timeout_seconds = int(twofa_timeout)
+        poll_interval_seconds = int(poll_seconds)
+        deadline = time.monotonic() + timeout_seconds
         stable = 0
+        attempt = 1
+        print(f"Waiting up to {timeout_seconds}s for broker auth and Gateway API readiness.")
         while time.monotonic() < deadline:
-            poll = remote("if nc -z 127.0.0.1 7497; then exit 0; fi; if ! systemctl is-active --quiet ibgateway; then exit 2; fi; exit 1", timeout=45)
+            poll = timed(
+                f"Socket/service poll attempt {attempt}",
+                lambda: remote(
+                    "if nc -z 127.0.0.1 7497; then exit 0; fi; if ! systemctl is-active --quiet ibgateway; then exit 2; fi; exit 1",
+                    timeout=45,
+                ),
+            )
             if poll == 0:
                 stable += 1
                 print(f"Gateway API socket stability guard: {stable}/2.")
@@ -136,7 +147,8 @@ def main() -> int:
                         return 0
             else:
                 stable = 0
-            time.sleep(int(poll_seconds))
+            time.sleep(poll_interval_seconds)
+            attempt += 1
         print("Broker auth or Gateway API readiness timed out.", file=sys.stderr)
         diagnose()
         return 1
