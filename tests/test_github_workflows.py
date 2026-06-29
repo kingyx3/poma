@@ -5,6 +5,7 @@ CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 BOOTSTRAP_WORKFLOW = REPO_ROOT / ".github/workflows/bootstrap-gcp-wif.yml"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
 GATEWAY_OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
+CLEAR_REBALANCE_STATE_WORKFLOW = REPO_ROOT / ".github/workflows/clear-rebalance-state.yml"
 AUTO_CICD_WORKFLOW = REPO_ROOT / ".github/workflows/auto-cicd.yml"
 GATEWAY_DIAGNOSTICS_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
 GATEWAY_OPS_RUNNER = REPO_ROOT / "ops/scripts/run_gateway_ops_workflow.py"
@@ -28,6 +29,7 @@ def test_workflows_use_current_action_versions() -> None:
         _text(BOOTSTRAP_WORKFLOW),
         _text(DEPLOY_WORKFLOW),
         _text(GATEWAY_OPS_WORKFLOW),
+        _text(CLEAR_REBALANCE_STATE_WORKFLOW),
     )
     combined = "\n".join(workflows)
 
@@ -91,6 +93,23 @@ def test_gateway_ops_workflow_core_contract() -> None:
     assert "journalctl" in diagnostics
     assert "/var/log/poma/ibgateway" in diagnostics
     assert "/home/poma/ibc/logs" in diagnostics
+
+
+def test_clear_rebalance_state_workflow_is_manual_dev_stg_only() -> None:
+    workflow = _text(CLEAR_REBALANCE_STATE_WORKFLOW)
+
+    for snippet in (
+        "name: Clear Rebalance Run State",
+        "workflow_dispatch:",
+        "options: [dev, stg]",
+        "source ops/scripts/resolve_gcp_deploy_env.sh",
+        "google-github-actions/auth@v3",
+        "google-github-actions/setup-gcloud@v3",
+        "sudo rm -f /opt/poma/state/rebalance_state.json",
+        "POMA[${{ inputs.deploy_environment }}] clear-rebalance-state",
+    ):
+        assert snippet in workflow
+    assert "workflow_call:" not in workflow
 
 
 def test_deploy_and_ops_workflows_send_environment_tagged_alerts() -> None:
