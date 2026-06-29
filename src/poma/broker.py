@@ -15,6 +15,8 @@ ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
 SUCCESS_STATUSES = ACCEPTED_STATUSES
 BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
 ORDER_NOT_ACCEPTED_STATUS = "OrderNotAccepted"
+TRADING_PERMISSION_PROBE_SYMBOL = "AAPL"
+TRADING_PERMISSION_PROBE_LIMIT_PRICE = 1.0
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
@@ -33,6 +35,8 @@ class IbkrHealth:
     accounts: list[str]
     server_time: str
     stock_positions: int
+    trading_permissions_ok: bool
+    trading_permissions_message: str
 
 
 def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
@@ -53,11 +57,14 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
         accounts = [account for account in ib.managedAccounts() if account]
         server_time = str(ib.reqCurrentTime())
         stock_positions = sum(1 for item in ib.portfolio() if item.contract.secType == "STK")
+        trading_permissions_ok, trading_permissions_message = _probe_trading_permissions(ib, settings)
         return IbkrHealth(
             connected=ib.isConnected(),
             accounts=accounts,
             server_time=server_time,
             stock_positions=stock_positions,
+            trading_permissions_ok=trading_permissions_ok,
+            trading_permissions_message=trading_permissions_message,
         )
     finally:
         ib.disconnect()
@@ -136,8 +143,8 @@ class IbkrBroker:
         """Validate the API handshake before creating any order objects.
 
         A listening socket is not enough; Gateway must be authenticated, expose the configured
-        account, and answer a lightweight server-time request. Failing here is safe because no
-        order has been accepted by IBKR yet.
+        account, answer a lightweight server-time request, and be logged in with trading
+        permissions. Failing here is safe because no order has been accepted by IBKR yet.
         """
         self._assert_connected(ib)
         accounts = [account for account in ib.managedAccounts() if account]
@@ -146,6 +153,9 @@ class IbkrBroker:
                 f"configured IBKR_ACCOUNT={self.settings.ibkr_account} not in {accounts}"
             )
         ib.reqCurrentTime()
+        trading_ok, trading_message = _probe_trading_permissions(ib, self.settings)
+        if not trading_ok:
+            raise BrokerUnavailable(trading_message)
         self._assert_connected(ib)
 
     def positions(self) -> list[CurrentPosition]:
@@ -387,6 +397,36 @@ class IbkrBroker:
         if trade.limit_price is None:
             raise ValueError(f"missing limit price for {trade.ticker}")
         return LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
+
+
+def _probe_trading_permissions(ib: IB, settings: Settings) -> tuple[bool, str]:
+    """Verify the current session can validate orders without transmitting a live order."""
+    contract = Stock(TRADING_PERMISSION_PROBE_SYMBOL, "SMART", "USD")
+    order = LimitOrder("BUY", 1, TRADING_PERMISSION_PROBE_LIMIT_PRICE)
+    order.whatIf = True
+    order.transmit = False
+    if settings.ibkr_account:
+        order.account = settings.ibkr_account
+    try:
+        state = ib.whatIfOrder(contract, order)
+    except Exception as exc:  # noqa: BLE001 - return the broker's readiness reason to ops/doctor
+        detail = str(exc) or exc.__class__.__name__
+        return (
+            False,
+            "IBKR session is connected but not trading-enabled. "
+            "Gateway may be logged in without Trading/Market Data permissions or another "
+            f"primary trading session is active: {detail}",
+        )
+    warning = str(getattr(state, "warningText", "") or "").strip()
+    init_margin = str(getattr(state, "initMarginChange", "") or "").strip()
+    detail_parts = [
+        f"what-if order preview accepted for {TRADING_PERMISSION_PROBE_SYMBOL}",
+    ]
+    if init_margin:
+        detail_parts.append(f"init_margin_change={init_margin}")
+    if warning:
+        detail_parts.append(f"warning={warning}")
+    return True, ", ".join(detail_parts)
 
 
 def _looks_like_connection_failure(ib: IB, exc: Exception) -> bool:
