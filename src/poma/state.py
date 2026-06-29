@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-TERMINAL_STATUSES = {"completed", "completed_with_order_issues", "dry_run", "blocked", "failed"}
+TERMINAL_STATUSES = {
+    "completed",
+    "completed_with_order_issues",
+    "no_orders_accepted",
+    "dry_run",
+    "blocked",
+    "failed",
+}
 ACTIVE_STATUSES = TERMINAL_STATUSES | {"running"}
 
 
