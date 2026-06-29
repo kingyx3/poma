@@ -7,7 +7,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Bootstrap WIF using only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
 - [ ] Delete the bootstrap secret and disable/delete the temporary GCP key after bootstrap.
 - [ ] Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-- [ ] Add `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` as GitHub Environment Secrets.
+- [ ] Add `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER` as GitHub Environment Secrets.
 - [ ] Add `IBKR_ACCOUNT_PAPER` as a GitHub Environment Secret.
 - [ ] Deploy with `TRADING_MODE=dry_run` first.
 - [ ] Confirm deploy-time runtime config validation passes.
@@ -30,6 +30,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm no unresolved `completed_with_order_issues`, `blocked`, `failed`, cancelled, timed-out, or partial-fill runs remain unexplained.
 - [ ] Confirm order type policy and fractional-share behavior in the IBKR account.
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
+- [ ] Add `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` before running live Gateway configuration.
 - [ ] Add `IBKR_ACCOUNT` before switching to `TRADING_MODE=live`.
 - [ ] Run **IB Gateway Ops** with `action=configure-live`.
 - [ ] Set `ALLOW_LIVE_TRADING=true` intentionally.
