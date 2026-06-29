@@ -35,6 +35,23 @@ def run(command: list[str], timeout: int = 60) -> subprocess.CompletedProcess[st
     )
 
 
+def truncate_logs() -> int:
+    count = 0
+    for directory in LOG_PATHS:
+        if not directory.exists():
+            continue
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file():
+                continue
+            try:
+                path.write_text("", encoding="utf-8")
+                count += 1
+            except OSError as exc:
+                print(f"warning: could not truncate {path}: {exc}")
+    print(f"truncated_gateway_auth_log_files={count}")
+    return 0
+
+
 def tail_log_text(log_lines: int) -> str:
     chunks: list[str] = []
     for directory in LOG_PATHS:
@@ -116,7 +133,10 @@ def main() -> int:
     parser.add_argument("--poll-seconds", type=int, default=5)
     parser.add_argument("--log-lines", type=int, default=80)
     parser.add_argument("--fail-no-progress-after", type=int, default=200)
+    parser.add_argument("--truncate-logs-only", action="store_true")
     args = parser.parse_args()
+    if args.truncate_logs_only:
+        return truncate_logs()
     return wait_for_2fa(
         timeout_seconds=args.timeout_seconds,
         poll_seconds=args.poll_seconds,
