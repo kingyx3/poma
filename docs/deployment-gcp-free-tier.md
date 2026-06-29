@@ -75,12 +75,14 @@ After bootstrap, add only the runtime secrets needed by that environment. See [`
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | All deployed runs | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | All deployed runs | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
-| `IBKR_LOGIN_ID` | IB Gateway Ops `configure-paper` / `configure-live` | IBKR username passed to the VM only during explicit Gateway configure actions, including Auto CI/CD dev/stg configure jobs and manual IB Gateway Ops dispatches. |
-| `IBKR_LOGIN_SECRET` | IB Gateway Ops `configure-paper` / `configure-live` | IBKR password passed to the VM only during explicit Gateway configure actions, including Auto CI/CD dev/stg configure jobs and manual IB Gateway Ops dispatches. |
+| `IBKR_LOGIN_ID_PAPER` | IB Gateway Ops `configure-paper` | Paper IBKR username passed to the VM only during explicit Gateway configure actions, including Auto CI/CD dev/stg configure jobs. |
+| `IBKR_LOGIN_SECRET_PAPER` | IB Gateway Ops `configure-paper` | Paper IBKR password passed to the VM only during explicit Gateway configure actions, including Auto CI/CD dev/stg configure jobs. |
+| `IBKR_LOGIN_ID` | IB Gateway Ops `configure-live` | Live IBKR username passed to the VM only during explicit live Gateway configure actions. |
+| `IBKR_LOGIN_SECRET` | IB Gateway Ops `configure-live` | Live IBKR password passed to the VM only during explicit live Gateway configure actions. |
 | `IBKR_ACCOUNT_PAPER` | Paper deploys, and preferred dry-runs | Paper trading account id. The deploy workflow writes it into the VM-local `.env` as runtime `IBKR_ACCOUNT` when `trading_mode=paper`. |
 | `IBKR_ACCOUNT` | Live deploys | Live account id. Used only when `trading_mode=live`; live still requires `allow_live_trading=true`. |
 
-IBKR broker login credentials intentionally live in GitHub Environment secrets. Account id secrets are account selectors; they are not the broker login password.
+IBKR broker login credentials intentionally live in GitHub Environment secrets. Account id secrets are account selectors; they are not broker login passwords. For dev/stg paper environments, set `IBKR_LOGIN_ID_PAPER` / `IBKR_LOGIN_SECRET_PAPER` alongside `IBKR_ACCOUNT_PAPER`.
 
 ## Deploy in order
 
@@ -90,7 +92,7 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 2. Rerun the same workflow with `terraform_action=apply`.
 3. Confirm the generated config file for the selected environment was committed to `ops/deploy/environments/<env>.env`.
 4. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from that GitHub Environment and disable/delete the temporary key in GCP IAM.
-5. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `IBKR_LOGIN_ID`, `IBKR_LOGIN_SECRET`, and `IBKR_ACCOUNT_PAPER` to that GitHub Environment. Add `IBKR_ACCOUNT` only to environments that are allowed to deploy live mode.
+5. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `IBKR_LOGIN_ID_PAPER`, `IBKR_LOGIN_SECRET_PAPER`, and `IBKR_ACCOUNT_PAPER` to dev/stg GitHub Environments. Add `IBKR_LOGIN_ID`, `IBKR_LOGIN_SECRET`, and `IBKR_ACCOUNT` only to environments that are allowed to configure and deploy live mode.
 6. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
 7. Rerun with `terraform_action=apply` and `deploy_app=true`.
 8. Keep `trading_mode=dry_run` until the deploy smoke test and Gateway setup are verified.
