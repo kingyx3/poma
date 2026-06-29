@@ -92,6 +92,10 @@ set_ini ReloginAfterSecondFactorAuthenticationTimeout yes
 set_ini AcceptNonBrokerageAccountWarning yes
 set_ini ExistingSessionDetectedAction primaryoverride
 set_ini AutoRestartTime 23:45
+# Paper/live configure must prove the API can actually submit paper/live orders. Do not preserve
+# sample or stale read-only login settings, because those make ibkr-check fail with read-only API
+# errors and would also prevent later paper order submission.
+set_ini ReadOnlyLogin no
 # Force the API socket onto the port POMA and the ops verification expect (IB
 # Gateway otherwise defaults to 4002 for paper / 4001 for live).
 set_ini OverrideTwsApiPort 7497
