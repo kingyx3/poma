@@ -13,7 +13,7 @@ on:
         description: Operation to run on the VM.
         required: true
         type: choice
-        options: [status, restart, logs, verify-socket, configure-paper, configure-live]
+        options: [status, restart, logs, verify-socket, configure-paper, configure-live, clear-rebalance-state]
         default: status
       log_lines:
         description: Number of ibgateway journal lines for logs/status output.
