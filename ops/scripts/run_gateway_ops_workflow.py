@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ruff: noqa: E501, F841
+# ruff: noqa: E501, F401, F841
 from __future__ import annotations
 
 import hashlib
