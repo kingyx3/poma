@@ -26,7 +26,9 @@ def test_portfolio_summary_reports_executed_fills() -> None:
 
 
 def test_portfolio_summary_blocked_includes_reason_and_no_change() -> None:
-    trades = [ProposedTrade("NVDA", OrderSide.SELL, 5, 625.0, 125.0, 124.0, "rebalance")]
+    trades = [
+        ProposedTrade("NVDA", OrderSide.SELL, 5, 625.0, 125.0, 124.0, "rebalance")
+    ]
     warnings = ["turnover 99% exceeds limit; block execution"]
     plan = RebalancePlan("run", "d", [], trades, [], warnings)
     msg = _portfolio_summary("d", plan, "blocked", executed=False)
