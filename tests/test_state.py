@@ -18,3 +18,19 @@ def test_failed_session_is_terminal_for_automatic_retry(tmp_path) -> None:
 
     assert state.has_session_attempt("2026-06-22")
     assert state.session_status("2026-06-22") == "failed"
+
+
+def test_zero_accepted_orders_is_terminal_for_automatic_retry(tmp_path) -> None:
+    state = LocalState(tmp_path)
+    state.mark_session("2026-06-29", "run-1", "no_orders_accepted")
+
+    assert state.has_session_attempt("2026-06-29")
+    assert state.session_status("2026-06-29") == "no_orders_accepted"
+
+
+def test_unknown_session_status_is_not_terminal(tmp_path) -> None:
+    state = LocalState(tmp_path)
+    state.mark_session("2026-06-29", "run-1", "unexpected")
+
+    assert not state.has_session_attempt("2026-06-29")
+    assert state.session_status("2026-06-29") == "unexpected"
