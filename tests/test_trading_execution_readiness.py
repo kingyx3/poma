@@ -132,8 +132,14 @@ def test_final_order_status_alert_message_includes_status_and_fill_details() -> 
     )
 
     assert message == (
-        "2026-06-29: order status changed — Filled BUY AAPL "
-        "filled=5/5 ($980) avg=196.00 id=123"
+        "🔔 Order status update\n"
+        "Session: 2026-06-29\n"
+        "Status: Filled\n"
+        "Order: BUY AAPL\n"
+        "Filled: 5/5\n"
+        "Notional: $980\n"
+        "Average fill: $196.00\n"
+        "Order ID: 123"
     )
 
 
@@ -153,7 +159,7 @@ def test_order_status_alert_includes_diagnostic_message() -> None:
         ),
     )
 
-    assert message.endswith("— broker rejected order")
+    assert message.endswith("Detail: broker rejected order")
 
 
 def test_dry_run_broker_emits_status_callback() -> None:
