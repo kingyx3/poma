@@ -3,7 +3,8 @@ from __future__ import annotations
 from conftest import FakeBroker, make_settings
 from typer.testing import CliRunner
 
-from poma.cli import _portfolio_summary, app
+from poma.broker import BROKER_UNAVAILABLE_STATUS
+from poma.cli import _broker_unavailable_alert, _portfolio_summary, app
 from poma.health import Check
 from poma.models import CurrentPosition, OrderResult, OrderSide, ProposedTrade, RebalancePlan
 
@@ -37,6 +38,31 @@ def test_portfolio_summary_blocked_includes_reason_and_no_change() -> None:
     assert "• SELL NVDA: 5 shares · $625" in msg
     assert "Warnings" in msg
     assert "block execution" in msg
+
+
+def test_broker_unavailable_alert_is_batch_level_not_order_specific() -> None:
+    message = _broker_unavailable_alert(
+        "2026-06-29",
+        OrderResult(
+            ticker="NVDA",
+            side=OrderSide.BUY,
+            quantity=0.5,
+            notional=98.0,
+            order_id=None,
+            status=BROKER_UNAVAILABLE_STATUS,
+            filled=0.0,
+            average_fill_price=None,
+            message="broker unavailable before submitting orders; no orders submitted: Not connected",
+        ),
+    )
+
+    assert message == (
+        "🚫 Broker unavailable\n"
+        "Session: 2026-06-29\n"
+        "Status: no orders accepted by IBKR for this batch\n"
+        "Detail: broker unavailable before submitting orders; no orders submitted: Not connected"
+    )
+    assert "Order:" not in message
 
 
 def test_doctor_exits_nonzero_when_a_check_fails(monkeypatch) -> None:
