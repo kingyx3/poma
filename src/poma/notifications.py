@@ -8,12 +8,12 @@ from poma.config import Settings
 def send_alert(settings: Settings, message: str) -> None:
     """Send a best-effort Telegram alert, tagged with the environment for reference.
 
-    Every message is prefixed with ``POMA[<env>]`` (env = APP_ENV, e.g. dev/stg/prd) so a
+    Every message is headed with ``POMA · <ENV>`` (env = APP_ENV, e.g. DEV/STG/PRD) so a
     single Telegram chat can serve multiple environments unambiguously. Telegram
     configuration is mandatory at settings load. Delivery remains best-effort so a Telegram
     outage cannot cause duplicate trading attempts or interfere with state handling.
     """
-    text = f"POMA[{settings.app_env}] {message}"
+    text = f"📈 POMA · {settings.app_env.upper()}\n{message.strip()}"
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     try:
         requests.post(

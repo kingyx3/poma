@@ -27,34 +27,73 @@ console = Console()
 _MAX_SUMMARY_LINES = 15
 
 
-def _portfolio_summary(session_date: str, plan: RebalancePlan, status: str, executed: bool) -> str:
+def _portfolio_status_label(status: str, executed: bool) -> str:
+    if executed and status == "completed_with_order_issues":
+        return "Completed with order issues"
+    if executed:
+        return "Portfolio updated"
+    if status == "dry_run":
+        return "Dry run — no orders submitted"
+    if status == "blocked":
+        return "Blocked — no orders submitted"
+    return f"{status.replace('_', ' ').title()} — no orders submitted"
+
+
+def _proposed_trade_summary_line(trade: ProposedTrade) -> str:
+    return (
+        f"• {trade.side.value} {trade.ticker}: "
+        f"{trade.quantity:g} shares · ${trade.notional:,.0f}"
+    )
+
+
+def _order_result_summary_line(result: OrderResult) -> str:
+    average_fill = ""
+    if result.average_fill_price is not None:
+        average_fill = f" @ ${result.average_fill_price:.2f}"
+    detail = f" · {result.message}" if result.message else ""
+    return (
+        f"• {result.side.value} {result.ticker}: "
+        f"{result.filled:g}/{result.quantity:g} shares"
+        f"{average_fill} · ${result.notional:,.0f} · {result.status}{detail}"
+    )
+
+
+def _portfolio_summary(
+    session_date: str,
+    plan: RebalancePlan,
+    status: str,
+    executed: bool,
+) -> str:
     """Human-readable Telegram summary of the portfolio change this run made or proposed."""
     items: list = plan.execution_results if executed else plan.trades
     buys = sum(1 for item in items if item.side == OrderSide.BUY)
     sells = sum(1 for item in items if item.side == OrderSide.SELL)
-    if executed and status == "completed_with_order_issues":
-        verb = "portfolio execution completed with order issues"
+    lines = [
+        "📊 Rebalance summary",
+        f"Session: {session_date}",
+        f"Status: {_portfolio_status_label(status, executed)}",
+        f"Orders: {len(items)} total · {buys} buy · {sells} sell",
+    ]
+
+    if items:
+        lines.extend(["", "Order details"])
     else:
-        verb = "portfolio updated" if executed else f"{status}, no change"
-    lines = [f"{session_date}: {verb} — {len(items)} orders ({buys} BUY / {sells} SELL)"]
+        lines.append("Order details: none")
 
     for item in items[:_MAX_SUMMARY_LINES]:
         if executed and isinstance(item, OrderResult):
-            price = item.average_fill_price or 0.0
-            detail = f" {item.message}" if item.message else ""
-            lines.append(
-                f"{item.side.value} {item.ticker} {item.filled:g}@{price:.2f} "
-                f"(${item.notional:,.0f}) {item.status}{detail}"
-            )
+            lines.append(_order_result_summary_line(item))
         else:
-            lines.append(
-                f"{item.side.value} {item.ticker} {item.quantity:g} (${item.notional:,.0f})"
-            )
+            lines.append(_proposed_trade_summary_line(item))
     if len(items) > _MAX_SUMMARY_LINES:
-        lines.append(f"...and {len(items) - _MAX_SUMMARY_LINES} more")
+        lines.append(f"• …and {len(items) - _MAX_SUMMARY_LINES} more")
 
-    if status == "blocked":
-        lines.extend(w for w in plan.warnings if "block execution" in w)
+    blocking_warnings = [
+        warning for warning in plan.warnings if "block execution" in warning
+    ]
+    if status == "blocked" and blocking_warnings:
+        lines.extend(["", "Warnings"])
+        lines.extend(f"• {warning}" for warning in blocking_warnings)
     return "\n".join(lines)
 
 
@@ -125,10 +164,22 @@ def _run_rebalance(
         console.print(f"Dry run / blocked. Report written to {report_path}")
         for warning in plan.warnings:
             console.print(f"[yellow]WARNING[/yellow] {warning}")
-        send_alert(settings, _portfolio_summary(session_date, plan, outcome.status, executed=False))
+        send_alert(
+            settings,
+            _portfolio_summary(session_date, plan, outcome.status, executed=False),
+        )
         return outcome, report_path
 
-    send_alert(settings, f"{session_date}: execution starting — {len(plan.trades)} orders")
+    send_alert(
+        settings,
+        "\n".join(
+            [
+                "🚀 Execution starting",
+                f"Session: {session_date}",
+                f"Orders: {len(plan.trades)}",
+            ]
+        ),
+    )
 
     def alert_order_status(_: ProposedTrade, result: OrderResult) -> None:
         send_alert(settings, order_status_alert(session_date, result))
@@ -225,7 +276,12 @@ def monitor(
         state.mark_session(session_date, run_id, outcome.status, report_path=str(report_path))
     except Exception as exc:
         state.mark_session(session_date, run_id, "failed", error=str(exc))
-        send_alert(settings, f"{session_date}: run failed: {exc}")
+        send_alert(
+            settings,
+            "\n".join(
+                ["🚨 Rebalance run failed", f"Session: {session_date}", f"Error: {exc}"]
+            ),
+        )
         raise
 
 

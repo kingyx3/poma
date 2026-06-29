@@ -4,11 +4,19 @@ from poma.models import OrderResult
 
 
 def order_status_alert(session_date: str, result: OrderResult) -> str:
-    order_id = f" id={result.order_id}" if result.order_id is not None else ""
-    average_fill = "" if result.average_fill_price is None else f" avg={result.average_fill_price:.2f}"
-    detail = "" if not result.message else f" — {result.message}"
-    return (
-        f"{session_date}: order status changed — {result.status} "
-        f"{result.side.value} {result.ticker} filled={result.filled:g}/{result.quantity:g} "
-        f"(${result.notional:,.0f}){average_fill}{order_id}{detail}"
-    )
+    """Render a clear Telegram message for an individual order status change."""
+    lines = [
+        "🔔 Order status update",
+        f"Session: {session_date}",
+        f"Status: {result.status}",
+        f"Order: {result.side.value} {result.ticker}",
+        f"Filled: {result.filled:g}/{result.quantity:g}",
+        f"Notional: ${result.notional:,.0f}",
+    ]
+    if result.average_fill_price is not None:
+        lines.append(f"Average fill: ${result.average_fill_price:.2f}")
+    if result.order_id is not None:
+        lines.append(f"Order ID: {result.order_id}")
+    if result.message:
+        lines.append(f"Detail: {result.message}")
+    return "\n".join(lines)

@@ -18,20 +18,24 @@ def test_portfolio_summary_reports_executed_fills() -> None:
     plan = RebalancePlan("run", "2026-06-26", [], [], results, [])
     msg = _portfolio_summary("2026-06-26", plan, "completed", executed=True)
 
-    assert "portfolio updated" in msg
-    assert "2 orders (1 BUY / 1 SELL)" in msg
-    assert "BUY AAPL 10@195.00" in msg
-    assert "SELL NVDA 5@125.00" in msg
+    assert "📊 Rebalance summary" in msg
+    assert "Status: Portfolio updated" in msg
+    assert "Orders: 2 total · 1 buy · 1 sell" in msg
+    assert "• BUY AAPL: 10/10 shares @ $195.00 · $1,950 · Filled" in msg
+    assert "• SELL NVDA: 5/5 shares @ $125.00 · $625 · Filled" in msg
 
 
 def test_portfolio_summary_blocked_includes_reason_and_no_change() -> None:
-    trades = [ProposedTrade("NVDA", OrderSide.SELL, 5, 625.0, 125.0, 124.0, "rebalance")]
+    trades = [
+        ProposedTrade("NVDA", OrderSide.SELL, 5, 625.0, 125.0, 124.0, "rebalance")
+    ]
     warnings = ["turnover 99% exceeds limit; block execution"]
     plan = RebalancePlan("run", "d", [], trades, [], warnings)
     msg = _portfolio_summary("d", plan, "blocked", executed=False)
 
-    assert "no change" in msg
-    assert "SELL NVDA 5" in msg
+    assert "Status: Blocked — no orders submitted" in msg
+    assert "• SELL NVDA: 5 shares · $625" in msg
+    assert "Warnings" in msg
     assert "block execution" in msg
 
 

@@ -22,7 +22,7 @@ def test_send_alert_prefixes_environment(monkeypatch) -> None:
     monkeypatch.setattr("poma.notifications.requests.post", fake_post)
     send_alert(make_settings(APP_ENV="stg"), "portfolio updated — 3 orders")
 
-    assert captured["json"]["text"].startswith("POMA[stg] ")
+    assert captured["json"]["text"].startswith("📈 POMA · STG\n")
     assert "portfolio updated" in captured["json"]["text"]
 
 
