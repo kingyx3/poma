@@ -70,7 +70,8 @@ POMA sends:
 - deploy result alerts from GitHub Actions;
 - dry-run or blocked rebalance summaries;
 - execution start alerts before paper/live order submission;
-- broker lifecycle alerts for created/submitted/status/final/failure order states when the broker reports them;
+- broker lifecycle alerts only after IBKR accepts/submits an order, plus final/failure order states;
+- one deduplicated broker-unavailable alert when the gateway/API is not ready before order acceptance;
 - final rebalance summaries, including `completed_with_order_issues` if any order is not filled or has a diagnostic message;
 - run failure alerts when the rebalance command raises.
 
@@ -82,6 +83,7 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 |---|---|---|
 | Deploy fails during rendered config validation | Bad/missing secret, allocation sum above 100%, live gate not enabled, or paper/live using `fixture` | Fix the GitHub Environment secret/input and rerun deploy. |
 | Deploy smoke passes but paper does not trade | Gateway not authenticated, wrong account id, or market not open yet | Run **IB Gateway Ops** configure-paper, approve 2FA, then run `poma ibkr-check`. |
+| `BrokerUnavailable` / `Not connected` during paper | IB Gateway is listening but not API-ready/authenticated, or the gateway connection dropped before IBKR accepted the order batch | Run **IB Gateway Ops** configure-paper, approve 2FA, verify `poma ibkr-check`, then rerun only after confirming no IBKR Activity orders were accepted. |
 | `configured IBKR_ACCOUNT=... not in [...]` | Secret points at the wrong paper/live account | Update `IBKR_ACCOUNT_PAPER` or `IBKR_ACCOUNT` in the selected GitHub Environment. |
 | `completed_with_order_issues` | One or more orders failed, cancelled, timed out, or only partially progressed | Open the latest report in `reports/`, check Telegram order details, then review IBKR activity. |
 | `blocked` rebalance | Risk guard blocked execution, usually turnover/order-size/trade-count | Review report warnings and adjust config only if the block is expected and safe. |
