@@ -23,6 +23,9 @@ def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200" in workflow
+    assert "Resolve broker login secrets" in workflow
+    assert "IBKR_LOGIN_ID_PAPER" in workflow
+    assert "IBKR_LOGIN_SECRET_PAPER" in workflow
     assert "BROKER_LOGIN_ID" in workflow
     assert "BROKER_LOGIN_VALUE" in workflow
 
