@@ -40,7 +40,10 @@ def _portfolio_status_label(status: str, executed: bool) -> str:
 
 
 def _proposed_trade_summary_line(trade: ProposedTrade) -> str:
-    return f"• {trade.side.value} {trade.ticker}: {trade.quantity:g} shares · ${trade.notional:,.0f}"
+    return (
+        f"• {trade.side.value} {trade.ticker}: "
+        f"{trade.quantity:g} shares · ${trade.notional:,.0f}"
+    )
 
 
 def _order_result_summary_line(result: OrderResult) -> str:
@@ -49,7 +52,8 @@ def _order_result_summary_line(result: OrderResult) -> str:
         average_fill = f" @ ${result.average_fill_price:.2f}"
     detail = f" · {result.message}" if result.message else ""
     return (
-        f"• {result.side.value} {result.ticker}: {result.filled:g}/{result.quantity:g} shares"
+        f"• {result.side.value} {result.ticker}: "
+        f"{result.filled:g}/{result.quantity:g} shares"
         f"{average_fill} · ${result.notional:,.0f} · {result.status}{detail}"
     )
 
@@ -84,7 +88,9 @@ def _portfolio_summary(
     if len(items) > _MAX_SUMMARY_LINES:
         lines.append(f"• …and {len(items) - _MAX_SUMMARY_LINES} more")
 
-    blocking_warnings = [warning for warning in plan.warnings if "block execution" in warning]
+    blocking_warnings = [
+        warning for warning in plan.warnings if "block execution" in warning
+    ]
     if status == "blocked" and blocking_warnings:
         lines.extend(["", "Warnings"])
         lines.extend(f"• {warning}" for warning in blocking_warnings)
@@ -158,7 +164,10 @@ def _run_rebalance(
         console.print(f"Dry run / blocked. Report written to {report_path}")
         for warning in plan.warnings:
             console.print(f"[yellow]WARNING[/yellow] {warning}")
-        send_alert(settings, _portfolio_summary(session_date, plan, outcome.status, executed=False))
+        send_alert(
+            settings,
+            _portfolio_summary(session_date, plan, outcome.status, executed=False),
+        )
         return outcome, report_path
 
     send_alert(
@@ -269,7 +278,9 @@ def monitor(
         state.mark_session(session_date, run_id, "failed", error=str(exc))
         send_alert(
             settings,
-            "\n".join(["🚨 Rebalance run failed", f"Session: {session_date}", f"Error: {exc}"]),
+            "\n".join(
+                ["🚨 Rebalance run failed", f"Session: {session_date}", f"Error: {exc}"]
+            ),
         )
         raise
 
