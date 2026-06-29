@@ -67,13 +67,15 @@ The deploy workflow now fails before Terraform/app deployment when:
 - [ ] Keep `MAX_TURNOVER_PCT=1.0` for first paper bootstrap, then lower it if you want stricter ongoing churn control.
 - [ ] Keep `MAX_ORDER_NOTIONAL_USD`, `MAX_DAILY_TRADES`, `MAX_POSITION_PCT`, and `MAX_TURNOVER_PCT` within your operational tolerance.
 - [ ] Keep cash outside active strategies by using a `cash` sleeve in `STRATEGY_ALLOCATIONS`.
+- [ ] Treat any `BrokerUnavailable` report as an infrastructure issue: confirm IBKR Activity shows no accepted orders, rerun **IB Gateway Ops** configure, and require `poma ibkr-check` to pass before trading again.
 - [ ] Review any `failed`, `blocked`, `completed_with_order_issues`, timed-out, cancelled, or partial execution result manually.
 
 ## Alert expectations
 
 - Deploy result alerts are sent by GitHub Actions.
 - Dry-run and blocked runs send a summary and make no broker changes.
-- Paper/live runs send an execution-start alert, order lifecycle/status alerts, and a final summary.
+- Paper/live runs send an execution-start alert, broker-accepted order lifecycle/status alerts, and a final summary.
+- If IBKR is unavailable before order acceptance, POMA sends one deduplicated broker-unavailable alert instead of per-ticker Created/Failed spam.
 - Any non-filled order result or diagnostic message marks the run as `completed_with_order_issues` in local state.
 - Normal cron checks outside the rebalance window do not send Telegram alerts to avoid noise.
 
