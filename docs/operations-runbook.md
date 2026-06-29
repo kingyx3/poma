@@ -62,6 +62,12 @@ Do not skip paper validation. Before live:
 6. Deploy with `trading_mode=live`, `data_provider=yahoo`, and `allow_live_trading=true`.
 7. Manually review the first live report immediately after execution.
 
+## Session state control
+
+POMA treats `completed`, `completed_with_order_issues`, `no_orders_accepted`, `dry_run`, `blocked`, and `failed` as session attempts. After any of these statuses, cron will not automatically rebalance that same market session again.
+
+Use **IB Gateway Ops** with `action=clear-rebalance-state` only when you have manually verified that clearing the guard is intentional. The action deletes `/opt/poma/state/rebalance_state.json`, so the next eligible `monitor` run can rebalance again for the current session.
+
 ## Telegram alert semantics
 
 POMA sends:
@@ -72,6 +78,7 @@ POMA sends:
 - broker lifecycle alerts only after IBKR accepts/submits an order, plus final/failure order states;
 - one deduplicated broker-unavailable alert when the gateway/API is not ready before order acceptance;
 - final rebalance summaries, including `completed_with_order_issues` if any order is not filled or has a diagnostic message;
+- `no_orders_accepted` summaries when IBKR rejects or cancels the whole order batch before any order is accepted;
 - run failure alerts when the rebalance command raises.
 
 Normal cron checks outside the rebalance window are console-only to avoid Telegram spam.
@@ -82,8 +89,9 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 |---|---|---|
 | Deploy fails during rendered config validation | Bad/missing secret, allocation sum above 100%, live gate not enabled, or paper/live using `fixture` | Fix the GitHub Environment secret/input and rerun deploy. |
 | Deploy smoke passes but paper does not trade | Gateway not authenticated, wrong account id, or market not open yet | Run **IB Gateway Ops** configure-paper, then run `poma ibkr-check`. |
-| `BrokerUnavailable` / `Not connected` during paper | IB Gateway is listening but not API-ready/authenticated, or the gateway connection dropped before IBKR accepted the order batch | Run **IB Gateway Ops** configure-paper, verify `poma ibkr-check`, then rerun only after confirming no IBKR Activity orders were accepted. |
+| `BrokerUnavailable` / `Not connected` during paper | IB Gateway is listening but not API-ready/authenticated, the Gateway logged in without Trading/Market Data permissions, or the gateway connection dropped before IBKR accepted the order batch | Run **IB Gateway Ops** configure-paper, verify `poma ibkr-check`, then clear rebalance state via **IB Gateway Ops** only if you want cron to retry the same session. |
 | `configured IBKR_ACCOUNT=... not in [...]` | Secret points at the wrong paper/live account | Update `IBKR_ACCOUNT_PAPER` or `IBKR_ACCOUNT` in the selected GitHub Environment. |
+| `no_orders_accepted` | IBKR rejected/cancelled the whole batch before any order became accepted/working | Fix Gateway/trading login first. The session is still marked attempted; clear state manually through **IB Gateway Ops** only if retrying the same session is intended. |
 | `completed_with_order_issues` | One or more orders failed, cancelled, timed out, or only partially progressed | Open the latest report in `reports/`, check Telegram order details, then review IBKR activity. |
 | `blocked` rebalance | Risk guard blocked execution, usually turnover/order-size/trade-count | Review report warnings and adjust config only if the block is expected and safe. |
 | No rank-history snapshot | First run or insufficient snapshot history | Run `poma refresh-market-data`; strategy will fallback to current market-cap ranking until history exists. |
