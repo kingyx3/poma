@@ -262,6 +262,7 @@ jobs:
           3. Normal deploys use ops/deploy/environments/${DEPLOY_ENVIRONMENT}.env plus GitHub Environment secrets.
           4. Keep runtime secrets in GitHub Environments: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
           5. For paper deploys, set IBKR_ACCOUNT_PAPER. For live deploys, set IBKR_ACCOUNT and require allow_live_trading=true.
-          6. Set IBKR_LOGIN_ID and IBKR_LOGIN_SECRET only if using IB Gateway Ops configure actions.
-          7. Manually delete old GitHub Environment Variables from earlier bootstrap runs; current workflows do not read them.
+          6. Set IBKR_LOGIN_ID_PAPER and IBKR_LOGIN_SECRET_PAPER for paper Gateway configure actions.
+          7. Set IBKR_LOGIN_ID and IBKR_LOGIN_SECRET only for live Gateway configure actions.
+          8. Manually delete old GitHub Environment Variables from earlier bootstrap runs; current workflows do not read them.
           EOF
