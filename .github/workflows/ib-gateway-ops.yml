@@ -226,6 +226,41 @@ jobs:
           validate_ibc_configuration() { run_remote "sudo poma-diagnose-ibgateway validate --mode '$1'" 120; }
           warmup_poma_docker_image() { run_remote "if test -f /opt/poma/docker-compose.yml || test -f /opt/poma/compose.yaml; then sudo -u poma bash -lc 'cd /opt/poma && docker compose build poma 2>&1 | tail -10'; else echo 'POMA app not deployed at /opt/poma; skipping Docker image warmup.'; fi" 300; }
           poll_gateway_socket_once() { run_remote 'if nc -z 127.0.0.1 7497; then exit 0; fi; if ! systemctl is-active --quiet ibgateway; then exit 2; fi; exit 1' 45; }
+          clear_gateway_auth_logs() { run_remote "sudo find /home/poma/ibc/logs /var/log/poma/ibgateway /tmp/poma-ibgateway -type f -exec sh -c ': > \"\$1\"' sh {} \; 2>/dev/null || true" 120; }
+          force_fresh_gateway_login() { run_remote "sudo systemctl stop ibgateway || true; sudo systemctl kill --kill-who=all ibgateway || true; sleep 2; sudo systemctl start ibgateway" 240; }
+          fresh_2fa_evidence() {
+            run_remote "sudo grep -R -Eiq 'second factor|2fa|two-factor|mobile authentication|mobile app|approve' /home/poma/ibc/logs /var/log/poma/ibgateway /tmp/poma-ibgateway 2>/dev/null" 45
+          }
+          wait_for_fresh_2fa_challenge() {
+            local mode="${1:-paper}"
+            local timeout_seconds="${IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS:-300}" poll_seconds="${IB_GATEWAY_SOCKET_POLL_SECONDS:-5}"
+            local deadline=$((SECONDS + timeout_seconds)) attempt=0 elapsed=0 stage="unknown"
+            echo "configure_requires_fresh_2fa=true"
+            echo "Waiting up to ${timeout_seconds}s for a fresh IBKR mobile 2FA challenge after configure-${mode}."
+            while [ "${SECONDS}" -lt "${deadline}" ]; do
+              attempt=$((attempt + 1))
+              elapsed=$((timeout_seconds - (deadline - SECONDS)))
+              timed "Fresh 2FA startup classification ${attempt}" gateway_startup_check "${elapsed}" || true
+              stage="$(compact_value STARTUP_STAGE unknown)"
+              if fresh_2fa_evidence; then
+                echo "Fresh IBKR mobile 2FA evidence detected in newly truncated Gateway/IBC logs."
+                return 0
+              fi
+              if [ "${stage}" = "api-socket-open" ]; then
+                echo "::error::Gateway API socket opened before fresh 2FA evidence was observed for configure-${mode}; refusing false-positive configure success."
+                diagnose_gateway_failure
+                exit 1
+              fi
+              if [ "${elapsed}" -gt 0 ] && [ $((elapsed % 60)) -lt "${poll_seconds}" ]; then
+                timed "Fresh 2FA readiness snapshot" run_remote "sudo poma-diagnose-ibgateway progress --log-lines 40" 90 || true
+              fi
+              sleep "${poll_seconds}"
+            done
+            echo "::error::No fresh IBKR mobile 2FA evidence appeared after configure-${mode}; refusing configure success."
+            print_compact_startup_diagnosis
+            diagnose_gateway_failure
+            exit 1
+          }
           verify_api_handshake() {
             local mode="${1:-paper}" required="${2:-1}"
             run_remote "if ! test -f /opt/poma/docker-compose.yml && ! test -f /opt/poma/compose.yaml; then if [ '${required}' = '1' ]; then echo 'POMA app not deployed at /opt/poma; cannot run required ib_insync API handshake.' >&2; exit 1; fi; echo 'POMA app not deployed at /opt/poma; skipping ib_insync API handshake.'; exit 0; fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE=${mode} -e DATA_PROVIDER=fixture poma ibkr-check'" 240
@@ -259,7 +294,7 @@ jobs:
             print_compact_startup_diagnosis
             diagnose_gateway_failure
             if [ "${allow_auth_pending_success}" = "1" ] && auth_pending_stage; then
-              echo "::warning::Gateway auth value was installed and Gateway reached broker login/auth, but the API socket did not open before the bounded wait ended. Treating configure as auth-pending; approve mobile auth and run verify-socket before paper/live trading."
+              echo "::warning::Gateway auth value was installed and Gateway reached broker login/auth, but the API socket did not open before the bounded wait ended. Treating verify as auth-pending; approve mobile auth and run verify-socket before paper/live trading."
               return 0
             fi
             exit 1
@@ -296,8 +331,10 @@ jobs:
               chmod 600 "${input_file}"
               timed "Configure IBC auth values" run_with_timeout 180s gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "sudo POMA_CONFIGURE_IBC_RESTART=0 poma-configure-ibc" < "${input_file}"
               timed "Validate IBC configuration" validate_ibc_configuration "${mode}"
-              timed "Restart ibgateway after IBC configuration" run_remote "sudo systemctl restart ibgateway" 180
-              wait_for_api_readiness "${mode}" 1 1
+              timed "Clear stale Gateway auth logs" clear_gateway_auth_logs
+              timed "Force fresh ibgateway login after IBC configuration" force_fresh_gateway_login
+              wait_for_fresh_2fa_challenge "${mode}"
+              wait_for_api_readiness "${mode}" 1 0
               ;;
             *)
               echo "Unknown action: ${INPUT_ACTION}" >&2
@@ -313,5 +350,5 @@ jobs:
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
             POMA[${{ inputs.deploy_environment }}] gateway ${{ inputs.action }}
-            ${{ job.status }}. Check the GitHub step summary for Gateway auth/API
-            classification and run verify-socket before paper/live trading if configure ended auth-pending.
+            ${{ job.status }}. Configure actions require fresh IBKR 2FA evidence,
+            API readiness, and poma ibkr-check before paper/live trading.
