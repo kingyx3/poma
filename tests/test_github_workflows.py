@@ -47,6 +47,20 @@ def test_deploy_workflow_routes_paper_to_paper_account() -> None:
     assert "TRADING_MODE=live" in workflow
 
 
+def test_gateway_ops_routes_paper_login_secrets_to_configure_paper() -> None:
+    workflow = _text(GATEWAY_OPS_WORKFLOW)
+    paper_block = workflow.split("configure-paper)", 1)[1].split(";;", 1)[0]
+    live_block = workflow.split("configure-live)", 1)[1].split(";;", 1)[0]
+
+    assert "${{ secrets.IBKR_LOGIN_ID_PAPER }}" in workflow
+    assert "${{ secrets.IBKR_LOGIN_SECRET_PAPER }}" in workflow
+    assert "IBKR_LOGIN_ID_PAPER and IBKR_LOGIN_SECRET_PAPER" in paper_block
+    assert 'echo "BROKER_LOGIN_ID=${IBKR_LOGIN_ID_PAPER}"' in paper_block
+    assert 'echo "BROKER_LOGIN_VALUE=${IBKR_LOGIN_SECRET_PAPER}"' in paper_block
+    assert 'echo "BROKER_LOGIN_ID=${IBKR_LOGIN_ID}"' in live_block
+    assert 'echo "BROKER_LOGIN_VALUE=${IBKR_LOGIN_SECRET}"' in live_block
+
+
 def test_gateway_ops_workflow_core_contract() -> None:
     workflow = _text(GATEWAY_OPS_WORKFLOW)
     runner = _text(GATEWAY_OPS_RUNNER)
