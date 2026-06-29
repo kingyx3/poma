@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501, F841
 from __future__ import annotations
 
 import hashlib
@@ -102,7 +103,7 @@ def main() -> int:
             "sudo install -m 755 /tmp/wait_ib_gateway_2fa.py /usr/local/bin/poma-wait-ibgateway-2fa && "
             "sudo sh /tmp/ensure_ibgateway_service.sh && "
             "sudo install -d -m 755 /var/lib/poma && "
-            f"printf '%s\\n' '{revision}' | sudo tee '{sentinel}' >/dev/null"
+            f"printf '%s\n' '{revision}' | sudo tee '{sentinel}' >/dev/null"
         )
         return timed("Runtime repair/install", lambda: remote(install, timeout=900))
 
