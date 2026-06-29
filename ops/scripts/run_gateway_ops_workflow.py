@@ -127,10 +127,19 @@ def main() -> int:
             lambda: remote("sudo systemctl restart ibgateway", timeout=240),
         )
 
+    def gateway_startup_progress(elapsed_seconds: int) -> int:
+        command = (
+            "sudo poma-diagnose-ibgateway startup-check --log-lines 80 "
+            f"--elapsed-seconds {elapsed_seconds} "
+            f"--fail-no-progress-after {no_progress_after}"
+        )
+        return timed("Gateway startup progress check", lambda: remote(command, timeout=120))
+
     def api_ready(mode: str, required: bool) -> int:
         timeout_seconds = int(twofa_timeout)
         poll_interval_seconds = int(poll_seconds)
-        deadline = time.monotonic() + timeout_seconds
+        started = time.monotonic()
+        deadline = started + timeout_seconds
         stable = 0
         attempt = 1
         print(f"Waiting up to {timeout_seconds}s for broker auth and Gateway API trading readiness.")
@@ -139,6 +148,7 @@ def main() -> int:
             "read-only / no Trading-Market-Data-permissions login will be retried before deploy succeeds."
         )
         while time.monotonic() < deadline:
+            elapsed_seconds = int(time.monotonic() - started)
             poll = timed(
                 f"Socket/service poll attempt {attempt}",
                 lambda: remote(
@@ -166,6 +176,17 @@ def main() -> int:
                         "This usually means Gateway logged in without Trading/Market Data permissions."
                     )
                     stable = 0
+            elif poll == 1:
+                stable = 0
+                print("Gateway service is active but API socket is closed; checking startup progress.")
+                startup_status = gateway_startup_progress(elapsed_seconds)
+                if startup_status == 2:
+                    print(
+                        "Gateway startup stalled before opening the API socket; collecting diagnostics.",
+                        file=sys.stderr,
+                    )
+                    diagnose()
+                    return 1
             else:
                 stable = 0
             time.sleep(poll_interval_seconds)
