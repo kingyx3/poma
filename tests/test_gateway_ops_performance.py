@@ -21,7 +21,9 @@ def test_gateway_ops_records_timing_summary_for_expensive_steps() -> None:
         "timed \"Upload gateway helper scripts\"",
         "timed \"Runtime repair/install\"",
         "timed \"Validate IBC configuration\"",
-        "timed \"Restart ibgateway after IBC configuration\"",
+        "timed \"Clear stale Gateway auth logs\"",
+        "timed \"Force fresh ibgateway login after IBC configuration\"",
+        "Fresh 2FA startup classification",
         "timed \"Real API handshake\"",
         "Collect gateway diagnostics",
     ):
@@ -105,18 +107,25 @@ def test_gateway_socket_requires_stable_guard_before_real_handshake() -> None:
     )
 
 
-def test_gateway_pending_configure_path_is_explicit() -> None:
+def test_gateway_configure_requires_fresh_2fa_before_api_handshake() -> None:
     workflow = _workflow()
+    block = workflow.split("configure-paper|configure-live)", 1)[1].split(";;", 1)[0]
 
     for snippet in (
-        "auth_pending_stage",
-        "login-reached-2fa-pending|login-reached-awaiting-auth",
-        "allow_auth_pending_success",
-        "Treating configure as auth-pending",
-        'wait_for_api_readiness "${mode}" 1 1',
-        "run verify-socket before paper/live trading",
+        "wait_for_fresh_2fa_challenge",
+        "fresh_2fa_evidence",
+        "configure_requires_fresh_2fa=true",
+        "Gateway API socket opened before fresh 2FA evidence",
+        "No fresh IBKR mobile 2FA evidence appeared",
+        'wait_for_api_readiness "${mode}" 1 0',
     ):
         assert snippet in workflow
+
+    assert 'wait_for_api_readiness "${mode}" 1 1' not in block
+    assert "Treating configure as auth-pending" not in workflow
+    assert block.index("wait_for_fresh_2fa_challenge") < block.index(
+        'wait_for_api_readiness "${mode}" 1 0'
+    )
 
 
 def test_gateway_exit_writes_final_compact_diagnosis_to_job_log() -> None:
@@ -125,7 +134,7 @@ def test_gateway_exit_writes_final_compact_diagnosis_to_job_log() -> None:
     assert "Final compact Gateway diagnosis:" in workflow
     assert "print_compact_startup_diagnosis" in workflow
     assert "write_timing_summary" in workflow
-    assert "trap 'cleanup_input_file; echo \"Final compact Gateway diagnosis:\"" in workflow
+    assert "trap 'cleanup_input_file; echo \"Final compact Gateway diagnosis:" in workflow
 
 
 def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
@@ -134,14 +143,18 @@ def test_gateway_ops_restarts_after_config_write_before_waiting() -> None:
 
     configure = "timed \"Configure IBC auth values\""
     validate = "timed \"Validate IBC configuration\""
-    restart = "timed \"Restart ibgateway after IBC configuration\""
+    clear_logs = "timed \"Clear stale Gateway auth logs\""
+    force_login = "timed \"Force fresh ibgateway login after IBC configuration\""
+    fresh_2fa = "wait_for_fresh_2fa_challenge"
     wait = "wait_for_api_readiness"
 
-    for snippet in (configure, validate, restart, wait):
+    for snippet in (configure, validate, clear_logs, force_login, fresh_2fa, wait):
         assert snippet in block
     assert block.index(configure) < block.index(validate)
-    assert block.index(validate) < block.index(restart)
-    assert block.index(restart) < block.index(wait)
+    assert block.index(validate) < block.index(clear_logs)
+    assert block.index(clear_logs) < block.index(force_login)
+    assert block.index(force_login) < block.index(fresh_2fa)
+    assert block.index(fresh_2fa) < block.index(wait)
     assert "POMA_CONFIGURE_IBC_RESTART=0" in block
     assert "Pre-build poma Docker image" not in block
 
@@ -151,7 +164,9 @@ def test_gateway_ops_has_explicit_bounded_2fa_timeout() -> None:
 
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "Waiting up to ${timeout_seconds}s for broker auth and Gateway API readiness" in workflow
+    assert "Waiting up to ${timeout_seconds}s for a fresh IBKR mobile 2FA challenge" in workflow
     assert "Broker auth or Gateway API readiness timed out" in workflow
+    assert "No fresh IBKR mobile 2FA evidence appeared" in workflow
     assert "local deadline=$((SECONDS + timeout_seconds))" in workflow
 
 
