@@ -6,6 +6,7 @@ INSTALL_HELPER = REPO_ROOT / "ops/scripts/install_ibc_config_helper.py"
 OPS_WORKFLOW = REPO_ROOT / ".github/workflows/ib-gateway-ops.yml"
 SERVICE_SCRIPT = REPO_ROOT / "ops/scripts/ensure_ibgateway_service.sh"
 DIAG_HELPER = REPO_ROOT / "ops/scripts/diagnose_ib_gateway_runtime.py"
+GATEWAY_OPS_RUNNER = REPO_ROOT / "ops/scripts/run_gateway_ops_workflow.py"
 
 
 def test_repair_script_installs_current_runtime_components() -> None:
@@ -153,11 +154,16 @@ def test_install_helper_pins_api_port_to_match_poma() -> None:
 
 def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
     workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
+    runner = GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
     helper = DIAG_HELPER.read_text(encoding="utf-8")
 
-    assert "poma-diagnose-ibgateway diagnose" in workflow
-    assert "poma-diagnose-ibgateway progress" in workflow
-    assert "poma-diagnose-ibgateway validate --mode" in workflow
+    assert "python3 ops/scripts/run_gateway_ops_workflow.py" in workflow
+    for snippet in (
+        "poma-diagnose-ibgateway diagnose",
+        "poma-diagnose-ibgateway progress",
+        "poma-diagnose-ibgateway validate --mode",
+    ):
+        assert snippet in runner
     assert "/home/poma/ibc/logs" in helper
     assert "***" in helper
     assert "redact" in helper
@@ -165,12 +171,19 @@ def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
 
 def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
     workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
+    runner = GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
 
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
-    assert "Waiting up to ${timeout_seconds}s for broker auth and Gateway API readiness" in workflow
-    assert "while [ \"${SECONDS}\" -lt \"${deadline}\" ]; do" in workflow
-    assert "if timed \"Socket/service poll attempt ${attempt}\" poll_gateway_socket_once; then" in workflow
-    assert "systemctl is-active --quiet ibgateway" in workflow
-    assert "Gateway API socket stability guard" in workflow
-    assert "Broker auth or Gateway API readiness timed out" in workflow
+    assert (
+        "Waiting up to {timeout_seconds}s for broker auth and Gateway API readiness"
+        in runner
+    )
+    for snippet in (
+        "while time.monotonic() < deadline:",
+        "Socket/service poll attempt {attempt}",
+        "systemctl is-active --quiet ibgateway",
+        "Gateway API socket stability guard",
+        "Broker auth or Gateway API readiness timed out",
+    ):
+        assert snippet in runner
