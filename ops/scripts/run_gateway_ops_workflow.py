@@ -116,13 +116,28 @@ def main() -> int:
         )
         timed("Collect gateway diagnostics", lambda: remote(command, timeout=240))
 
+    def restart_gateway_for_trading_login(reason: str) -> None:
+        print(reason)
+        print(
+            "Restarting IB Gateway to force a fresh primary trading/market-data login. "
+            "Approve IBKR Mobile if prompted; this may disconnect any other active trading session."
+        )
+        timed(
+            "Restart ibgateway for trading-enabled login",
+            lambda: remote("sudo systemctl restart ibgateway", timeout=240),
+        )
+
     def api_ready(mode: str, required: bool) -> int:
         timeout_seconds = int(twofa_timeout)
         poll_interval_seconds = int(poll_seconds)
         deadline = time.monotonic() + timeout_seconds
         stable = 0
         attempt = 1
-        print(f"Waiting up to {timeout_seconds}s for broker auth and Gateway API readiness.")
+        print(f"Waiting up to {timeout_seconds}s for broker auth and Gateway API trading readiness.")
+        print(
+            "The readiness check includes a non-transmitted IBKR what-if order preview, so a "
+            "read-only / no Trading-Market-Data-permissions login will be retried before deploy succeeds."
+        )
         while time.monotonic() < deadline:
             poll = timed(
                 f"Socket/service poll attempt {attempt}",
@@ -142,14 +157,20 @@ def main() -> int:
                         + mode
                         + " -e DATA_PROVIDER=fixture poma ibkr-check'"
                     )
-                    if remote(check, timeout=240) == 0:
-                        print("IBKR API handshake succeeded; Gateway is authenticated and serving the API.")
+                    check_status = remote(check, timeout=240)
+                    if check_status == 0:
+                        print("IBKR API handshake and trading permission preview succeeded; Gateway is ready to submit orders.")
                         return 0
+                    restart_gateway_for_trading_login(
+                        "IBKR API socket opened but trading readiness failed. "
+                        "This usually means Gateway logged in without Trading/Market Data permissions."
+                    )
+                    stable = 0
             else:
                 stable = 0
             time.sleep(poll_interval_seconds)
             attempt += 1
-        print("Broker auth or Gateway API readiness timed out.", file=sys.stderr)
+        print("Broker auth, Gateway API, or trading permission readiness timed out.", file=sys.stderr)
         diagnose()
         return 1
 
@@ -203,7 +224,7 @@ def main() -> int:
         diagnose()
         return 1
     if mode == "paper":
-        print("Paper Gateway configure will verify API readiness directly.")
+        print("Paper Gateway configure will verify API and trading readiness directly.")
         return api_ready(mode, required=True)
 
     wait_command = (
