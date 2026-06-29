@@ -54,12 +54,41 @@ jobs:
       IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360
       IB_GATEWAY_SOCKET_POLL_SECONDS: 5
       IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200
-      BROKER_LOGIN_ID: ${{ secrets[format('IBKR_LOGIN_{0}', 'ID')] }}
-      BROKER_LOGIN_VALUE: ${{ secrets[format('IBKR_LOGIN_{0}', 'SECRET')] }}
+      IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
+      IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
+      IBKR_LOGIN_ID_PAPER: ${{ secrets.IBKR_LOGIN_ID_PAPER }}
+      IBKR_LOGIN_SECRET_PAPER: ${{ secrets.IBKR_LOGIN_SECRET_PAPER }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Resolve broker login secrets
+        if: ${{ inputs.action == 'configure-paper' || inputs.action == 'configure-live' }}
+        run: |
+          set -euo pipefail
+          case "${INPUT_ACTION}" in
+            configure-paper)
+              if [ -z "${IBKR_LOGIN_ID_PAPER:-}" ] || [ -z "${IBKR_LOGIN_SECRET_PAPER:-}" ]; then
+                echo "::error::IBKR_LOGIN_ID_PAPER and IBKR_LOGIN_SECRET_PAPER GitHub Environment secrets are required for configure-paper"
+                exit 1
+              fi
+              {
+                echo "BROKER_LOGIN_ID=${IBKR_LOGIN_ID_PAPER}"
+                echo "BROKER_LOGIN_VALUE=${IBKR_LOGIN_SECRET_PAPER}"
+              } >> "${GITHUB_ENV}"
+              ;;
+            configure-live)
+              if [ -z "${IBKR_LOGIN_ID:-}" ] || [ -z "${IBKR_LOGIN_SECRET:-}" ]; then
+                echo "::error::IBKR_LOGIN_ID and IBKR_LOGIN_SECRET GitHub Environment secrets are required for configure-live"
+                exit 1
+              fi
+              {
+                echo "BROKER_LOGIN_ID=${IBKR_LOGIN_ID}"
+                echo "BROKER_LOGIN_VALUE=${IBKR_LOGIN_SECRET}"
+              } >> "${GITHUB_ENV}"
+              ;;
+          esac
 
       - name: Resolve generated deployment config
         run: |

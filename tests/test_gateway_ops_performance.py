@@ -23,6 +23,9 @@ def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200" in workflow
+    assert "Resolve broker login secrets" in workflow
+    assert "IBKR_LOGIN_ID_PAPER" in workflow
+    assert "IBKR_LOGIN_SECRET_PAPER" in workflow
     assert "BROKER_LOGIN_ID" in workflow
     assert "BROKER_LOGIN_VALUE" in workflow
 
@@ -39,8 +42,8 @@ def test_gateway_runner_records_timing_summary_for_expensive_steps() -> None:
         "Configure IBC auth values",
         "Validate IBC configuration",
         "Clear stale Gateway auth logs",
-        "Force fresh ibgateway login after IBC configuration",
-        "Fresh 2FA challenge wait",
+        "Restart ibgateway after IBC configuration",
+        "Fresh live 2FA challenge wait",
         "Collect gateway diagnostics",
     ):
         assert snippet in runner
@@ -75,31 +78,34 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
     assert "stable >= 2" in runner
 
 
-def test_gateway_configure_requires_fresh_2fa_before_api_handshake() -> None:
+def test_gateway_configure_requires_fresh_2fa_only_for_live_before_api_handshake() -> None:
     runner = _runner()
 
-    assert "poma-wait-ibgateway-2fa --log-lines 80" in runner
-    assert "Fresh 2FA challenge wait" in runner
+    assert "if mode == \"paper\"" in runner
+    assert "Paper Gateway configure will verify API readiness directly." in runner
+    assert "Fresh live 2FA challenge wait" in runner
     assert "No fresh IBKR mobile 2FA evidence appeared" in runner
     assert "poma ibkr-check" in runner
-    assert runner.index("Fresh 2FA challenge wait") < runner.index("api_ready(mode, required=True)")
+    assert runner.index("Fresh live 2FA challenge wait") < runner.index("return api_ready(mode, required=True)", runner.index("Fresh live 2FA challenge wait"))
 
 
-def test_gateway_runner_restarts_after_config_write_before_waiting() -> None:
+def test_gateway_runner_restarts_after_config_write_before_mode_specific_readiness() -> None:
     runner = _runner()
 
     configure = "Configure IBC auth values"
     validate = "Validate IBC configuration"
     clear_logs = "Clear stale Gateway auth logs"
-    force_login = "Force fresh ibgateway login after IBC configuration"
-    fresh_2fa = "Fresh 2FA challenge wait"
+    restart = "Restart ibgateway after IBC configuration"
+    paper_readiness = "Paper Gateway configure will verify API readiness directly."
+    live_2fa = "Fresh live 2FA challenge wait"
 
-    for snippet in (configure, validate, clear_logs, force_login, fresh_2fa):
+    for snippet in (configure, validate, clear_logs, restart, paper_readiness, live_2fa):
         assert snippet in runner
     assert runner.index(configure) < runner.index(validate)
     assert runner.index(validate) < runner.index(clear_logs)
-    assert runner.index(clear_logs) < runner.index(force_login)
-    assert runner.index(force_login) < runner.index(fresh_2fa)
+    assert runner.index(clear_logs) < runner.index(restart)
+    assert runner.index(restart) < runner.index(paper_readiness)
+    assert runner.index(restart) < runner.index(live_2fa)
     assert "POMA_CONFIGURE_IBC_RESTART=0" in runner
 
 

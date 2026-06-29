@@ -197,15 +197,19 @@ def main() -> int:
     if timed("Validate IBC configuration", lambda: remote(f"sudo poma-diagnose-ibgateway validate --mode {mode}", timeout=120)) != 0:
         return 1
     timed("Clear stale Gateway auth logs", lambda: remote("sudo poma-wait-ibgateway-2fa --truncate-logs-only", timeout=120))
-    if timed("Force fresh ibgateway login after IBC configuration", lambda: remote("sudo systemctl restart ibgateway", timeout=240)) != 0:
+    if timed("Restart ibgateway after IBC configuration", lambda: remote("sudo systemctl restart ibgateway", timeout=240)) != 0:
         diagnose()
         return 1
+    if mode == "paper":
+        print("Paper Gateway configure will verify API readiness directly.")
+        return api_ready(mode, required=True)
+
     wait_command = (
         f"sudo poma-wait-ibgateway-2fa --log-lines 80 --timeout-seconds {twofa_timeout} "
         f"--poll-seconds {poll_seconds} --fail-no-progress-after {no_progress_after}"
     )
-    if timed("Fresh 2FA challenge wait", lambda: remote(wait_command, timeout=480)) != 0:
-        print("No fresh IBKR mobile 2FA evidence appeared; refusing configure success.", file=sys.stderr)
+    if timed("Fresh live 2FA challenge wait", lambda: remote(wait_command, timeout=480)) != 0:
+        print("No fresh IBKR mobile 2FA evidence appeared; refusing live configure success.", file=sys.stderr)
         diagnose()
         return 1
     return api_ready(mode, required=True)

@@ -69,8 +69,10 @@ Existing stock positions in the configured IBKR account are read by ticker and i
 | `TELEGRAM_CHAT_ID` | `123456789`, `-1001234567890` | User, group, or channel id. For groups/channels this is often negative. |
 | `IBKR_ACCOUNT_PAPER` | `DU1234567` | Paper account id. Required when deploying `TRADING_MODE=paper`. |
 | `IBKR_ACCOUNT` | `U1234567` or broker-provided account id | Live account id. Required when deploying `TRADING_MODE=live`. |
-| `IBKR_LOGIN_ID` | broker login id | Used only by IB Gateway Ops configure actions. |
-| `IBKR_LOGIN_SECRET` | broker login password | Used only by IB Gateway Ops configure actions. |
+| `IBKR_LOGIN_ID_PAPER` | broker paper login id | Used only by IB Gateway Ops `configure-paper`. |
+| `IBKR_LOGIN_SECRET_PAPER` | broker paper login password | Used only by IB Gateway Ops `configure-paper`. |
+| `IBKR_LOGIN_ID` | broker live login id | Used only by IB Gateway Ops `configure-live`. |
+| `IBKR_LOGIN_SECRET` | broker live login password | Used only by IB Gateway Ops `configure-live`. |
 | `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` | one temporary JSON key | Bootstrap only. Delete after WIF bootstrap succeeds. |
 
 ## Market data snapshots and ranking
@@ -91,9 +93,9 @@ Use **Discover Telegram chat ID** in GitHub Actions to read the chat ID. Start t
 
 ## IBKR Gateway login config
 
-`IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` are GitHub Environment Secrets consumed only by the **IB Gateway Ops** workflow for `configure-paper` and `configure-live`. They are broker login credentials, not app `.env` keys.
+`IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER` are GitHub Environment Secrets consumed only by the **IB Gateway Ops** workflow for `configure-paper`. `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` are consumed only for `configure-live`. They are broker login credentials, not app `.env` keys.
 
-The workflow sends these values to `sudo poma-configure-ibc` over IAP SSH stdin so IBC can create VM-local Gateway config. Do not add the broker login credentials to Terraform, VM metadata, `.env`, or repository files. See [`adr/0001-ibkr-credentials-in-github-secrets.md`](adr/0001-ibkr-credentials-in-github-secrets.md).
+The workflow sends the selected pair to `sudo poma-configure-ibc` over IAP SSH stdin so IBC can create VM-local Gateway config. Do not add broker login credentials to Terraform, VM metadata, `.env`, or repository files. See [`adr/0001-ibkr-credentials-in-github-secrets.md`](adr/0001-ibkr-credentials-in-github-secrets.md).
 
 ## CI/CD `.env` rendering and validation
 
@@ -115,4 +117,5 @@ Bootstrap apply writes generated, non-secret GCP deployment identifiers to `ops/
 - `ORDER_TYPE=market` in live mode is blocked unless `ALLOW_MARKET_ORDERS=true`.
 - `MAX_POSITION_PCT`, `MAX_TURNOVER_PCT`, `STRATEGY_ALLOCATIONS`, and min-trade thresholds are validated at startup.
 - The deploy workflow renders paper runtime `IBKR_ACCOUNT` from `IBKR_ACCOUNT_PAPER`. Live mode uses `IBKR_ACCOUNT`.
+- Paper Gateway login secrets are separate from the paper account id: `IBKR_LOGIN_ID_PAPER` / `IBKR_LOGIN_SECRET_PAPER` authenticate Gateway, while `IBKR_ACCOUNT_PAPER` selects the account the app may trade.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are required so every deployed run has alerting configured.

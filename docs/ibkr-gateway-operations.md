@@ -12,12 +12,17 @@ Use this flow for manual paper/live setup and for production promotion. Auto CI/
 2. Add the required GitHub Environment Secrets for the target environment:
 
 ```text
-IBKR_LOGIN_ID=<ibkr-gateway-login-username>
-IBKR_LOGIN_SECRET=<ibkr-gateway-login-password>
+# configure-paper, used by dev/stg paper environments alongside IBKR_ACCOUNT_PAPER
+IBKR_LOGIN_ID_PAPER=<ibkr-paper-gateway-login-username>
+IBKR_LOGIN_SECRET_PAPER=<ibkr-paper-gateway-login-password>
+
+# configure-live, used only for live Gateway configuration
+IBKR_LOGIN_ID=<ibkr-live-gateway-login-username>
+IBKR_LOGIN_SECRET=<ibkr-live-gateway-login-password>
 ```
 
 3. Run **IB Gateway Ops** with `action=configure-paper` before paper mode, or `action=configure-live` before live mode.
-4. Approve broker mobile authentication when prompted.
+4. For paper, the workflow proceeds to API readiness after Gateway restart. For live, approve broker mobile authentication when prompted.
 5. Verify Gateway before paper/live mode:
 
 ```bash
@@ -49,15 +54,17 @@ manual deploys require an explicit Gateway Ops action. Gateway Ops provisions:
 - `/usr/local/bin/poma-configure-ibc` for the required IBC credential setup.
 - `/usr/local/bin/poma-diagnose-ibgateway` for startup diagnosis.
 
-The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` from GitHub Environment Secrets only for `configure-paper` and `configure-live`, sends them to `sudo poma-configure-ibc` over IAP SSH stdin, and removes its temporary runner-side input file after use.
+The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER` from GitHub Environment Secrets only for `configure-paper`. It reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` only for `configure-live`. The selected pair is sent to `sudo poma-configure-ibc` over IAP SSH stdin and is not written to the app `.env`.
 
-The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Pull-request Auto CI/CD uses `configure-paper` for the dev Gateway check so broker-login and authenticated API regressions are caught before merge when an operator approves IBKR mobile 2FA. Configure and socket verification wait for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, print the redacted handshake tail on failure, and tolerate a transient post-socket service restart until the bounded readiness deadline.
+The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Pull-request Auto CI/CD uses `configure-paper` for the dev Gateway check so paper broker-login and authenticated API regressions are caught before merge. Configure and socket verification wait for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, print the redacted handshake tail on failure, and tolerate a transient post-socket service restart until the bounded readiness deadline. Live configure also waits for fresh mobile-approval evidence before the authenticated API check.
 
 The service starts raw IB Gateway until `/home/poma/ibc/config.ini` exists. After setup, it starts Gateway through IBC as one foreground systemd process and refuses to fall back to raw Gateway if the configured IBC launch path is broken.
 
 ## Credential handling rules
 
-- Store IBKR Gateway login credentials only as GitHub Environment Secrets named `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET`.
+- Store paper IBKR Gateway login credentials only as GitHub Environment Secrets named `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER`.
+- Store live IBKR Gateway login credentials only as GitHub Environment Secrets named `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET`.
+- Keep Gateway login credentials separate from account selector secrets such as `IBKR_ACCOUNT_PAPER` and `IBKR_ACCOUNT`.
 - Do not commit broker login credentials.
 - Do not add broker login credentials to Terraform variables, Terraform state, VM metadata, GCP Secret Manager, or the app `.env`.
 - Do not echo broker login credentials in workflow logs.

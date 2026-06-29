@@ -43,11 +43,10 @@ Deploy now validates the rendered `.env` before Terraform apply. The validation 
 ## Paper trading activation
 
 1. Run **IB Gateway Ops** with `action=configure-paper`.
-2. Approve IBKR mobile 2FA when prompted.
-3. Confirm **IB Gateway Ops** reports fresh 2FA evidence, API readiness, and `poma ibkr-check` success. A configure run that succeeds without fresh 2FA evidence is invalid and must be treated as a failed setup.
-4. Run **Deploy GCP e2-micro VM** with `trading_mode=paper`, `data_provider=yahoo`, and `deploy_smoke=true`.
-5. Wait for the next US market open plus `REBALANCE_AFTER_OPEN_MINUTES`.
-6. Review Telegram alerts and the generated report after the first paper rebalance.
+2. Confirm **IB Gateway Ops** reports API readiness and `poma ibkr-check` success.
+3. Run **Deploy GCP e2-micro VM** with `trading_mode=paper`, `data_provider=yahoo`, and `deploy_smoke=true`.
+4. Wait for the next US market open plus `REBALANCE_AFTER_OPEN_MINUTES`.
+5. Review Telegram alerts and the generated report after the first paper rebalance.
 
 For an account with more cash than `PORTFOLIO_VALUE_USD`, POMA still targets only the configured cap. Example: if the paper account has `$50,000` but `PORTFOLIO_VALUE_USD=10000`, the default active strategy sleeve is `$9,800` and the passive cash sleeve is `$200`.
 
@@ -82,9 +81,8 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Deploy fails during rendered config validation | Bad/missing secret, allocation sum above 100%, live gate not enabled, or paper/live using `fixture` | Fix the GitHub Environment secret/input and rerun deploy. |
-| Deploy smoke passes but paper does not trade | Gateway not authenticated, wrong account id, or market not open yet | Run **IB Gateway Ops** configure-paper, approve 2FA, then run `poma ibkr-check`. |
-| `configure-paper` succeeds but no 2FA was received | False-positive Gateway readiness from an already-running/stale session or socket-only check | Treat the configure run as invalid. Rerun **IB Gateway Ops** configure-paper and require fresh 2FA evidence plus `poma ibkr-check` success before trading. |
-| `BrokerUnavailable` / `Not connected` during paper | IB Gateway is listening but not API-ready/authenticated, or the gateway connection dropped before IBKR accepted the order batch | Run **IB Gateway Ops** configure-paper, approve 2FA, verify `poma ibkr-check`, then rerun only after confirming no IBKR Activity orders were accepted. |
+| Deploy smoke passes but paper does not trade | Gateway not authenticated, wrong account id, or market not open yet | Run **IB Gateway Ops** configure-paper, then run `poma ibkr-check`. |
+| `BrokerUnavailable` / `Not connected` during paper | IB Gateway is listening but not API-ready/authenticated, or the gateway connection dropped before IBKR accepted the order batch | Run **IB Gateway Ops** configure-paper, verify `poma ibkr-check`, then rerun only after confirming no IBKR Activity orders were accepted. |
 | `configured IBKR_ACCOUNT=... not in [...]` | Secret points at the wrong paper/live account | Update `IBKR_ACCOUNT_PAPER` or `IBKR_ACCOUNT` in the selected GitHub Environment. |
 | `completed_with_order_issues` | One or more orders failed, cancelled, timed out, or only partially progressed | Open the latest report in `reports/`, check Telegram order details, then review IBKR activity. |
 | `blocked` rebalance | Risk guard blocked execution, usually turnover/order-size/trade-count | Review report warnings and adjust config only if the block is expected and safe. |
