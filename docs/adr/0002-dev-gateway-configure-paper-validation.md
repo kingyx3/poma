@@ -32,11 +32,11 @@ The dev PR check validates the full paper Gateway path:
 
 Auto CI/CD uses scoped change detection:
 
-- App/runtime code and dependency paths run deploy only.
+- Auto CI/CD routing, app/runtime code, and dependency paths run deploy only.
 - Gateway-owned helper/service/workflow paths run dev Gateway Ops only.
-- Shared VM foundation paths, such as Auto CI/CD routing, Terraform VM foundation, and generated
-  deploy-environment files, intentionally run both deploy and dev Gateway validation because they
-  can affect both the VM host and Gateway runtime.
+- Shared VM foundation paths, such as Terraform VM foundation and generated deploy-environment
+  files, intentionally run both deploy and dev Gateway validation because they can affect both the
+  VM host and Gateway runtime.
 
 Staging is not deployed or configured from Auto CI/CD. Staging and non-production Gateway lifecycle
 operations are owned by the manual deploy and IB Gateway Ops workflows. Production release uses
