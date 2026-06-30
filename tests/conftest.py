@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from poma.config import Settings
-from poma.models import OrderResult, ProposedTrade
+from poma.models import OrderResult, PortfolioBalances, ProposedTrade
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -18,9 +18,25 @@ def make_settings(**overrides: object) -> Settings:
 class FakeBroker:
     """In-memory broker that records submissions and reports back filled orders."""
 
-    def __init__(self, positions: list | None = None) -> None:
+    def __init__(
+        self,
+        positions: list | None = None,
+        *,
+        cash_usd: float = 10_000.0,
+        net_liquidation_usd: float | None = None,
+    ) -> None:
         self._positions = positions or []
+        self.cash_usd = cash_usd
+        self.net_liquidation_usd = net_liquidation_usd
         self.submitted: list[ProposedTrade] | None = None
+
+    def account_balances(self) -> PortfolioBalances:
+        positions_value = sum(position.market_value for position in self._positions)
+        return PortfolioBalances(
+            cash_usd=self.cash_usd,
+            positions_market_value_usd=positions_value,
+            net_liquidation_usd=self.net_liquidation_usd,
+        )
 
     def positions(self) -> list:
         return list(self._positions)
