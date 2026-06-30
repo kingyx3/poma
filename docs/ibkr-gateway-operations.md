@@ -6,7 +6,7 @@ See [`adr/0001-ibkr-credentials-in-github-secrets.md`](adr/0001-ibkr-credentials
 
 ## Production flow
 
-Use this flow for manual paper/live setup and for production promotion. Auto CI/CD invokes Gateway Ops automatically only for dev pull requests that touch Gateway-owned paths. Staging pushes deploy the VM/app only and never run `configure-paper`.
+Use this flow for manual paper/live setup and for production promotion. Auto CI/CD invokes Gateway Ops automatically only for dev pull requests that touch Gateway-owned paths or shared VM foundation paths. Staging pushes deploy the VM/app only and never run `configure-paper` or `configure-live`.
 
 1. Deploy the VM using [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md).
 2. Add the required GitHub Environment Secrets for the target environment:
@@ -16,12 +16,12 @@ Use this flow for manual paper/live setup and for production promotion. Auto CI/
 IBKR_LOGIN_ID_PAPER=<ibkr-paper-gateway-login-username>
 IBKR_LOGIN_SECRET_PAPER=<ibkr-paper-gateway-login-password>
 
-# configure-live, used only for live Gateway configuration
+# configure-live, allowed only for production live Gateway configuration
 IBKR_LOGIN_ID=<ibkr-live-gateway-login-username>
 IBKR_LOGIN_SECRET=<ibkr-live-gateway-login-password>
 ```
 
-3. Run **IB Gateway Ops** with `action=configure-paper` before dev paper validation, or `action=configure-live` before live mode. `configure-paper` is intentionally disabled for `stg`; use non-configure ops actions such as `status`, `restart`, `logs`, or `verify-socket` for staging Gateway health checks.
+3. Run **IB Gateway Ops** with `action=configure-paper` before dev paper validation, or `action=configure-live` before production live mode. All configure actions are intentionally disabled for `stg`; use non-configure ops actions such as `status`, `restart`, `logs`, or `verify-socket` for staging Gateway health checks.
 4. For paper, the workflow proceeds to API readiness after Gateway restart. For live, approve broker mobile authentication when prompted.
 5. Verify Gateway before paper/live mode:
 
@@ -44,9 +44,14 @@ For startup-stage diagnosis when no mobile approval prompt appears, see [`ib-gat
 
 The VM startup script keeps boot light: it installs only Docker, cron, the app user, and runtime
 directories. The IB Gateway runtime is installed and enabled by the **IB Gateway Ops** workflow.
-Auto CI/CD keeps VM/app deployment and Gateway configuration separate: deploy-relevant paths run
-only the deploy workflow, Gateway-owned paths may run the dev Gateway Ops validation, and staging
-pushes never chain `configure-paper` after deploy. Gateway Ops provisions:
+Auto CI/CD classifies changed files before running expensive operations:
+
+- App/runtime code and dependency paths run VM/app deploy only.
+- Gateway-owned helper/service/workflow paths run dev Gateway Ops only.
+- Shared VM foundation paths, such as Auto CI/CD routing, Terraform VM foundation, or generated deploy-environment files, intentionally run both deploy and dev Gateway validation because they can affect the host that Gateway runs on.
+- Staging pushes never chain `configure-paper` or `configure-live` after deploy.
+
+Gateway Ops provisions:
 
 - IB Gateway in `/opt/ibgateway`.
 - IBC in `/opt/ibc`.
@@ -55,7 +60,7 @@ pushes never chain `configure-paper` after deploy. Gateway Ops provisions:
 - `/usr/local/bin/poma-configure-ibc` for the required IBC credential setup.
 - `/usr/local/bin/poma-diagnose-ibgateway` for startup diagnosis.
 
-The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER` from GitHub Environment Secrets only for `configure-paper`. It reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` only for `configure-live`. The selected pair is sent to `sudo poma-configure-ibc` over IAP SSH stdin and is not written to the app `.env`. The workflow has an explicit guard that refuses `configure-paper` when `deploy_environment=stg`.
+The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER` from GitHub Environment Secrets only for `configure-paper`. It reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` only for `configure-live`. The selected pair is sent to `sudo poma-configure-ibc` over IAP SSH stdin and is not written to the app `.env`. The workflow has an explicit guard that refuses both `configure-paper` and `configure-live` when `deploy_environment=stg`.
 
 The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Pull-request Auto CI/CD uses `configure-paper` for the dev Gateway check so paper broker-login and authenticated API regressions are caught before merge. Configure and socket verification wait for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, print the redacted handshake tail on failure, and tolerate a transient post-socket service restart until the bounded readiness deadline. Gateway Ops allows up to 600 seconds for the IBC/Gateway login path so slow first starts do not fail while Gateway is still progressing. Live configure also waits for fresh mobile-approval evidence before the authenticated API check.
 
