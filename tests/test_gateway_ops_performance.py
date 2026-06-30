@@ -82,6 +82,18 @@ def test_gateway_wait_helper_runs_locally_on_vm_and_prints_progress() -> None:
         assert snippet in helper
 
 
+def test_gateway_startup_check_prints_visible_failure_before_returning_status_2() -> None:
+    helper = DIAG_HELPER.read_text(encoding="utf-8")
+
+    assert "print_visible_startup_failure" in helper
+    assert "::endgroup::" in helper
+    assert "Visible gateway startup diagnostic" in helper
+    assert "VISIBLE_STARTUP_CHECK_STATUS=failed" in helper
+    assert "VISIBLE_STARTUP_STAGE=" in helper
+    assert "VISIBLE_STARTUP_REASON=" in helper
+    assert "return 2" in helper
+
+
 def test_gateway_ops_preserves_diagnostics_and_hardening() -> None:
     runner = _runner()
     helper = DIAG_HELPER.read_text(encoding="utf-8")
