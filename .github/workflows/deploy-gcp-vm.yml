@@ -94,7 +94,7 @@ jobs:
   deploy:
     name: Terraform and deploy (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     environment: ${{ inputs.deploy_environment }}
     env:
       TF_IN_AUTOMATION: "true"
@@ -311,7 +311,7 @@ jobs:
 
       - name: Upload and install on VM
         if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
-        timeout-minutes: 35
+        timeout-minutes: 55
         run: |
           set -euo pipefail
 
@@ -344,20 +344,32 @@ jobs:
             timeout --kill-after=30s "${seconds}" "$@"
           }
 
+          print_vm_bootstrap_status() {
+            run_with_timeout 45s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
+              set +e
+              echo "===== POMA VM bootstrap status ====="
+              echo "sentinel=$(cat /var/lib/poma/vm-ready 2>/dev/null || true)"
+              echo "boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+              id poma || true
+              systemctl is-active docker cron || true
+              systemctl --no-pager --full status google-startup-scripts.service google-guest-agent.service docker cron || true
+              journalctl --no-pager -n 160 -u google-startup-scripts.service -u google-guest-agent.service -u docker -u cron || true
+            ' || true
+          }
+
           # Poll the VM over IAP until the POMA startup readiness sentinel matches this
-          # deploy's startup revision. Each probe is a short, independently timed SSH, so a cold
-          # boot (the minimal startup installs Docker + cron and writes /var/lib/poma/vm-ready
-          # with the current boot id) or a transient IAP/SSH-key-propagation hang is retried with
-          # a fresh connection. If an older VM has no matching sentinel but cloud-init has been
-          # boot-finished for at least 2 minutes, continue so deploy fails fast with the concrete
-          # Docker/app error instead of spending the whole step polling readiness. Returns within
-          # seconds on an already-warm VM.
+          # deploy's startup revision and the app user plus Docker/cron services exist. Each
+          # probe is a short, independently timed SSH, so a cold boot or a transient
+          # IAP/SSH-key-propagation hang is retried with a fresh connection. Do not accept
+          # cloud-init's boot-finished marker by itself: the Google metadata startup script can
+          # still be running, and deploy needs the concrete POMA host contract.
           wait_for_vm_ready() {
-            local deadline=$((SECONDS + 240)) attempt=0
+            local deadline=$((SECONDS + 600)) attempt=0
             until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command "sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; if [ \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" ]; then exit 0; fi; uptime_seconds=\"\$(cut -d. -f1 /proc/uptime)\"; test -f /var/lib/cloud/instance/boot-finished && [ \"\${uptime_seconds}\" -ge 120 ]"; do
+                --command "sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron"; do
               if [ "${SECONDS}" -ge "${deadline}" ]; then
-                echo "VM ${instance_name} not reachable / startup revision ${startup_revision} not ready within 4m." >&2
+                echo "VM ${instance_name} not reachable or startup revision ${startup_revision} not ready within 10m." >&2
+                print_vm_bootstrap_status
                 return 1
               fi
               attempt=$((attempt + 1))

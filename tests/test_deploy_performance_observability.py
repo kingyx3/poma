@@ -40,7 +40,8 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
         "timeout --kill-after=30s 2m tar",
         "docker-compose.vm.yml",
-        "timeout-minutes: 35",
+        "timeout-minutes: 55",
+        "timeout-minutes: 90",
         "Remote install, Docker pull, smoke, cron",
     )
     for snippet in expected_snippets:
@@ -73,8 +74,13 @@ def test_prebuilt_image_workflow_pushes_main_and_sha_tags_with_cache() -> None:
 def test_deploy_polling_and_retries_are_bounded() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "local deadline=$((SECONDS + 240)) attempt=0" in workflow
-    assert "startup revision ${startup_revision} not ready within 4m" in workflow
+    assert "local deadline=$((SECONDS + 600)) attempt=0" in workflow
+    assert "startup revision ${startup_revision} not ready within 10m" in workflow
+    assert "id poma >/dev/null 2>&1" in workflow
+    assert "systemctl is-active --quiet docker" in workflow
+    assert "systemctl is-active --quiet cron" in workflow
+    assert "test -f /var/lib/cloud/instance/boot-finished" not in workflow
+    assert "print_vm_bootstrap_status" in workflow
     assert "retry_with_backoff" in workflow
     assert "max_attempts" in workflow
     assert "failed after ${attempt} attempt(s)" in workflow

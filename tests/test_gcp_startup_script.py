@@ -49,6 +49,8 @@ def test_gcp_startup_script_is_minimal_host_bootstrap() -> None:
     for snippet in REQUIRED_STARTUP_SNIPPETS:
         assert snippet in script, snippet
 
+    assert script.index('useradd --uid "$${APP_UID}"') < script.index("apt-get update")
+
 
 def test_gcp_startup_script_does_not_install_ib_gateway() -> None:
     script = STARTUP_SCRIPT.read_text(encoding="utf-8")
