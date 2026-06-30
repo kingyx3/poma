@@ -4,6 +4,7 @@ set -eu
 # install_ibc_config_helper.py renders the base service and pins IBC gatewaystart.sh.
 # This script renders the final IBC-managed systemd foreground runner. Once an
 # IBC config exists, Gateway launches through IBC and fails closed if IBC breaks.
+# Configured startup is intentionally refusing raw Gateway fallback.
 
 RUNNER=/usr/local/bin/poma-run-ib-gateway
 ENGINE=/usr/local/bin/poma-ibc-gateway-engine
