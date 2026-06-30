@@ -52,9 +52,21 @@ jobs:
             [ "${1:-}" = "0000000000000000000000000000000000000000" ]
           }
 
-          is_deploy_path() {
+          is_shared_vm_gateway_path() {
             case "$1" in
               .github/workflows/auto-cicd.yml|\
+              infra/gcp-free-tier/*|\
+              ops/deploy/environments/*)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          is_deploy_path() {
+            case "$1" in
               .github/workflows/deploy-gcp-vm.yml|\
               Dockerfile|\
               docker-compose.yml|\
@@ -67,9 +79,7 @@ jobs:
               ops/scripts/validate_data_provider.py)
                 return 0
                 ;;
-              infra/gcp-free-tier/*|\
               ops/cron/*|\
-              ops/deploy/environments/*|\
               src/*)
                 return 0
                 ;;
@@ -128,17 +138,19 @@ jobs:
           else
             while IFS= read -r path; do
               [ -n "${path}" ] || continue
-              if is_deploy_path "${path}"; then
+              if is_shared_vm_gateway_path "${path}"; then
                 deploy_required=true
-              fi
-              if is_gateway_path "${path}"; then
+                gateway_required=true
+              elif is_deploy_path "${path}"; then
+                deploy_required=true
+              elif is_gateway_path "${path}"; then
                 gateway_required=true
               fi
             done < "${changed_files}"
 
-            # VM/app deploy and Gateway configure are intentionally separate:
-            # deploy_required only controls Terraform/app work; gateway_required only controls
-            # Gateway Ops validation for Gateway-owned paths or unknown change sets.
+            # Deploy and Gateway Ops are coupled only for shared VM foundation paths
+            # (Auto CI/CD routing, Terraform VM foundation, generated deploy env files).
+            # App/runtime code changes deploy the app only; Gateway-owned changes run Gateway Ops only.
             if [ "${deploy_required}" = "true" ] || [ "${gateway_required}" = "true" ]; then
               reason="deploy_required=${deploy_required}, gateway_required=${gateway_required} based on changed paths"
             fi
@@ -217,7 +229,7 @@ jobs:
 
   # Staging Auto CI/CD intentionally stops after VM/app deploy. Gateway lifecycle operations are
   # owned by the IB Gateway Ops workflow and are not chained from deploy, so pushes to main never
-  # rewrite broker login credentials or run configure-paper for stg.
+  # rewrite broker login credentials or run configure-paper/configure-live for stg.
 
   # Publishing a non-prerelease GitHub release promotes to live/prd. prereleases are ignored so
   # they can be used for staging/testing without touching real money. prd GitHub Environment
