@@ -1,0 +1,10 @@
+services:
+  poma:
+    image: ${POMA_IMAGE}
+    env_file: .env
+    command: ["monitor"]
+    volumes:
+      - ./reports:/app/reports
+      - ./state:/app/state
+      - ./data:/app/data
+    network_mode: host
