@@ -215,7 +215,7 @@ def main() -> int:
                         print("IBKR API handshake and trading permission preview succeeded; Gateway is ready to submit orders.")
                         return 0
                     if check_status == TRANSIENT_GATEWAY_READINESS_STATUS:
-                        print("IBKR readiness check raced Gateway startup/auth; continuing the idempotent readiness loop.")
+                        print("IBKR readiness check raced a Gateway socket restart; continuing the idempotent readiness loop.")
                         stable = 0
                     elif check_status == APP_READINESS_INFRA_FAILURE_STATUS:
                         print(
