@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
@@ -17,6 +17,7 @@ BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
 ORDER_NOT_ACCEPTED_STATUS = "OrderNotAccepted"
 TRADING_PERMISSION_PROBE_SYMBOL = "AAPL"
 TRADING_PERMISSION_PROBE_LIMIT_PRICE = 1.0
+CASH_BALANCE_TAG_PRIORITY = ("TotalCashValue", "CashBalance")
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
@@ -71,6 +72,9 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
 
 
 class Broker(Protocol):
+    def cash_balance_usd(self) -> float:
+        ...
+
     def positions(self) -> list[CurrentPosition]:
         ...
 
@@ -83,6 +87,9 @@ class Broker(Protocol):
 
 
 class DryRunBroker:
+    def cash_balance_usd(self) -> float:
+        return 0.0
+
     def positions(self) -> list[CurrentPosition]:
         return []
 
@@ -157,6 +164,17 @@ class IbkrBroker:
         if not trading_ok:
             raise BrokerUnavailable(trading_message)
         self._assert_connected(ib)
+
+    def cash_balance_usd(self) -> float:
+        ib = self._connect()
+        try:
+            self._assert_connected(ib)
+            return _cash_balance_usd_from_account_summary(
+                ib.accountSummary(),
+                configured_account=self.settings.ibkr_account,
+            )
+        finally:
+            ib.disconnect()
 
     def positions(self) -> list[CurrentPosition]:
         ib = self._connect()
@@ -427,6 +445,46 @@ def _probe_trading_permissions(ib: IB, settings: Settings) -> tuple[bool, str]:
     if warning:
         detail_parts.append(f"warning={warning}")
     return True, ", ".join(detail_parts)
+
+
+def _cash_balance_usd_from_account_summary(
+    summary: Sequence[Any],
+    *,
+    configured_account: str | None,
+) -> float:
+    balances_by_tag: dict[str, float] = {}
+    for row in summary:
+        account = str(getattr(row, "account", "") or "")
+        if configured_account and account and account != configured_account:
+            continue
+        currency = str(getattr(row, "currency", "") or "")
+        if currency != "USD":
+            continue
+        tag = str(getattr(row, "tag", "") or "")
+        if tag not in CASH_BALANCE_TAG_PRIORITY:
+            continue
+        value = _float_from_broker_value(getattr(row, "value", None))
+        if value is not None:
+            balances_by_tag[tag] = value
+
+    for tag in CASH_BALANCE_TAG_PRIORITY:
+        if tag in balances_by_tag:
+            return balances_by_tag[tag]
+
+    account_detail = f" for account {configured_account}" if configured_account else ""
+    raise BrokerUnavailable(
+        "IBKR account summary did not include a USD TotalCashValue or CashBalance"
+        f"{account_detail}; cannot size paper/live rebalance dynamically"
+    )
+
+
+def _float_from_broker_value(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", ""))
+    except ValueError:
+        return None
 
 
 def _looks_like_connection_failure(ib: IB, exc: Exception) -> bool:
