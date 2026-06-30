@@ -84,7 +84,7 @@ API_PORT=${IB_GATEWAY_API_PORT:-7497}
 
 log() {
   mkdir -p ${LOG_DIR}
-  printf '%s %s\n' $(date -u +%Y-%m-%dT%H:%M:%SZ) $* >>${WRAPPER_LOG}
+  echo $(date -u +%Y-%m-%dT%H:%M:%SZ) $* >>${WRAPPER_LOG}
 }
 
 reset_logs() {
