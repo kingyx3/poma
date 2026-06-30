@@ -6,9 +6,9 @@ Status: Accepted
 
 ## Context
 
-The `dev-configure-gateway` job in **Auto CI/CD** runs on pull requests that need Gateway validation. The `configure-paper` action writes IBC credentials from GitHub Environment Secrets, forces a fresh Gateway login path, and verifies a real authenticated `ib_insync` API handshake.
+The `dev-configure-gateway` job in **Auto CI/CD** runs on pull requests that need Gateway validation. The `configure-paper` action writes IBC credentials from GitHub Environment Secrets, forces a fresh Gateway login path, handles broker auth/2FA when required, and verifies a real authenticated `ib_insync` API handshake.
 
-This credentialed path is intentionally stronger than a helper-only restart check. It proves that dev paper credentials, IBC config rendering, Gateway startup, API socket readiness, and the application `poma ibkr-check` handshake all work before gateway-related changes merge.
+This credentialed path is intentionally stronger than a helper-only restart check. It proves that dev paper credentials, IBC config rendering, Gateway startup, broker auth/2FA handling when required, API socket readiness, and the application `poma ibkr-check` handshake all work before gateway-related changes merge.
 
 Staging pushes to `main` have a different responsibility: they deploy Terraform/app changes to the staging VM. They must not rewrite broker login credentials or run `configure-paper` as a side effect of app or VM deployment.
 
@@ -31,7 +31,7 @@ Production release uses `action: configure-live` after the production deploy.
 
 ## Consequences
 
-- Pull-request Auto CI/CD catches Gateway runtime, service, broker-login, and authenticated API regressions before merge in dev.
+- Pull-request Auto CI/CD catches Gateway runtime, service, broker-login, broker auth/2FA handling, and authenticated API regressions before merge in dev.
 - Staging pushes to `main` are faster and safer because they stop after VM/app deployment and do not reconfigure broker login credentials.
 - Deploy-relevant path detection and Gateway-relevant path detection stay separate; a VM/app change does not automatically imply a Gateway configure action.
 - A configure run that reaches an API socket but cannot pass the authenticated handshake fails instead of producing a false-positive success from a stale or non-trading Gateway session.
