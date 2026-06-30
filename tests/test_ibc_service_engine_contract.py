@@ -18,6 +18,14 @@ def test_service_script_renders_ibc_managed_runner_and_engine() -> None:
         assert snippet in script
 
 
+def test_service_script_waits_for_real_gateway_process_not_wrapper_path() -> None:
+    script = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "ibcalpha\\.ibc\\.IbcGateway|/ibgateway" in script
+    assert "pgrep -u \"$(id -u)\" -f 'java|ibgateway'" not in script
+    assert "Real Gateway process or API listener detected" in script
+
+
 def test_service_script_does_not_fragile_patch_generated_files() -> None:
     script = SERVICE_SCRIPT.read_text(encoding="utf-8")
 
