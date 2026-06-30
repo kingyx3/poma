@@ -23,14 +23,17 @@ The app checks the market calendar on every run and only rebalances when:
 ## Capital allocation boundary
 
 ```text
-PORTFOLIO_VALUE_USD
+paper/live broker account balances
+  -> USD cash + current portfolio value
   -> STRATEGY_ALLOCATIONS
       -> rank_velocity_size_equal_weight active sleeve
       -> cash passive sleeve
       -> future strategy sleeves
 ```
 
-`PORTFOLIO_VALUE_USD` is the hard portfolio cap. `STRATEGY_ALLOCATIONS` splits that cap across named sleeves and cannot exceed 100%. The current active strategy receives only its allocated sleeve, so the default `rank_velocity_size_equal_weight=0.98,cash=0.02` uses 98% of the configured cap for trades and leaves 2% in passive cash. Cash is not a hidden active-strategy buffer.
+For paper/live, POMA reads the configured IBKR account's USD cash balance and current portfolio value before every rebalance. `STRATEGY_ALLOCATIONS` splits that broker-derived value across named sleeves and cannot exceed 100%. The current active strategy receives only its allocated sleeve, so the default `rank_velocity_size_equal_weight=0.98,cash=0.02` uses 98% of the live account value for trades and leaves 2% in passive cash. Cash is not a hidden active-strategy buffer.
+
+`PORTFOLIO_VALUE_USD` remains a dry-run/offline fallback so local reports can still be generated without an IBKR account connection. In paper/live, inability to read a positive broker balance blocks execution rather than using the fallback for order sizing.
 
 ## Market data provider boundary
 
@@ -74,6 +77,7 @@ Terraform creates one small VM, one standard boot disk, one dedicated VPC/subnet
 
 ```text
 plan rebalance
+  -> paper/live: read broker USD cash + current portfolio value before sizing targets
   -> validate target/risk/order guards
   -> dry_run: write report + Telegram summary only
   -> paper/live: execution-start Telegram alert
@@ -107,6 +111,7 @@ reports/*.json                   # generated rebalance reports
 | Repeated cron invocations | State file allows only one rebalance attempt per session. |
 | Missing rank history | Engine falls back to current market-cap selection and writes a warning. |
 | Excess turnover | Turnover guard blocks execution. |
+| Broker balance unavailable | Paper/live execution blocks before order sizing can use stale configured capital. |
 | Accidental live trading | `ALLOW_LIVE_TRADING=true` required for live mode. |
 | Missing deploy config | CI/CD `.env` rendering and runtime validation fail before deployment. |
 | Wrong IBKR account | Deploy validation requires an account id; `poma ibkr-check` verifies it appears in managed accounts. |

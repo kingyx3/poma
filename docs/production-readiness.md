@@ -4,11 +4,11 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 
 ## Required before paper mode
 
-- [ ] Bootstrap WIF using only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
+- [ ] Bootstrap WIF using only the temporary bootstrap service-account key.
 - [ ] Delete the bootstrap secret and disable/delete the temporary GCP key after bootstrap.
-- [ ] Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-- [ ] Add `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER` as GitHub Environment Secrets.
-- [ ] Add `IBKR_ACCOUNT_PAPER` as a GitHub Environment Secret.
+- [ ] Add Telegram alert settings.
+- [ ] Add paper Gateway login settings as GitHub Environment Secrets.
+- [ ] Add the paper trading account id as a GitHub Environment Secret.
 - [ ] Deploy with `TRADING_MODE=dry_run` first.
 - [ ] Confirm deploy-time runtime config validation passes.
 - [ ] Confirm the deploy smoke test created a new `reports/rebalance-*.json` file.
@@ -16,7 +16,8 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm `ibgateway.service` is active after reboot.
 - [ ] Confirm `127.0.0.1:7497` is reachable on the VM.
 - [ ] Confirm `poma ibkr-check` passes and the configured account appears in managed accounts.
-- [ ] Confirm `PORTFOLIO_VALUE_USD` is the intended total managed cap and `STRATEGY_ALLOCATIONS` splits no more than 100% of it.
+- [ ] Confirm the paper account cash + portfolio balance is the intended rebalance sizing base.
+- [ ] Confirm `STRATEGY_ALLOCATIONS` splits no more than 100% of the broker-derived account value.
 - [ ] Confirm the default allocation is intentional: `rank_velocity_size_equal_weight=0.98,cash=0.02`.
 
 ## Required before live mode
@@ -29,8 +30,8 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm no unresolved `completed_with_order_issues`, `blocked`, `failed`, cancelled, timed-out, or partial-fill runs remain unexplained.
 - [ ] Confirm order type policy and fractional-share behavior in the IBKR account.
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
-- [ ] Add `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` before running live Gateway configuration.
-- [ ] Add `IBKR_ACCOUNT` before switching to `TRADING_MODE=live`.
+- [ ] Add live Gateway login settings before running live Gateway configuration.
+- [ ] Add the live account id before switching to `TRADING_MODE=live`.
 - [ ] Run **IB Gateway Ops** with `action=configure-live` and approve mobile authentication when prompted.
 - [ ] Set `ALLOW_LIVE_TRADING=true` intentionally.
 - [ ] Manually review the latest rebalance report before the first live run.
@@ -39,12 +40,12 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 
 The deploy workflow now fails before Terraform/app deployment when:
 
-- Telegram secrets are missing.
-- Paper mode lacks `IBKR_ACCOUNT_PAPER`.
-- Live mode lacks `IBKR_ACCOUNT`.
+- Telegram settings are missing.
+- Paper mode lacks a paper account id.
+- Live mode lacks a live account id.
 - Live mode is requested without `ALLOW_LIVE_TRADING=true`.
 - Rendered `.env` values are missing, empty, or still placeholders.
-- Strategy allocations exceed 100% of `PORTFOLIO_VALUE_USD`.
+- Strategy allocations exceed 100%.
 - Paper/live mode uses `DATA_PROVIDER=fixture`.
 - `MAX_DAILY_TRADES` cannot support a full `MAX_HOLDINGS` bootstrap.
 - `MAX_ORDER_NOTIONAL_USD` is below `MIN_TRADE_NOTIONAL_USD`.
@@ -67,6 +68,7 @@ The deploy workflow now fails before Terraform/app deployment when:
 - [ ] Keep `MAX_TURNOVER_PCT=1.0` for first paper bootstrap, then lower it if you want stricter ongoing churn control.
 - [ ] Keep `MAX_ORDER_NOTIONAL_USD`, `MAX_DAILY_TRADES`, `MAX_POSITION_PCT`, and `MAX_TURNOVER_PCT` within your operational tolerance.
 - [ ] Keep cash outside active strategies by using a `cash` sleeve in `STRATEGY_ALLOCATIONS`.
+- [ ] Treat broker balance-read failures as blocking infrastructure issues; do not trade until `poma ibkr-check` and a balance-backed report succeed.
 - [ ] Treat any `BrokerUnavailable` report as an infrastructure issue: confirm IBKR Activity shows no accepted orders, rerun **IB Gateway Ops** configure, and require `poma ibkr-check` to pass before trading again.
 - [ ] Review any `failed`, `blocked`, `completed_with_order_issues`, timed-out, cancelled, or partial execution result manually.
 

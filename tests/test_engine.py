@@ -6,6 +6,7 @@ from conftest import FakeBroker, make_settings
 
 from poma.data import FixtureMarketDataClient
 from poma.engine import RebalanceEngine
+from poma.models import CurrentPosition
 from poma.portfolio import CURRENT_STRATEGY_NAME
 
 
@@ -24,21 +25,44 @@ def test_build_plan_generates_targets_and_trades() -> None:
     assert all(trade.side.value == "BUY" for trade in plan.trades)
 
 
-def test_build_plan_sizes_current_strategy_from_allocated_sleeve() -> None:
+def test_build_plan_sizes_current_strategy_from_broker_cash_and_positions() -> None:
+    broker = FakeBroker(
+        positions=[CurrentPosition("AAPL", quantity=5.0, market_value=5_000.0)],
+        cash_usd=15_000.0,
+        net_liquidation_usd=20_000.0,
+    )
     plan = _engine(
+        broker=broker,
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
+        PORTFOLIO_VALUE_USD=10_000,
+        STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.5",
+        MAX_POSITION_PCT=1.0,
+        MAX_ORDER_NOTIONAL_USD=100_000.0,
+    ).build_plan("session", "rebalance-x")
+
+    assert plan.portfolio_value_usd == 20_000
+    assert plan.portfolio_cash_usd == 15_000
+    assert plan.portfolio_positions_value_usd == 5_000
+    assert plan.portfolio_net_liquidation_usd == 20_000
+    assert plan.strategy_name == CURRENT_STRATEGY_NAME
+    assert plan.strategy_allocation_pct == 0.5
+    assert plan.strategy_capital_usd == 10_000
+    assert plan.total_allocated_usd == 10_000
+    assert math.isclose(sum(target.target_notional for target in plan.targets), 10_000)
+    assert any("not allocated" in warning for warning in plan.warnings)
+
+
+def test_dry_run_keeps_configured_portfolio_value_for_offline_plans() -> None:
+    plan = _engine(
+        broker=FakeBroker(cash_usd=20_000.0),
         PORTFOLIO_VALUE_USD=10_000,
         STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.5",
         MAX_POSITION_PCT=1.0,
     ).build_plan("session", "rebalance-x")
 
     assert plan.portfolio_value_usd == 10_000
-    assert plan.strategy_name == CURRENT_STRATEGY_NAME
-    assert plan.strategy_allocation_pct == 0.5
     assert plan.strategy_capital_usd == 5_000
-    assert plan.total_allocated_usd == 5_000
-    assert math.isclose(sum(target.target_notional for target in plan.targets), 5_000)
-    assert math.isclose(sum(trade.notional for trade in plan.trades), 5_000)
-    assert any("not allocated" in warning for warning in plan.warnings)
 
 
 def test_run_dry_run_does_not_execute() -> None:
@@ -54,6 +78,7 @@ def test_run_paper_executes_through_broker() -> None:
     engine = _engine(
         broker=broker,
         TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
         MAX_TURNOVER_PCT=1.0,
         MAX_ORDER_NOTIONAL_USD=100_000.0,
     )
@@ -66,10 +91,33 @@ def test_run_paper_executes_through_broker() -> None:
 
 def test_run_blocks_when_turnover_exceeds_limit() -> None:
     broker = FakeBroker()
-    outcome = _engine(broker=broker, TRADING_MODE="paper", MAX_TURNOVER_PCT=0.0001).run(
-        "session", "run"
-    )
+    outcome = _engine(
+        broker=broker,
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
+        MAX_TURNOVER_PCT=0.0001,
+    ).run("session", "run")
     assert outcome.blocked
     assert not outcome.executed
     assert outcome.status == "blocked"
     assert broker.submitted is None
+
+
+def test_run_blocks_when_paper_balance_cannot_be_read() -> None:
+    class BalanceUnavailableBroker(FakeBroker):
+        def account_balances(self):  # noqa: ANN201 - test double shape mirrors protocol
+            raise RuntimeError("account summary unavailable")
+
+    broker = BalanceUnavailableBroker()
+    outcome = _engine(
+        broker=broker,
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
+        MAX_TURNOVER_PCT=1.0,
+        MAX_ORDER_NOTIONAL_USD=100_000.0,
+    ).run("session", "run")
+
+    assert outcome.blocked
+    assert not outcome.executed
+    assert broker.submitted is None
+    assert any("account summary unavailable" in warning for warning in outcome.plan.warnings)

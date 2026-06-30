@@ -24,6 +24,22 @@ class CurrentPosition:
 
 
 @dataclass(frozen=True)
+class PortfolioBalances:
+    cash_usd: float
+    positions_market_value_usd: float
+    net_liquidation_usd: float | None = None
+
+    @property
+    def total_value_usd(self) -> float:
+        cash_and_positions = self.cash_usd + self.positions_market_value_usd
+        if cash_and_positions > 0:
+            return cash_and_positions
+        if self.net_liquidation_usd is not None:
+            return self.net_liquidation_usd
+        return cash_and_positions
+
+
+@dataclass(frozen=True)
 class ProposedTrade:
     ticker: str
     side: OrderSide
@@ -56,6 +72,9 @@ class RebalancePlan:
     execution_results: list[OrderResult]
     warnings: list[str]
     portfolio_value_usd: float = 0.0
+    portfolio_cash_usd: float = 0.0
+    portfolio_positions_value_usd: float = 0.0
+    portfolio_net_liquidation_usd: float | None = None
     strategy_name: str = ""
     strategy_allocation_pct: float = 1.0
     strategy_capital_usd: float = 0.0

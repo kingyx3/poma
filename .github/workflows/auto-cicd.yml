@@ -3,8 +3,6 @@ name: Auto CI/CD
 on:
   pull_request:
     types: [opened, reopened, synchronize]
-  push:
-    branches: [main]
   release:
     types: [published]
 
@@ -52,6 +50,18 @@ jobs:
             [ "${1:-}" = "0000000000000000000000000000000000000000" ]
           }
 
+          is_shared_vm_gateway_path() {
+            case "$1" in
+              infra/gcp-free-tier/*|\
+              ops/deploy/environments/*)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
           is_deploy_path() {
             case "$1" in
               .github/workflows/auto-cicd.yml|\
@@ -90,10 +100,6 @@ jobs:
               ops/scripts/run_gateway_ops_workflow.py)
                 return 0
                 ;;
-              infra/gcp-free-tier/*|\
-              ops/deploy/environments/*)
-                return 0
-                ;;
               *)
                 return 1
                 ;;
@@ -104,10 +110,6 @@ jobs:
             pull_request)
               base_sha="${PR_BASE_SHA}"
               head_sha="${PR_HEAD_SHA}"
-              ;;
-            push)
-              base_sha="${BEFORE_SHA}"
-              head_sha="${HEAD_SHA}"
               ;;
             *)
               base_sha=""
@@ -132,20 +134,22 @@ jobs:
           else
             while IFS= read -r path; do
               [ -n "${path}" ] || continue
-              if is_deploy_path "${path}"; then
+              if is_shared_vm_gateway_path "${path}"; then
                 deploy_required=true
-              fi
-              if is_gateway_path "${path}"; then
                 gateway_required=true
+              else
+                if is_deploy_path "${path}"; then
+                  deploy_required=true
+                fi
+                if is_gateway_path "${path}"; then
+                  gateway_required=true
+                fi
               fi
             done < "${changed_files}"
 
-            # Any deploy-required change may apply a Terraform plan that recreates the VM.
-            # Configure Gateway afterward so a fresh boot disk receives IB Gateway and IBC.
-            if [ "${deploy_required}" = "true" ]; then
-              gateway_required=true
-            fi
-
+            # Deploy and Gateway Ops are coupled only for shared VM foundation paths
+            # (Terraform VM foundation and generated deploy env files).
+            # App/runtime code changes deploy the app only; Gateway-owned changes run Gateway Ops only.
             if [ "${deploy_required}" = "true" ] || [ "${gateway_required}" = "true" ]; then
               reason="deploy_required=${deploy_required}, gateway_required=${gateway_required} based on changed paths"
             fi
@@ -202,35 +206,6 @@ jobs:
     uses: ./.github/workflows/ib-gateway-ops.yml
     with:
       deploy_environment: dev
-      action: configure-paper
-      log_lines: 200
-    secrets: inherit
-
-  stg-deploy:
-    needs: changes
-    if: >-
-      ${{ always() && github.event_name == 'push' &&
-          (needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true') }}
-    uses: ./.github/workflows/deploy-gcp-vm.yml
-    with:
-      deploy_environment: stg
-      terraform_action: apply
-      deploy_app: true
-      trading_mode: paper
-      data_provider: yahoo
-      allow_live_trading: false
-      deploy_smoke: true
-    secrets: inherit
-
-  stg-configure-gateway:
-    needs: [changes, stg-deploy]
-    if: >-
-      ${{ always() && github.event_name == 'push' &&
-          (needs.stg-deploy.result == 'success' || needs.stg-deploy.result == 'skipped') &&
-          (needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true') }}
-    uses: ./.github/workflows/ib-gateway-ops.yml
-    with:
-      deploy_environment: stg
       action: configure-paper
       log_lines: 200
     secrets: inherit

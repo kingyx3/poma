@@ -119,52 +119,66 @@ def test_deploy_and_ops_workflows_send_environment_tagged_alerts() -> None:
         assert "if: ${{ always() }}" in workflow
 
 
-def test_auto_cicd_deploys_dev_stg_and_prd() -> None:
+def test_auto_cicd_deploys_dev_and_prd_only() -> None:
     workflow = _text(AUTO_CICD_WORKFLOW)
 
     for snippet in (
         "pull_request:",
         "types: [opened, reopened, synchronize]",
-        "push:",
-        "branches: [main]",
         "release:",
         "types: [published]",
+        "  dev-deploy:",
+        "  dev-configure-gateway:",
+        "  prd-deploy:",
+        "  prd-configure-gateway:",
         "uses: ./.github/workflows/deploy-gcp-vm.yml",
         "uses: ./.github/workflows/ib-gateway-ops.yml",
         "cancel-in-progress: true",
     ):
         assert snippet in workflow
 
+    for snippet in (
+        "push:",
+        "branches: [main]",
+        "  stg-deploy:",
+        "  stg-configure-gateway:",
+        "deploy_environment: stg",
+    ):
+        assert snippet not in workflow
+
 
 def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
     workflow = _text(AUTO_CICD_WORKFLOW)
-    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
-    stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
-    gateway_paths = workflow.split("is_gateway_path()", 1)[1].split("case \"${EVENT_NAME}\"", 1)[0]
+    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
+    deploy_paths = workflow.split("is_deploy_path()", 1)[1].split("is_gateway_path()", 1)[0]
+    gateway_paths = workflow.split("is_gateway_path()", 1)[1].split('case "${EVENT_NAME}"', 1)[0]
+    shared_paths = workflow.split("is_shared_vm_gateway_path()", 1)[1].split("is_deploy_path()", 1)[0]
 
     assert "needs.changes.outputs.gateway_required == 'true'" in dev_gateway
-    assert "needs.changes.outputs.gateway_required == 'true'" in stg_gateway
     assert "needs.changes.outputs.deploy_required == 'true'" not in dev_gateway
-    assert "needs.changes.outputs.deploy_required == 'true'" not in stg_gateway
     assert "ops/scripts/validate_runtime_config.py" in workflow
+    assert ".github/workflows/auto-cicd.yml" in deploy_paths
+    assert ".github/workflows/auto-cicd.yml" not in shared_paths
+    assert "infra/gcp-free-tier/*" in shared_paths
+    assert "ops/deploy/environments/*" in shared_paths
     assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
     assert "ops/scripts/repair_ib_gateway_runtime.py" in gateway_paths
     assert "ops/scripts/wait_ib_gateway_2fa.py" in gateway_paths
     assert "ops/scripts/run_gateway_ops_workflow.py" in gateway_paths
     assert ".github/workflows/deploy-gcp-vm.yml" not in gateway_paths
     assert ".github/workflows/auto-cicd.yml" not in gateway_paths
+    assert "src/*" not in gateway_paths
 
 
 def test_auto_cicd_gateway_actions_per_environment() -> None:
     workflow = _text(AUTO_CICD_WORKFLOW)
-    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
-    stg_gateway = workflow.split("  stg-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
+    dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
     prd_gateway = workflow.split("  prd-configure-gateway:", 1)[1]
 
     assert "action: configure-paper" in dev_gateway
     assert "action: restart" not in dev_gateway
-    assert "action: configure-paper" in stg_gateway
     assert "action: configure-live" in prd_gateway
+    assert "  stg-configure-gateway:" not in workflow
 
 
 def test_adr_0002_dev_gateway_pr_checks_records_configure_paper_decision() -> None:
