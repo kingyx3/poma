@@ -2,6 +2,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
+IMAGE_WORKFLOW = REPO_ROOT / ".github/workflows/build-app-image.yml"
 DEPLOY_SCRIPT = REPO_ROOT / "ops/scripts/deploy.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 COMPOSE_VM = REPO_ROOT / "docker-compose.vm.yml"
@@ -45,6 +46,27 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         assert snippet in workflow
 
 
+def test_prebuilt_image_workflow_pushes_main_and_sha_tags_with_cache() -> None:
+    workflow = IMAGE_WORKFLOW.read_text(encoding="utf-8")
+
+    expected_snippets = (
+        "branches:",
+        "- main",
+        "permissions:",
+        "packages: write",
+        "docker/setup-buildx-action@v3",
+        "docker/login-action@v3",
+        "docker buildx build",
+        "--push",
+        "--tag \"${image}:main\"",
+        "--tag \"${image}:${GITHUB_SHA}\"",
+        "--cache-from type=gha",
+        "--cache-to type=gha,mode=max",
+    )
+    for snippet in expected_snippets:
+        assert snippet in workflow
+
+
 def test_deploy_polling_and_retries_are_bounded() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
@@ -70,6 +92,7 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         "timeout --kill-after=30s 3m compose run --rm",
         "timed \"deploy smoke test\" run_deploy_smoke",
         "timed \"dangling image prune\" prune_dangling_images",
+        "DEFAULT_IMAGE_TAG=\"${DEFAULT_IMAGE_TAG:-main}\"",
     )
     for snippet in expected_snippets:
         assert snippet in script
