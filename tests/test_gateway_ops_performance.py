@@ -67,6 +67,24 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
     assert "stable >= 2" in runner
 
 
+def test_gateway_readiness_check_is_idempotent_across_deployed_compose_variants() -> None:
+    runner = _runner()
+
+    for snippet in (
+        "app_ibkr_check_command",
+        "poma-compose-host-network",
+        "network_mode: host",
+        "Using host-network compose override for idempotent IBKR readiness check.",
+        "TRANSIENT_GATEWAY_READINESS_STATUS",
+        "APP_READINESS_INFRA_FAILURE_STATUS",
+        "IBKR API socket dropped during container readiness check; retrying without restarting Gateway.",
+        "IBKR readiness check raced a Gateway socket restart; continuing the idempotent readiness loop.",
+        "IBKR readiness check failed for a non-login reason; refusing to restart Gateway.",
+        "collecting diagnostics without restarting Gateway",
+    ):
+        assert snippet in runner
+
+
 def test_gateway_wait_helper_runs_locally_on_vm_and_prints_progress() -> None:
     helper = WAIT_HELPER.read_text(encoding="utf-8")
 
