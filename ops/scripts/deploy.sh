@@ -6,6 +6,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.vm.yml}"
 COMPOSE_ENV_FILE="${COMPOSE_ENV_FILE:-.compose.env}"
 DEFAULT_IMAGE_REGISTRY="${DEFAULT_IMAGE_REGISTRY:-ghcr.io}"
 DEFAULT_IMAGE_REPOSITORY="${DEFAULT_IMAGE_REPOSITORY:-kingyx3/poma}"
+DEFAULT_IMAGE_TAG="${DEFAULT_IMAGE_TAG:-main}"
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -46,30 +47,11 @@ prepare_runtime_dirs() {
   done
 }
 
-runtime_env_value() {
-  local key="$1"
-  if [ ! -f .env ]; then
-    return 1
-  fi
-  grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- | tr -d '"' || true
-}
-
 resolve_image() {
-  local app_env tag
   if [ -n "${POMA_IMAGE:-}" ]; then
     return 0
   fi
-
-  app_env="$(runtime_env_value APP_ENV)"
-  case "${app_env}" in
-    dev|stg|prd)
-      tag="${app_env}"
-      ;;
-    *)
-      tag="main"
-      ;;
-  esac
-  export POMA_IMAGE="${DEFAULT_IMAGE_REGISTRY}/${DEFAULT_IMAGE_REPOSITORY}:${tag}"
+  export POMA_IMAGE="${DEFAULT_IMAGE_REGISTRY}/${DEFAULT_IMAGE_REPOSITORY}:${DEFAULT_IMAGE_TAG}"
 }
 
 write_compose_env() {
