@@ -10,6 +10,8 @@
 set -euxo pipefail
 
 APP_USER="${app_user}"
+APP_UID="${app_uid}"
+APP_GID="${app_gid}"
 APP_DIR="${app_dir}"
 STARTUP_REVISION="${startup_revision}"
 READY_DIR="/var/lib/poma"
@@ -39,8 +41,15 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 rm -rf /var/lib/apt/lists/*
 
+if ! getent group "$${APP_USER}" >/dev/null 2>&1; then
+  groupadd --gid "$${APP_GID}" "$${APP_USER}"
+fi
 if ! id "$${APP_USER}" >/dev/null 2>&1; then
-  useradd --create-home --shell /bin/bash "$${APP_USER}"
+  useradd --uid "$${APP_UID}" --gid "$${APP_GID}" --create-home --shell /bin/bash "$${APP_USER}"
+fi
+if [ "$(id -u "$${APP_USER}")" != "$${APP_UID}" ] || [ "$(id -g "$${APP_USER}")" != "$${APP_GID}" ]; then
+  echo "$${APP_USER} must use uid=$${APP_UID} gid=$${APP_GID} so pulled containers can write runtime mounts." >&2
+  exit 1
 fi
 usermod -aG docker "$${APP_USER}"
 

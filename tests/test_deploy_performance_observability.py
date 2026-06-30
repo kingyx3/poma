@@ -39,6 +39,7 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         "timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan",
         "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
         "timeout --kill-after=30s 2m tar",
+        "docker-compose.vm.yml",
         "timeout-minutes: 35",
         "Remote install, Docker pull, smoke, cron",
     )
@@ -57,6 +58,8 @@ def test_prebuilt_image_workflow_pushes_main_and_sha_tags_with_cache() -> None:
         "docker/setup-buildx-action@v3",
         "docker/login-action@v3",
         "docker buildx build",
+        '--build-arg "APP_UID=1000"',
+        '--build-arg "APP_GID=1000"',
         "--push",
         "--tag \"${image}:main\"",
         "--tag \"${image}:${GITHUB_SHA}\"",
@@ -84,6 +87,7 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
 
     expected_snippets = (
         "timed \"runtime directory checks\"",
+        "timed \"runtime identity checks\" ensure_runtime_identity",
         "timed \"compose image configuration\" write_compose_env",
         "timed \"vm compose file\" ensure_vm_compose_file",
         "timed \"docker image pull\" pull_image",

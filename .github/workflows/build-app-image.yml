@@ -27,6 +27,8 @@ jobs:
           image_name="poma"
           image="${image_registry}/${image_owner}/${image_name}"
           docker buildx build \
+            --build-arg "APP_UID=1000" \
+            --build-arg "APP_GID=1000" \
             --push \
             --tag "${image}:main" \
             --tag "${image}:${GITHUB_SHA}" \

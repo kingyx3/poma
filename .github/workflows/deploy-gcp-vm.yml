@@ -48,7 +48,7 @@ on:
         type: boolean
         default: false
       deploy_smoke:
-        description: Run the on-VM dry-run smoke test after building the image.
+        description: Run the on-VM dry-run smoke test after pulling the image.
         required: false
         type: boolean
         default: true
@@ -298,6 +298,7 @@ jobs:
             .dockerignore \
             Dockerfile \
             README.md \
+            docker-compose.vm.yml \
             docker-compose.yml \
             pyproject.toml \
             src \
@@ -429,6 +430,7 @@ jobs:
               /opt/poma/.github \
               /opt/poma/Dockerfile \
               /opt/poma/README.md \
+              /opt/poma/docker-compose.vm.yml \
               /opt/poma/docker-compose.yml \
               /opt/poma/docs \
               /opt/poma/infra \
@@ -451,6 +453,7 @@ jobs:
               /opt/poma/.dockerignore \
               /opt/poma/Dockerfile \
               /opt/poma/README.md \
+              /opt/poma/docker-compose.vm.yml \
               /opt/poma/docker-compose.yml \
               /opt/poma/ops \
               /opt/poma/pyproject.toml \

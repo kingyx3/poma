@@ -15,7 +15,11 @@ REQUIRED_STARTUP_SNIPPETS = (
     # Swap keeps the 1 GB e2-micro from OOM-wedging under IB Gateway + Docker + the app.
     "mkswap /swapfile",
     "swapon /swapfile",
-    'useradd --create-home --shell /bin/bash "$${APP_USER}"',
+    'APP_UID="${app_uid}"',
+    'APP_GID="${app_gid}"',
+    'groupadd --gid "$${APP_GID}" "$${APP_USER}"',
+    'useradd --uid "$${APP_UID}" --gid "$${APP_GID}" --create-home --shell /bin/bash "$${APP_USER}"',
+    'must use uid=$${APP_UID} gid=$${APP_GID}',
     'usermod -aG docker "$${APP_USER}"',
     'mkdir -p \\',
     '"$${APP_DIR}/data"',
