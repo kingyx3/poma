@@ -4,6 +4,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
 DEPLOY_SCRIPT = REPO_ROOT / "ops/scripts/deploy.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
+COMPOSE_VM = REPO_ROOT / "docker-compose.vm.yml"
+CONSTRAINTS = REPO_ROOT / "constraints.txt"
 
 
 def test_upload_install_step_reports_stage_timings() -> None:
@@ -55,28 +57,45 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
     assert "timed out; check VM readiness" in workflow
 
 
-def test_vm_deploy_script_reports_build_smoke_and_cache_usage() -> None:
+def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     expected_snippets = (
         "timed \"runtime directory checks\"",
-        "timed \"docker build\" build_image",
-        "Docker disk/cache usage before build",
-        "Docker disk/cache usage after build",
-        "DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 docker compose build",
-        "--progress=plain",
+        "timed \"compose image configuration\" write_compose_env",
+        "timed \"vm compose file\" ensure_vm_compose_file",
+        "timed \"docker image pull\" pull_image",
+        "Docker disk/cache usage before image pull",
+        "timeout --kill-after=30s 8m compose pull poma",
+        "timeout --kill-after=30s 3m compose run --rm",
         "timed \"deploy smoke test\" run_deploy_smoke",
         "timed \"dangling image prune\" prune_dangling_images",
     )
     for snippet in expected_snippets:
         assert snippet in script
 
+    assert "docker compose build" not in script
+    assert "DOCKER_BUILDKIT" not in script
 
-def test_dockerfile_uses_buildkit_pip_cache_mounts() -> None:
+
+def test_vm_compose_uses_prebuilt_image() -> None:
+    compose = COMPOSE_VM.read_text(encoding="utf-8")
+
+    assert "image: ${POMA_IMAGE}" in compose
+    assert "build:" not in compose
+    assert "network_mode: host" in compose
+
+
+def test_dockerfile_uses_buildkit_pip_cache_mounts_and_constraints() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    constraints = CONSTRAINTS.read_text(encoding="utf-8")
 
     assert dockerfile.startswith("# syntax=docker/dockerfile:")
     assert "--mount=type=cache,target=/root/.cache/pip" in dockerfile
     assert "PIP_DISABLE_PIP_VERSION_CHECK=1" in dockerfile
-    assert dockerfile.index("COPY pyproject.toml README.md ./") < dockerfile.index("COPY src ./src")
+    assert "COPY pyproject.toml README.md constraints.txt ./" in dockerfile
+    assert "pip install --prefer-binary -c constraints.txt ." in dockerfile
+    assert dockerfile.index("COPY pyproject.toml README.md constraints.txt ./") < dockerfile.index("COPY src ./src")
     assert dockerfile.index("ARG APP_UID=1000") > dockerfile.index("COPY src ./src")
+    assert "pandas==2.2.2" in constraints
+    assert "yfinance==0.2.64" in constraints
