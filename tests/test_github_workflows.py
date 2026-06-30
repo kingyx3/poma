@@ -150,13 +150,15 @@ def test_auto_cicd_deploys_dev_and_prd_only() -> None:
 def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
     workflow = _text(AUTO_CICD_WORKFLOW)
     dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]
+    deploy_paths = workflow.split("is_deploy_path()", 1)[1].split("is_gateway_path()", 1)[0]
     gateway_paths = workflow.split("is_gateway_path()", 1)[1].split('case "${EVENT_NAME}"', 1)[0]
     shared_paths = workflow.split("is_shared_vm_gateway_path()", 1)[1].split("is_deploy_path()", 1)[0]
 
     assert "needs.changes.outputs.gateway_required == 'true'" in dev_gateway
     assert "needs.changes.outputs.deploy_required == 'true'" not in dev_gateway
     assert "ops/scripts/validate_runtime_config.py" in workflow
-    assert ".github/workflows/auto-cicd.yml" in shared_paths
+    assert ".github/workflows/auto-cicd.yml" in deploy_paths
+    assert ".github/workflows/auto-cicd.yml" not in shared_paths
     assert "infra/gcp-free-tier/*" in shared_paths
     assert "ops/deploy/environments/*" in shared_paths
     assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
