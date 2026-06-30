@@ -13,16 +13,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install third-party dependencies in a layer keyed only on project metadata, so routine
-# source changes don't reinstall pandas/numpy/etc. (very slow on the free-tier VM). A minimal
-# package stub lets the resolver read dependencies from pyproject without the real source.
-# BuildKit keeps the pip download/build cache outside the final image, so dependency-layer
-# rebuilds get faster without bloating runtime layers on the small persistent disk.
-COPY pyproject.toml README.md ./
+# source changes don't reinstall pandas/numpy/etc. A minimal package stub lets the resolver
+# read dependencies from pyproject without the real source. BuildKit keeps the pip
+# download/build cache outside the final image. constraints.txt pins top-level runtime
+# dependencies so rebuilds are more deterministic and resolver work stays bounded.
+COPY pyproject.toml README.md constraints.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip \
-    && mkdir -p src/poma \
+    mkdir -p src/poma \
     && : > src/poma/__init__.py \
-    && pip install . \
+    && pip install --prefer-binary -c constraints.txt . \
     && rm -rf src build ./*.egg-info
 
 # Install the real package on top, without re-resolving the cached dependency layer.
