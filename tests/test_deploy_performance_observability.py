@@ -76,6 +76,9 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
 
     assert "local deadline=$((SECONDS + 600)) attempt=0" in workflow
     assert "startup revision ${startup_revision} not ready within 10m" in workflow
+    assert "startup_failed=$(cat /var/lib/poma/vm-startup-failed" in workflow
+    assert "VM startup script failed before writing the readiness sentinel" in workflow
+    assert "exit 42" in workflow
     assert "id poma >/dev/null 2>&1" in workflow
     assert "systemctl is-active --quiet docker" in workflow
     assert "systemctl is-active --quiet cron" in workflow

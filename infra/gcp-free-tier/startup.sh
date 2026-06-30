@@ -16,17 +16,38 @@ APP_DIR="${app_dir}"
 STARTUP_REVISION="${startup_revision}"
 READY_DIR="/var/lib/poma"
 READY_SENTINEL="$${READY_DIR}/vm-ready"
+FAILED_SENTINEL="$${READY_DIR}/vm-startup-failed"
 
 export DEBIAN_FRONTEND=noninteractive
 
 mkdir -p "$${READY_DIR}"
-rm -f "$${READY_SENTINEL}"
+record_startup_failure() {
+  status="$${?}"
+  if [ "$${status}" -ne 0 ]; then
+    printf '%s exit_status=%s\n' "$${STARTUP_REVISION}" "$${status}" >"$${FAILED_SENTINEL}" || true
+    chmod 0644 "$${FAILED_SENTINEL}" || true
+  fi
+}
+trap record_startup_failure EXIT
 
+rm -f "$${READY_SENTINEL}" "$${FAILED_SENTINEL}"
+
+# Ubuntu cloud images already reserve uid/gid 1000 for the default ubuntu identity.
+# Keep the numeric app identity aligned with the prebuilt container without renaming
+# platform users/groups that the guest agent may still expect.
 if ! getent group "$${APP_USER}" >/dev/null 2>&1; then
-  groupadd --gid "$${APP_GID}" "$${APP_USER}"
+  if getent group "$${APP_GID}" >/dev/null 2>&1; then
+    groupadd --non-unique --gid "$${APP_GID}" "$${APP_USER}"
+  else
+    groupadd --gid "$${APP_GID}" "$${APP_USER}"
+  fi
 fi
 if ! id "$${APP_USER}" >/dev/null 2>&1; then
-  useradd --uid "$${APP_UID}" --gid "$${APP_GID}" --create-home --shell /bin/bash "$${APP_USER}"
+  if getent passwd "$${APP_UID}" >/dev/null 2>&1; then
+    useradd --non-unique --uid "$${APP_UID}" --gid "$${APP_GID}" --create-home --shell /bin/bash "$${APP_USER}"
+  else
+    useradd --uid "$${APP_UID}" --gid "$${APP_GID}" --create-home --shell /bin/bash "$${APP_USER}"
+  fi
 fi
 if [ "$(id -u "$${APP_USER}")" != "$${APP_UID}" ] || [ "$(id -g "$${APP_USER}")" != "$${APP_GID}" ]; then
   echo "$${APP_USER} must use uid=$${APP_UID} gid=$${APP_GID} so pulled containers can write runtime mounts." >&2

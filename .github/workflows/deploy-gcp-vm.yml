@@ -349,6 +349,7 @@ jobs:
               set +e
               echo "===== POMA VM bootstrap status ====="
               echo "sentinel=$(cat /var/lib/poma/vm-ready 2>/dev/null || true)"
+              echo "startup_failed=$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)"
               echo "boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
               id poma || true
               systemctl is-active docker cron || true
@@ -364,9 +365,21 @@ jobs:
           # cloud-init's boot-finished marker by itself: the Google metadata startup script can
           # still be running, and deploy needs the concrete POMA host contract.
           wait_for_vm_ready() {
-            local deadline=$((SECONDS + 600)) attempt=0
-            until run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command "sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron"; do
+            local deadline=$((SECONDS + 600)) attempt=0 status=1
+            while true; do
+              set +e
+              run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
+                --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron"
+              status="$?"
+              set -e
+              if [ "${status}" -eq 0 ]; then
+                return 0
+              fi
+              if [ "${status}" -eq 42 ]; then
+                echo "::error::VM startup script failed before writing the readiness sentinel."
+                print_vm_bootstrap_status
+                return 1
+              fi
               if [ "${SECONDS}" -ge "${deadline}" ]; then
                 echo "VM ${instance_name} not reachable or startup revision ${startup_revision} not ready within 10m." >&2
                 print_vm_bootstrap_status
