@@ -107,7 +107,7 @@ api_port_open() {
 }
 
 gateway_alive() {
-  pgrep -u "$(id -u)" -f 'java|ibgateway' >/dev/null 2>&1
+  pgrep -u "$(id -u)" -f 'ibcalpha\.ibc\.IbcGateway|/ibgateway($|[[:space:]])' >/dev/null 2>&1
 }
 
 reset_logs
@@ -127,7 +127,7 @@ deadline=$((SECONDS + HOLD_SECONDS))
 
 while [ "${SECONDS}" -lt "${deadline}" ]; do
   if api_port_open || gateway_alive; then
-    log "Gateway process or API listener detected; keeping systemd foreground engine alive."
+    log "Real Gateway process or API listener detected; keeping systemd foreground engine alive."
     break
   fi
   if ! kill -0 "${launcher_pid}" >/dev/null 2>&1; then
