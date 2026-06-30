@@ -4,6 +4,8 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/poma}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.vm.yml}"
 COMPOSE_ENV_FILE="${COMPOSE_ENV_FILE:-.compose.env}"
+DEFAULT_IMAGE_REGISTRY="${DEFAULT_IMAGE_REGISTRY:-ghcr.io}"
+DEFAULT_IMAGE_REPOSITORY="${DEFAULT_IMAGE_REPOSITORY:-kingyx3/poma}"
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -44,10 +46,55 @@ prepare_runtime_dirs() {
   done
 }
 
+runtime_env_value() {
+  local key="$1"
+  if [ ! -f .env ]; then
+    return 1
+  fi
+  grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- | tr -d '"' || true
+}
+
+resolve_image() {
+  local app_env tag
+  if [ -n "${POMA_IMAGE:-}" ]; then
+    return 0
+  fi
+
+  app_env="$(runtime_env_value APP_ENV)"
+  case "${app_env}" in
+    dev|stg|prd)
+      tag="${app_env}"
+      ;;
+    *)
+      tag="main"
+      ;;
+  esac
+  export POMA_IMAGE="${DEFAULT_IMAGE_REGISTRY}/${DEFAULT_IMAGE_REPOSITORY}:${tag}"
+}
+
 write_compose_env() {
-  : "${POMA_IMAGE:?POMA_IMAGE must be set to the prebuilt image tag to deploy}"
+  resolve_image
   printf 'POMA_IMAGE=%s\n' "${POMA_IMAGE}" >"${COMPOSE_ENV_FILE}"
   chmod 600 "${COMPOSE_ENV_FILE}"
+}
+
+ensure_vm_compose_file() {
+  if [ -f "${COMPOSE_FILE}" ]; then
+    return 0
+  fi
+
+  cat >"${COMPOSE_FILE}" <<'COMPOSE'
+services:
+  poma:
+    image: ${POMA_IMAGE}
+    env_file: .env
+    command: ["monitor"]
+    volumes:
+      - ./reports:/app/reports
+      - ./state:/app/state
+      - ./data:/app/data
+    network_mode: host
+COMPOSE
 }
 
 pull_image() {
@@ -89,9 +136,10 @@ cd "${APP_DIR}"
 export POMA_UID="${POMA_UID:-$(id -u)}"
 export POMA_GID="${POMA_GID:-$(id -g)}"
 
-log "Deploying ${APP_DIR} as uid=${POMA_UID} gid=${POMA_GID}; image=${POMA_IMAGE:-unset}; smoke=${RUN_DEPLOY_SMOKE:-true}"
+log "Deploying ${APP_DIR} as uid=${POMA_UID} gid=${POMA_GID}; image=${POMA_IMAGE:-auto}; smoke=${RUN_DEPLOY_SMOKE:-true}"
 timed "runtime directory checks" prepare_runtime_dirs
 timed "compose image configuration" write_compose_env
+timed "vm compose file" ensure_vm_compose_file
 timed "docker image pull" pull_image
 
 if [ "${RUN_DEPLOY_SMOKE:-true}" = "false" ]; then
