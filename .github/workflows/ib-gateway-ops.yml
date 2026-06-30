@@ -63,6 +63,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Validate Gateway operation scope
+        run: |
+          set -euo pipefail
+          if [ "${DEPLOY_ENVIRONMENT}" = "stg" ] && [ "${INPUT_ACTION}" = "configure-paper" ]; then
+            echo "::error::configure-paper is intentionally disabled for stg. Staging deploys must not rewrite paper broker login credentials; use dev configure-paper for credentialed paper validation and non-configure ops actions for stg health checks."
+            exit 1
+          fi
+
       - name: Resolve broker login secrets
         if: ${{ inputs.action == 'configure-paper' || inputs.action == 'configure-live' }}
         run: |
