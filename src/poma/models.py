@@ -61,6 +61,3 @@ class RebalancePlan:
     strategy_capital_usd: float = 0.0
     total_allocated_pct: float = 1.0
     total_allocated_usd: float = 0.0
-    cash_balance_usd: float | None = None
-    positions_value_usd: float = 0.0
-    portfolio_value_source: str = "configured"

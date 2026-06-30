@@ -5,7 +5,7 @@ POMA is a low-cost Python scaffold for a personal long-only US large-cap strateg
 ## Strategy
 
 ```text
-Portfolio size: broker USD cash + current stock market value for paper/live; PORTFOLIO_VALUE_USD for dry-run fallback
+Portfolio cap: PORTFOLIO_VALUE_USD across all strategies
 Current allocation: 98% to rank_velocity_size_equal_weight, 2% to cash
 Universe: Yahoo Finance US top 500 by current market cap
 Deduplication: one ticker per company/share-class family, preferring the most liquid class
@@ -18,7 +18,7 @@ Weighting: equal-weighted across the selected 100 names inside the 98% rank stra
 
 Rank 1 is the largest company by market cap, so a positive rank-rising velocity score means the stock moved up the market-cap ranking over the 90-day window. The size and rank-rising velocity factors are each standardized (z-scored) and summed with equal weight, so the strategy favours companies that are both large and climbing. Selected names are held at equal weight (`1/N`) inside the rank strategy sleeve, with the per-position cap still binding.
 
-Capital is allocated through `STRATEGY_ALLOCATIONS`. Today the active trading strategy is `rank_velocity_size_equal_weight=0.98`, and the passive cash sleeve is `cash=0.02`. The cash sleeve counts toward the 100% portfolio size but does not generate trades. Future strategies can be added as separate sleeves, and the sum of all strategy allocations must stay at or below 100%. In paper/live mode, the portfolio size is derived from the configured broker account before each rebalance; `PORTFOLIO_VALUE_USD` is only the dry-run fallback. Cash is not modeled as a hidden buffer inside an active strategy; reserve cash by allocating a `cash` sleeve.
+Capital is allocated through `STRATEGY_ALLOCATIONS`. Today the active trading strategy is `rank_velocity_size_equal_weight=0.98`, and the passive cash sleeve is `cash=0.02`. The cash sleeve counts toward the 100% portfolio cap but does not generate trades. Future strategies can be added as separate sleeves, and the sum of all strategy allocations must stay at or below 100%, so total managed capital never exceeds `PORTFOLIO_VALUE_USD`. Cash is not modeled as a hidden buffer inside an active strategy; reserve cash by allocating a `cash` sleeve.
 
 The production market-data provider is `DATA_PROVIDER=yahoo`. It requests the largest 500 US-listed equities by current market cap, normalizes the feed into the provider contract, deduplicates share classes at issuer level when issuer/name metadata is present, and falls back to exact market-cap bucket dedupe when issuer metadata is unavailable. Future providers should implement the normalized `current_universe_snapshot()` contract without changing strategy or engine code.
 
@@ -31,8 +31,7 @@ Ubuntu VPS / GCP e2-micro VM
   -> cron every 5 minutes
   -> POMA checks US market calendar
   -> if market has been open for 10+ minutes and today's run has not happened
-  -> paper/live: reads broker USD cash + current stock market value
-  -> computes the active strategy sleeve from portfolio_value_usd * allocation_pct
+  -> computes the active strategy sleeve from PORTFOLIO_VALUE_USD * allocation_pct
   -> refreshes/saves market snapshot and rebalances through IB Gateway on the same host
 ```
 

@@ -4,16 +4,17 @@ This runbook is the day-to-day checklist for operating POMA safely in `dry_run`,
 
 ## Strategy and capital model
 
-POMA is a strategy-allocated portfolio runner. Paper/live rebalances size from the configured IBKR account at rebalance time: USD cash plus current stock positions market value. `PORTFOLIO_VALUE_USD` remains only as the deterministic dry-run fallback. `STRATEGY_ALLOCATIONS` splits the selected portfolio value across named sleeves, and the total allocation must stay at or below 100%.
+POMA is a strategy-allocated portfolio runner. `PORTFOLIO_VALUE_USD` is the hard cap across every sleeve. `STRATEGY_ALLOCATIONS` splits that cap across named sleeves, and the total allocation must stay at or below 100%.
 
 Default production allocation:
 
 ```text
+PORTFOLIO_VALUE_USD=10000
 STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.98,cash=0.02
 ACTIVE_STRATEGY=rank_velocity_size_equal_weight
 ```
 
-This means the active strategy can trade up to 98% of the broker-derived portfolio value in paper/live mode. The remaining 2% is a passive `cash` sleeve. There is no hidden `CASH_BUFFER_PCT` inside the active strategy; reserve cash by changing the `cash` sleeve allocation.
+This means the active strategy can trade up to `$9,800` when `PORTFOLIO_VALUE_USD=10000`. The remaining `$200` is a passive `cash` sleeve. There is no hidden `CASH_BUFFER_PCT` inside the active strategy; reserve cash by changing the `cash` sleeve allocation.
 
 ## Required GitHub Environment secrets
 
@@ -47,7 +48,7 @@ Deploy now validates the rendered `.env` before Terraform apply. The validation 
 4. Wait for the next US market open plus `REBALANCE_AFTER_OPEN_MINUTES`.
 5. Review Telegram alerts and the generated report after the first paper rebalance.
 
-For a paper account with more than `$10,000`, POMA now uses the full broker-derived account size unless you reduce `STRATEGY_ALLOCATIONS`. Example: if the paper account has `$50,000` of USD cash plus stock market value, the default active strategy sleeve is `$49,000` and the passive cash sleeve is `$1,000`.
+For an account with more cash than `PORTFOLIO_VALUE_USD`, POMA still targets only the configured cap. Example: if the paper account has `$50,000` but `PORTFOLIO_VALUE_USD=10000`, the default active strategy sleeve is `$9,800` and the passive cash sleeve is `$200`.
 
 ## Live trading activation
 
@@ -55,7 +56,7 @@ Do not skip paper validation. Before live:
 
 1. Run at least one full week in `paper`.
 2. Review every order, fill, cancellation, and timeout against the generated reports.
-3. Confirm broker-derived account size, `STRATEGY_ALLOCATIONS`, `MAX_ORDER_NOTIONAL_USD`, `MAX_DAILY_TRADES`, and `MAX_TURNOVER_PCT` are intentional.
+3. Confirm `PORTFOLIO_VALUE_USD`, `STRATEGY_ALLOCATIONS`, `MAX_ORDER_NOTIONAL_USD`, `MAX_DAILY_TRADES`, and `MAX_TURNOVER_PCT` are intentional.
 4. Add the live `IBKR_ACCOUNT` secret.
 5. Run **IB Gateway Ops** with `action=configure-live` and confirm fresh 2FA evidence plus `poma ibkr-check` success.
 6. Deploy with `trading_mode=live`, `data_provider=yahoo`, and `allow_live_trading=true`.
@@ -89,7 +90,6 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 | Deploy fails during rendered config validation | Bad/missing secret, allocation sum above 100%, live gate not enabled, or paper/live using `fixture` | Fix the GitHub Environment secret/input and rerun deploy. |
 | Deploy smoke passes but paper does not trade | Gateway not authenticated, wrong account id, or market not open yet | Run **IB Gateway Ops** configure-paper, then run `poma ibkr-check`. |
 | `BrokerUnavailable` / `Not connected` during paper | IB Gateway is listening but not API-ready/authenticated, the Gateway logged in without Trading/Market Data permissions, or the gateway connection dropped before IBKR accepted the order batch | Run **IB Gateway Ops** configure-paper, verify `poma ibkr-check`, then clear rebalance state via **IB Gateway Ops** only if you want cron to retry the same session. |
-| `IBKR account summary did not include a USD TotalCashValue or CashBalance` | Broker did not return USD cash for the configured account | Confirm account selection/currency in IBKR, then rerun `poma ibkr-check` and the rebalance only after the broker account summary is healthy. |
 | `configured IBKR_ACCOUNT=... not in [...]` | Secret points at the wrong paper/live account | Update `IBKR_ACCOUNT_PAPER` or `IBKR_ACCOUNT` in the selected GitHub Environment. |
 | `no_orders_accepted` | IBKR rejected/cancelled the whole batch before any order became accepted/working | Fix Gateway/trading login first. The session is still marked attempted; clear state manually through **IB Gateway Ops** only if retrying the same session is intended. |
 | `completed_with_order_issues` | One or more orders failed, cancelled, timed out, or only partially progressed | Open the latest report in `reports/`, check Telegram order details, then review IBKR activity. |
