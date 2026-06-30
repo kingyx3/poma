@@ -88,6 +88,7 @@ LAUNCHER="${IBC_DIR}/gatewaystart.sh"
 WRAPPER_LOG="${LOG_DIR}/gatewaystart-wrapper.log"
 HOLD_SECONDS="${IB_GATEWAY_ENGINE_STARTUP_HOLD_SECONDS:-360}"
 API_PORT="${IB_GATEWAY_API_PORT:-7497}"
+LOGIN_DIALOG_DISPLAY_TIMEOUT="${IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT_SECONDS:-240}"
 
 log() {
   mkdir -p "${LOG_DIR}"
@@ -100,6 +101,26 @@ reset_logs() {
     mkdir -p "${directory}"
     find "${directory}" -type f -exec truncate -s 0 {} + 2>/dev/null || true
   done
+}
+
+set_ini() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="${key}" -v value="${value}" '
+    BEGIN { done = 0 }
+    index($0, key "=") == 1 { print key "=" value; done = 1; next }
+    { print }
+    END { if (!done) print key "=" value }
+  ' "${CONFIG}" >"${tmp}"
+  cat "${tmp}" >"${CONFIG}"
+  rm -f "${tmp}"
+}
+
+ensure_runtime_config() {
+  set_ini LoginDialogDisplayTimeout "${LOGIN_DIALOG_DISPLAY_TIMEOUT}"
+  log "Pinned IBC LoginDialogDisplayTimeout=${LOGIN_DIALOG_DISPLAY_TIMEOUT} before Gateway launch."
 }
 
 api_port_open() {
@@ -119,6 +140,7 @@ if [ ! -x "${LAUNCHER}" ]; then
   log "IBC launcher missing or not executable at ${LAUNCHER}; refusing raw Gateway fallback."
   exit 127
 fi
+ensure_runtime_config
 
 log "Starting IBC gatewaystart.sh -inline for IB Gateway/TWS API on port ${API_PORT}."
 (cd "${IBC_DIR}" && bash "${LAUNCHER}" -inline >>"${WRAPPER_LOG}" 2>&1) &
