@@ -20,7 +20,9 @@ if Path(sys.argv[0]).name == "run_gateway_ops_workflow.py":
         if not isinstance(command, list) or "--command" not in command:
             return None
         copy = list(command)
-        copy[copy.index("--command") + 1] = "sudo poma-diagnose-ibgateway progress --log-lines 80 || true"
+        copy[copy.index("--command") + 1] = (
+            "sudo poma-diagnose-ibgateway progress --log-lines 80 || true"
+        )
         return copy
 
     def _emit_progress(command: Any) -> None:
@@ -41,7 +43,10 @@ if Path(sys.argv[0]).name == "run_gateway_ops_workflow.py":
             print("::endgroup::")
             print("===== Visible IBKR API readiness failure =====")
             print("VISIBLE_IBKR_CHECK_STATUS=failed")
-            print("IBKR API check failed; preserving Gateway state for diagnostics instead of restarting it.")
+            print(
+                "IBKR API check failed; preserving Gateway state for diagnostics "
+                "instead of restarting it."
+            )
             _emit_progress(command)
             raise SystemExit(1)
         return completed
