@@ -17,9 +17,9 @@ def test_upload_install_step_reports_stage_timings() -> None:
         "timed \"VM readiness\" ensure_vm_ready",
         "timed \"App package upload\"",
         "timed \"Environment upload\"",
-        "timed \"Remote install, Docker build, smoke, cron\"",
+        "timed \"Remote install, Docker pull, smoke, cron\"",
         "REMOTE TIMING BEGIN",
-        "remote_timed \"Docker build and smoke test\"",
+        "remote_timed \"Docker pull and smoke test\"",
         "remote_timed \"Install cron schedule\"",
         "TIMING Upload and install on VM total",
     )
@@ -40,7 +40,7 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
         "timeout --kill-after=30s 2m tar",
         "timeout-minutes: 35",
-        "Remote install, Docker build, smoke, cron",
+        "Remote install, Docker pull, smoke, cron",
     )
     for snippet in expected_snippets:
         assert snippet in workflow
@@ -88,8 +88,8 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         "timed \"vm compose file\" ensure_vm_compose_file",
         "timed \"docker image pull\" pull_image",
         "Docker disk/cache usage before image pull",
-        "timeout --kill-after=30s 8m compose pull poma",
-        "timeout --kill-after=30s 3m compose run --rm",
+        "timeout_compose 8m pull poma",
+        "timeout_compose 3m run --rm",
         "timed \"deploy smoke test\" run_deploy_smoke",
         "timed \"dangling image prune\" prune_dangling_images",
         "DEFAULT_IMAGE_TAG=\"${DEFAULT_IMAGE_TAG:-main}\"",
@@ -98,6 +98,7 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         assert snippet in script
 
     assert "docker compose build" not in script
+    assert 'timeout --kill-after=30s "${duration}" docker compose' in script
     assert "DOCKER_BUILDKIT" not in script
 
 

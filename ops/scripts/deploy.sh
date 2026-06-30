@@ -34,6 +34,13 @@ compose() {
   docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
+timeout_compose() {
+  local duration="$1"
+  shift
+
+  timeout --kill-after=30s "${duration}" docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+}
+
 prepare_runtime_dirs() {
   mkdir -p reports state logs data
   chmod u+rwX reports state logs data
@@ -84,7 +91,7 @@ pull_image() {
   log "Docker disk/cache usage before image pull:"
   docker system df || true
 
-  timeout --kill-after=30s 8m compose pull poma
+  timeout_compose 8m pull poma
 
   log "Docker disk/cache usage after image pull:"
   docker system df || true
@@ -94,7 +101,7 @@ run_deploy_smoke() {
   local after_count before_count
 
   before_count="$(find reports -maxdepth 1 -type f -name 'rebalance-*.json' | wc -l)"
-  timeout --kill-after=30s 3m compose run --rm \
+  timeout_compose 3m run --rm \
     -e DATA_PROVIDER=fixture \
     -e TRADING_MODE=dry_run \
     poma rebalance --session-date deploy-smoke --dry-run
@@ -117,6 +124,9 @@ cd "${APP_DIR}"
 
 export POMA_UID="${POMA_UID:-$(id -u)}"
 export POMA_GID="${POMA_GID:-$(id -g)}"
+# The published image is built with the same host-runtime UID/GID contract as local
+# builds by passing --build-arg "APP_UID=${POMA_UID}" and --build-arg "APP_GID=${POMA_GID}".
+# This VM deploy pulls that prebuilt image instead of rebuilding it on the e2-micro.
 
 log "Deploying ${APP_DIR} as uid=${POMA_UID} gid=${POMA_GID}; image=${POMA_IMAGE:-auto}; smoke=${RUN_DEPLOY_SMOKE:-true}"
 timed "runtime directory checks" prepare_runtime_dirs
