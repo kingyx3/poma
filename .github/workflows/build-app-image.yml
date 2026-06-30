@@ -29,6 +29,7 @@ jobs:
           docker buildx build \
             --push \
             --tag "${image}:main" \
+            --tag "${image}:${GITHUB_SHA}" \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             .
