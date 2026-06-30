@@ -59,13 +59,13 @@ if [ -s ${HOME}/ibc/config.ini ]; then
 fi
 
 gateway_executable=$(find ${IB_GATEWAY_DIR} -type f -name ibgateway -perm -111 2>/dev/null | sort -V | tail -n1 || true)
-if [ -z ${gateway_executable} ]; then
+if [ x${gateway_executable} = x ]; then
   echo Unable to find an executable IB Gateway binary under ${IB_GATEWAY_DIR}. >&2
   echo Run IB Gateway Ops to repair the VM bootstrap and install IB Gateway. >&2
   exit 127
 fi
 
-echo IBC config is not present yet; starting raw IB Gateway only for first-time bootstrap/recovery. >&2
+echo IBC config is not present yet - starting raw IB Gateway only for first-time bootstrap/recovery. >&2
 exec ${gateway_executable}
 RUNNER
 
@@ -104,7 +104,7 @@ gateway_alive() {
 
 reset_logs
 if [ ! -s ${CONFIG} ]; then
-  log IBC config missing at ${CONFIG}; refusing configured Gateway startup without IBC.
+  log IBC config missing at ${CONFIG} - refusing configured Gateway startup without IBC.
   exit 127
 fi
 if [ ! -x ${LAUNCHER} ]; then
@@ -119,12 +119,12 @@ deadline=$((SECONDS + HOLD_SECONDS))
 
 while [ ${SECONDS} -lt ${deadline} ]; do
   if api_port_open || gateway_alive; then
-    log Gateway process or API listener detected; keeping systemd foreground engine alive.
+    log Gateway process or API listener detected - keeping systemd foreground engine alive.
     break
   fi
   if ! kill -0 ${launcher_pid} >/dev/null 2>&1; then
     wait ${launcher_pid} || launcher_status=$?
-    log gatewaystart.sh returned before Java/Gateway was visible; status=${launcher_status:-0}; keeping engine active for diagnostics.
+    log gatewaystart.sh returned before Java/Gateway was visible - status=${launcher_status:-0} - keeping engine active for diagnostics.
     break
   fi
   sleep 2
@@ -135,7 +135,7 @@ while true; do
     sleep 2
     continue
   fi
-  log Gateway process/API listener absent after startup hold deadline; exiting for systemd restart.
+  log Gateway process/API listener absent after startup hold deadline - exiting for systemd restart.
   exit 1
 done
 ENGINE
