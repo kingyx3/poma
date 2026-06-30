@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -17,13 +18,21 @@ from poma.config import Settings
 from poma.data import FixtureMarketDataClient
 from poma.engine import NO_ORDERS_ACCEPTED_STATUS, RebalanceEngine
 from poma.health import check_ibkr
-from poma.models import OrderResult, OrderSide, ProposedTrade
+from poma.models import OrderResult, OrderSide, PortfolioBalances, ProposedTrade
 from poma.order_status_alerts import order_status_alert
 from poma.portfolio import CURRENT_STRATEGY_NAME, build_strategy_capital_plan
 from poma.risk import enforce_turnover_limit, generate_trades
 from poma.strategy import build_equal_weight_targets
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@dataclass(frozen=True)
+class AccountSummaryRow:
+    tag: str
+    value: str
+    currency: str = "USD"
+    account: str = "DU1234567"
 
 
 def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
@@ -123,6 +132,52 @@ def test_ibkr_health_fails_when_configured_account_is_not_managed(
 
     assert not check.ok
     assert "configured IBKR_ACCOUNT=DU1234567 not in ['DU7654321']" in check.detail
+
+
+def test_ibkr_broker_reads_cash_and_position_balances_before_rebalance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContract:
+        secType = "STK"
+        symbol = "AAPL"
+
+    class FakePortfolioItem:
+        contract = FakeContract()
+        account = "DU1234567"
+        position = 5
+        marketValue = 5_000
+
+    class FakeIB:
+        def __init__(self) -> None:
+            self.connected = False
+            self.RequestTimeout = None
+
+        def connect(self, *_args, **_kwargs) -> None:
+            self.connected = True
+
+        def isConnected(self) -> bool:  # noqa: N802 - mirrors ib_insync API
+            return self.connected
+
+        def portfolio(self) -> list[FakePortfolioItem]:
+            return [FakePortfolioItem()]
+
+        def accountSummary(self, *_args, **_kwargs) -> list[AccountSummaryRow]:  # noqa: N802
+            return [
+                AccountSummaryRow("TotalCashValue", "15000"),
+                AccountSummaryRow("NetLiquidation", "20000"),
+            ]
+
+        def disconnect(self) -> None:
+            self.connected = False
+
+    monkeypatch.setattr("poma.broker.IB", FakeIB)
+
+    balances = IbkrBroker(_settings(monkeypatch)).account_balances()
+
+    assert balances.cash_usd == 15_000
+    assert balances.positions_market_value_usd == 5_000
+    assert balances.total_value_usd == 20_000
+    assert balances.net_liquidation_usd == 20_000
 
 
 def test_final_order_status_alert_message_includes_status_and_fill_details() -> None:
@@ -255,6 +310,9 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
 
 def test_engine_marks_all_cancelled_orders_as_no_orders_accepted() -> None:
     class CancelledBroker:
+        def account_balances(self) -> PortfolioBalances:
+            return PortfolioBalances(cash_usd=10_000.0, positions_market_value_usd=0.0)
+
         def positions(self) -> list:
             return []
 
