@@ -15,7 +15,7 @@ ACTIVE_STRATEGY=rank_velocity_size_equal_weight
 
 This means the active strategy can trade up to 98% of the broker-derived account value. The remaining 2% is a passive `cash` sleeve. There is no hidden `CASH_BUFFER_PCT` inside the active strategy; reserve cash by changing the `cash` sleeve allocation.
 
-`PORTFOLIO_VALUE_USD` remains only a dry-run/offline fallback for report generation when no broker balance is available. Paper/live execution blocks if POMA cannot read a positive broker cash + portfolio balance before sizing targets.
+`PORTFOLIO_VALUE_USD` remains only a dry-run/offline fallback for report generation when no broker balance is available. Paper/live execution blocks if POMA cannot read a positive broker cash + portfolio balance before sizing targets. Balance reads query both account-filtered and session-wide IBKR account summary rows and authenticated-session account value rows, so a Gateway session that has account data in either cache can provide the cash, net liquidation, and portfolio-value inputs needed for rebalancing.
 
 ## Required GitHub Environment secrets
 
