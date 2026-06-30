@@ -105,8 +105,8 @@ def test_gateway_ops_preserves_diagnostics_and_hardening() -> None:
         assert port in helper
     assert "Gateway/IBC likely has not reached the IBKR login/2FA stage" in helper
     assert "poma-ibc-gateway-engine" in ensure
-    assert "refusing configured Gateway startup without IBC" in ensure
-    assert "gatewaystart.sh returned before Java/Gateway was visible" in ensure
+    assert "refusing raw Gateway fallback" in ensure
+    assert "gatewaystart.sh exited before Java/Gateway stayed alive" in ensure
 
 
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
