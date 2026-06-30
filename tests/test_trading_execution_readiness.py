@@ -255,9 +255,6 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
 
 def test_engine_marks_all_cancelled_orders_as_no_orders_accepted() -> None:
     class CancelledBroker:
-        def cash_balance_usd(self) -> float:
-            return 10_000.0
-
         def positions(self) -> list:
             return []
 

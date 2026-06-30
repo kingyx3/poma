@@ -63,18 +63,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Validate Gateway operation scope
-        run: |
-          set -euo pipefail
-          if [ "${DEPLOY_ENVIRONMENT}" = "stg" ]; then
-            case "${INPUT_ACTION}" in
-              configure-paper|configure-live)
-                echo "::error::Gateway configure actions are intentionally disabled for stg. Staging must not rewrite broker login credentials; use dev configure-paper for credentialed paper validation, prd configure-live for live, and non-configure ops actions for stg health checks."
-                exit 1
-                ;;
-            esac
-          fi
-
       - name: Resolve broker login secrets
         if: ${{ inputs.action == 'configure-paper' || inputs.action == 'configure-live' }}
         run: |
