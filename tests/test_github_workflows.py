@@ -63,13 +63,13 @@ def test_gateway_ops_routes_paper_login_secrets_to_configure_paper() -> None:
     assert 'echo "BROKER_LOGIN_VALUE=${IBKR_LOGIN_SECRET}"' in live_block
 
 
-def test_gateway_ops_rejects_stg_configure_paper() -> None:
+def test_gateway_ops_rejects_stg_configure_actions() -> None:
     workflow = _text(GATEWAY_OPS_WORKFLOW)
     scope_guard = workflow.split("Validate Gateway operation scope", 1)[1].split("Resolve broker login secrets", 1)[0]
 
     assert '"${DEPLOY_ENVIRONMENT}" = "stg"' in scope_guard
-    assert '"${INPUT_ACTION}" = "configure-paper"' in scope_guard
-    assert "configure-paper is intentionally disabled for stg" in scope_guard
+    assert "configure-paper|configure-live" in scope_guard
+    assert "Gateway configure actions are intentionally disabled for stg" in scope_guard
 
 
 def test_gateway_ops_workflow_core_contract() -> None:
@@ -145,24 +145,37 @@ def test_auto_cicd_deploys_dev_stg_and_prd() -> None:
         assert snippet in workflow
 
 
-def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
+def test_auto_cicd_change_detection_scopes_deploy_gateway_and_shared_paths() -> None:
     workflow = _text(AUTO_CICD_WORKFLOW)
     dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  stg-deploy:", 1)[0]
+    shared_paths = workflow.split("is_shared_vm_gateway_path()", 1)[1].split("is_deploy_path()", 1)[0]
+    deploy_paths = workflow.split("is_deploy_path()", 1)[1].split("is_gateway_path()", 1)[0]
     gateway_paths = workflow.split("is_gateway_path()", 1)[1].split("case \"${EVENT_NAME}\"", 1)[0]
 
     assert "needs.changes.outputs.gateway_required == 'true'" in dev_gateway
     assert "needs.changes.outputs.deploy_required == 'true'" not in dev_gateway
-    assert "deploy_required only controls Terraform/app work" in workflow
+    assert "Deploy and Gateway Ops are coupled only for shared VM foundation paths" in workflow
     assert "Any deploy-required change may apply" not in workflow
-    assert "ops/scripts/validate_runtime_config.py" in workflow
+
+    assert ".github/workflows/auto-cicd.yml" in shared_paths
+    assert "infra/gcp-free-tier" in shared_paths
+    assert "ops/deploy/environments" in shared_paths
+
+    assert ".github/workflows/deploy-gcp-vm.yml" in deploy_paths
+    assert "pyproject.toml" in deploy_paths
+    assert "ops/scripts/validate_runtime_config.py" in deploy_paths
+    assert "src/*" in deploy_paths
+    assert "ops/scripts/repair_ib_gateway_runtime.py" not in deploy_paths
+
     assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
     assert "ops/scripts/repair_ib_gateway_runtime.py" in gateway_paths
     assert "ops/scripts/wait_ib_gateway_2fa.py" in gateway_paths
     assert "ops/scripts/run_gateway_ops_workflow.py" in gateway_paths
+    assert "src/*" not in gateway_paths
+    assert "pyproject.toml" not in gateway_paths
     assert "infra/gcp-free-tier" not in gateway_paths
     assert "ops/deploy/environments" not in gateway_paths
     assert ".github/workflows/deploy-gcp-vm.yml" not in gateway_paths
-    assert ".github/workflows/auto-cicd.yml" not in gateway_paths
 
 
 def test_auto_cicd_gateway_actions_per_environment() -> None:
@@ -176,6 +189,7 @@ def test_auto_cicd_gateway_actions_per_environment() -> None:
     assert "stg-configure-gateway" not in workflow
     assert "uses: ./.github/workflows/ib-gateway-ops.yml" not in stg_deploy
     assert "action: configure-paper" not in stg_deploy
+    assert "action: configure-live" not in stg_deploy
     assert "action: configure-live" in prd_gateway
 
 
