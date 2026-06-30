@@ -66,9 +66,13 @@ jobs:
       - name: Validate Gateway operation scope
         run: |
           set -euo pipefail
-          if [ "${DEPLOY_ENVIRONMENT}" = "stg" ] && [ "${INPUT_ACTION}" = "configure-paper" ]; then
-            echo "::error::configure-paper is intentionally disabled for stg. Staging deploys must not rewrite paper broker login credentials; use dev configure-paper for credentialed paper validation and non-configure ops actions for stg health checks."
-            exit 1
+          if [ "${DEPLOY_ENVIRONMENT}" = "stg" ]; then
+            case "${INPUT_ACTION}" in
+              configure-paper|configure-live)
+                echo "::error::Gateway configure actions are intentionally disabled for stg. Staging must not rewrite broker login credentials; use dev configure-paper for credentialed paper validation, prd configure-live for live, and non-configure ops actions for stg health checks."
+                exit 1
+                ;;
+            esac
           fi
 
       - name: Resolve broker login secrets
