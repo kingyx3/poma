@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
@@ -13,7 +14,7 @@ from poma.broker import (
 from poma.config import Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
 from poma.history import CapSnapshotHistory
-from poma.models import OrderResult, RebalancePlan
+from poma.models import CurrentPosition, OrderResult, RebalancePlan
 from poma.portfolio import build_strategy_capital_plan
 from poma.risk import (
     enforce_order_limits,
@@ -41,6 +42,14 @@ class RebalanceOutcome:
     status: str
 
 
+@dataclass(frozen=True)
+class PortfolioValuation:
+    portfolio_value_usd: float
+    cash_balance_usd: float | None
+    positions_value_usd: float
+    source: str
+
+
 class RebalanceEngine:
     """Pure orchestration for a single rebalance."""
 
@@ -59,8 +68,10 @@ class RebalanceEngine:
 
     def build_plan(self, session_date: str, run_id: str) -> RebalancePlan:
         settings = self.settings
+        positions = self.broker.positions()
+        valuation = self._portfolio_valuation(positions)
         capital_plan = build_strategy_capital_plan(
-            settings.portfolio_value_usd,
+            valuation.portfolio_value_usd,
             settings.strategy_allocations,
         )
         strategy_capital = capital_plan.capital_for(settings.active_strategy)
@@ -68,7 +79,7 @@ class RebalanceEngine:
         warnings: list[str] = []
         if capital_plan.unallocated_pct > 1e-9:
             warnings.append(
-                f"{capital_plan.unallocated_pct:.2%} of PORTFOLIO_VALUE_USD is not allocated "
+                f"{capital_plan.unallocated_pct:.2%} of portfolio value is not allocated "
                 "to active strategies"
             )
         historical = None
@@ -98,7 +109,6 @@ class RebalanceEngine:
             for row in current.itertuples()
             if getattr(row, "price", None) is not None
         }
-        positions = self.broker.positions()
         trades, trade_warnings = generate_trades(
             targets=targets,
             current_positions=positions,
@@ -133,12 +143,39 @@ class RebalanceEngine:
             trades=trades,
             execution_results=[],
             warnings=warnings,
-            portfolio_value_usd=settings.portfolio_value_usd,
+            portfolio_value_usd=valuation.portfolio_value_usd,
             strategy_name=strategy_capital.name,
             strategy_allocation_pct=strategy_capital.allocation_pct,
             strategy_capital_usd=strategy_capital.capital_usd,
             total_allocated_pct=capital_plan.total_allocated_pct,
             total_allocated_usd=capital_plan.total_allocated_usd,
+            cash_balance_usd=valuation.cash_balance_usd,
+            positions_value_usd=valuation.positions_value_usd,
+            portfolio_value_source=valuation.source,
+        )
+
+    def _portfolio_valuation(self, positions: list[CurrentPosition]) -> PortfolioValuation:
+        positions_value = sum(float(position.market_value) for position in positions)
+        if self.settings.trading_mode == TradingMode.DRY_RUN:
+            return PortfolioValuation(
+                portfolio_value_usd=self.settings.portfolio_value_usd,
+                cash_balance_usd=None,
+                positions_value_usd=positions_value,
+                source="configured_PORTFOLIO_VALUE_USD",
+            )
+
+        cash_balance = self.broker.cash_balance_usd()
+        portfolio_value = cash_balance + positions_value
+        if portfolio_value <= 0 or not math.isfinite(portfolio_value):
+            raise RuntimeError(
+                "broker-derived portfolio value must be positive before rebalancing; "
+                f"cash_balance_usd={cash_balance}, positions_value_usd={positions_value}"
+            )
+        return PortfolioValuation(
+            portfolio_value_usd=portfolio_value,
+            cash_balance_usd=cash_balance,
+            positions_value_usd=positions_value,
+            source="broker_cash_plus_positions",
         )
 
     def is_blocked(self, plan: RebalancePlan) -> bool:

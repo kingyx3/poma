@@ -21,7 +21,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `MAX_HOLDINGS` | yes | `100` | Top 100 selected stocks are held when enough valid tickers exist. |
 | `ACTIVE_STRATEGY` | yes | `rank_velocity_size_equal_weight` | The active strategy sleeve currently executed by the engine. |
 | `STRATEGY_ALLOCATIONS` | yes | `rank_velocity_size_equal_weight=0.98,cash=0.02` | Named portfolio sleeves. Total must be `<= 1.0`. |
-| `PORTFOLIO_VALUE_USD` | yes | `10000` | Hard cap for all strategy sleeves combined. |
+| `PORTFOLIO_VALUE_USD` | dry-run fallback | `10000` | Dry-run sizing fallback only. Paper/live rebalances derive portfolio value from broker USD cash plus current stock market value. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Position cap inside a strategy sleeve. |
 | `MAX_TURNOVER_PCT` | yes | `1.0` | Maximum absolute trade notional divided by the active strategy sleeve capital. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Suppresses tiny rebalance trades. |
@@ -48,16 +48,25 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 
 ## Portfolio sizing and existing account equity
 
-POMA sizes from `PORTFOLIO_VALUE_USD`, not from total IBKR account equity. `PORTFOLIO_VALUE_USD` is the hard cap for all strategy sleeves combined. `STRATEGY_ALLOCATIONS` then splits that cap across strategies, and the total allocation must be `<= 100%`.
+Paper/live rebalances dynamically size the portfolio from the configured IBKR account immediately before building the rebalance plan:
+
+```text
+portfolio_value_usd = USD cash balance + current stock positions market value
+strategy_capital_usd = portfolio_value_usd * active_strategy_allocation_pct
+```
+
+`PORTFOLIO_VALUE_USD` remains as the dry-run fallback so PR checks and local fixture runs stay deterministic without a broker connection. It is no longer the cap for paper/live rebalances.
 
 Example:
 
 ```text
-PORTFOLIO_VALUE_USD=10000
+# Broker account at rebalance time
+USD cash = 2,000
+Current stock market value = 8,000
 STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.60,future_strategy=0.20,cash=0.20
 ```
 
-That gives the current strategy 60% of `PORTFOLIO_VALUE_USD`, gives the future strategy 20%, and leaves 20% in passive cash. The active strategy does not separately subtract a hidden cash buffer. If the account has more buying power than `PORTFOLIO_VALUE_USD`, POMA still targets only the configured cap.
+That produces a dynamic `portfolio_value_usd` of `10,000`, gives the current strategy `6,000`, gives the future strategy `2,000`, and leaves `2,000` in passive cash. The active strategy does not separately subtract a hidden cash buffer.
 
 Existing stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
 
@@ -116,6 +125,7 @@ Bootstrap apply writes generated, non-secret GCP deployment identifiers to `ops/
 - `TRADING_MODE=live` is blocked unless `ALLOW_LIVE_TRADING=true`.
 - `ORDER_TYPE=market` in live mode is blocked unless `ALLOW_MARKET_ORDERS=true`.
 - `MAX_POSITION_PCT`, `MAX_TURNOVER_PCT`, `STRATEGY_ALLOCATIONS`, and min-trade thresholds are validated at startup.
+- Paper/live rebalances fail before order generation if broker cash plus current stock market value is not positive.
 - The deploy workflow renders paper runtime `IBKR_ACCOUNT` from `IBKR_ACCOUNT_PAPER`. Live mode uses `IBKR_ACCOUNT`.
 - Paper Gateway login secrets are separate from the paper account id: `IBKR_LOGIN_ID_PAPER` / `IBKR_LOGIN_SECRET_PAPER` authenticate Gateway, while `IBKR_ACCOUNT_PAPER` selects the account the app may trade.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are required so every deployed run has alerting configured.

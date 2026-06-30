@@ -18,9 +18,13 @@ def make_settings(**overrides: object) -> Settings:
 class FakeBroker:
     """In-memory broker that records submissions and reports back filled orders."""
 
-    def __init__(self, positions: list | None = None) -> None:
+    def __init__(self, positions: list | None = None, cash_balance_usd: float = 10_000.0) -> None:
         self._positions = positions or []
+        self._cash_balance_usd = cash_balance_usd
         self.submitted: list[ProposedTrade] | None = None
+
+    def cash_balance_usd(self) -> float:
+        return self._cash_balance_usd
 
     def positions(self) -> list:
         return list(self._positions)

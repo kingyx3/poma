@@ -86,8 +86,16 @@ def _portfolio_summary(
         "📊 Rebalance summary",
         f"Session: {session_date}",
         f"Status: {_portfolio_status_label(status, executed)}",
+        f"Portfolio: ${plan.portfolio_value_usd:,.0f} ({plan.portfolio_value_source})",
+        f"Strategy capital: ${plan.strategy_capital_usd:,.0f}",
         f"Orders: {len(items)} total · {buys} buy · {sells} sell",
     ]
+    if plan.cash_balance_usd is not None:
+        lines.insert(
+            4,
+            f"Broker valuation: cash ${plan.cash_balance_usd:,.0f} · "
+            f"positions ${plan.positions_value_usd:,.0f}",
+        )
 
     if items:
         lines.extend(["", "Order details"])
@@ -132,6 +140,9 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
                 "run_id": plan.run_id,
                 "session_date": plan.session_date,
                 "portfolio_value_usd": plan.portfolio_value_usd,
+                "portfolio_value_source": plan.portfolio_value_source,
+                "cash_balance_usd": plan.cash_balance_usd,
+                "positions_value_usd": plan.positions_value_usd,
                 "strategy": {
                     "name": plan.strategy_name,
                     "allocation_pct": plan.strategy_allocation_pct,
@@ -190,6 +201,7 @@ def _run_rebalance(
             [
                 "🚀 Execution starting",
                 f"Session: {session_date}",
+                f"Portfolio: ${plan.portfolio_value_usd:,.0f} ({plan.portfolio_value_source})",
                 f"Orders: {len(plan.trades)}",
             ]
         ),
