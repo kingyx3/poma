@@ -52,7 +52,6 @@ jobs:
 
           is_shared_vm_gateway_path() {
             case "$1" in
-              .github/workflows/auto-cicd.yml|\
               infra/gcp-free-tier/*|\
               ops/deploy/environments/*)
                 return 0
@@ -149,7 +148,7 @@ jobs:
             done < "${changed_files}"
 
             # Deploy and Gateway Ops are coupled only for shared VM foundation paths
-            # (Auto CI/CD routing, Terraform VM foundation, generated deploy env files).
+            # (Terraform VM foundation and generated deploy env files).
             # App/runtime code changes deploy the app only; Gateway-owned changes run Gateway Ops only.
             if [ "${deploy_required}" = "true" ] || [ "${gateway_required}" = "true" ]; then
               reason="deploy_required=${deploy_required}, gateway_required=${gateway_required} based on changed paths"
