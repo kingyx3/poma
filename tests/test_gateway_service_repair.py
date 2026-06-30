@@ -169,14 +169,14 @@ def test_ops_workflow_surfaces_redacted_ibc_diagnostics() -> None:
     assert "redact" in helper
 
 
-def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
+def test_ops_workflow_waits_for_gateway_socket_and_trading_readiness() -> None:
     workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
     runner = GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
 
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert (
-        "Waiting up to {timeout_seconds}s for broker auth and Gateway API readiness"
+        "Waiting up to {timeout_seconds}s for broker auth and Gateway API trading readiness"
         in runner
     )
     for snippet in (
@@ -184,6 +184,17 @@ def test_ops_workflow_waits_for_gateway_socket_readiness() -> None:
         "Socket/service poll attempt {attempt}",
         "systemctl is-active --quiet ibgateway",
         "Gateway API socket stability guard",
-        "Broker auth or Gateway API readiness timed out",
+        "non-transmitted IBKR what-if order preview",
+        "Restart ibgateway for trading-enabled login",
+        "Broker auth, Gateway API, or trading permission readiness timed out",
     ):
         assert snippet in runner
+
+
+def test_ops_workflow_can_manually_clear_rebalance_state() -> None:
+    workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
+    runner = GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
+
+    assert "clear-rebalance-state" in workflow
+    assert "/opt/poma/state/rebalance_state.json" in runner
+    assert "next eligible monitor run may rebalance again" in runner

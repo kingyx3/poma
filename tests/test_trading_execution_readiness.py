@@ -15,7 +15,7 @@ from poma.broker import (
 )
 from poma.config import Settings
 from poma.data import FixtureMarketDataClient
-from poma.engine import RebalanceEngine
+from poma.engine import NO_ORDERS_ACCEPTED_STATUS, RebalanceEngine
 from poma.health import check_ibkr
 from poma.models import OrderResult, OrderSide, ProposedTrade
 from poma.order_status_alerts import order_status_alert
@@ -71,6 +71,7 @@ def test_default_turnover_allows_initial_full_paper_bootstrap(monkeypatch: pytes
     )
 
     assert settings.max_turnover_pct == 1.0
+    assert settings.max_consecutive_order_acceptance_failures == 3
     assert strategy_capital.allocation_pct == pytest.approx(0.98)
     assert warnings == []
     assert len(trades) == settings.max_holdings
@@ -112,6 +113,8 @@ def test_ibkr_health_fails_when_configured_account_is_not_managed(
             accounts=["DU7654321"],
             server_time="2026-06-28T00:00:00Z",
             stock_positions=0,
+            trading_permissions_ok=True,
+            trading_permissions_message="what-if order preview accepted for AAPL",
         )
 
     monkeypatch.setattr("poma.broker.probe_ibkr", fake_probe)
@@ -210,6 +213,9 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
         def reqCurrentTime(self) -> str:  # noqa: N802 - mirrors ib_insync API
             return "2026-06-29T13:40:00Z"
 
+        def whatIfOrder(self, *_args, **_kwargs):  # noqa: N802, ANN202 - ib_insync shape
+            return object()
+
         def placeOrder(self, *_args, **_kwargs):  # noqa: N802, ANN202 - ib_insync shape
             self.place_order_calls += 1
             self.connected = False
@@ -247,7 +253,7 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
     assert "no further orders submitted" in str(results[0].message)
 
 
-def test_engine_marks_cancelled_orders_as_completed_with_issues() -> None:
+def test_engine_marks_all_cancelled_orders_as_no_orders_accepted() -> None:
     class CancelledBroker:
         def positions(self) -> list:
             return []
@@ -290,7 +296,7 @@ def test_engine_marks_cancelled_orders_as_completed_with_issues() -> None:
     outcome = engine.run("session", "run")
 
     assert outcome.executed
-    assert outcome.status == "completed_with_order_issues"
+    assert outcome.status == NO_ORDERS_ACCEPTED_STATUS
 
 
 def test_effective_deploy_default_exports_full_turnover_before_rendering() -> None:

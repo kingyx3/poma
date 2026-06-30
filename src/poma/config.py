@@ -72,6 +72,10 @@ class Settings(BaseSettings):
         alias="ORDER_STATUS_TIMEOUT_SECONDS",
     )
     cancel_stale_orders: bool = Field(default=True, alias="CANCEL_STALE_ORDERS")
+    max_consecutive_order_acceptance_failures: PositiveInt = Field(
+        default=3,
+        alias="MAX_CONSECUTIVE_ORDER_ACCEPTANCE_FAILURES",
+    )
 
     ibkr_host: str = Field(default="127.0.0.1", alias="IBKR_HOST")
     ibkr_port: int = Field(default=7497, alias="IBKR_PORT")

@@ -28,20 +28,52 @@ def test_check_ibkr_reports_connection_failure(monkeypatch) -> None:
     assert "unreachable" in check.detail
 
 
-def test_check_ibkr_success_when_account_matches(monkeypatch) -> None:
+def test_check_ibkr_success_when_account_matches_and_session_is_trade_enabled(monkeypatch) -> None:
     monkeypatch.setattr(
         "poma.broker.probe_ibkr",
-        lambda settings, *, timeout=20.0: IbkrHealth(True, ["DU123"], "now", 3),
+        lambda settings, *, timeout=20.0: IbkrHealth(
+            True,
+            ["DU123"],
+            "now",
+            3,
+            True,
+            "what-if order preview accepted for AAPL",
+        ),
     )
     check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
     assert check.ok
     assert "DU123" in check.detail
+    assert "what-if order preview accepted" in check.detail
+
+
+def test_check_ibkr_fails_when_session_is_not_trade_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "poma.broker.probe_ibkr",
+        lambda settings, *, timeout=20.0: IbkrHealth(
+            True,
+            ["DU123"],
+            "now",
+            3,
+            False,
+            "IBKR session is connected but not trading-enabled",
+        ),
+    )
+    check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
+    assert not check.ok
+    assert "not trading-enabled" in check.detail
 
 
 def test_check_ibkr_fails_on_account_mismatch(monkeypatch) -> None:
     monkeypatch.setattr(
         "poma.broker.probe_ibkr",
-        lambda settings, *, timeout=20.0: IbkrHealth(True, ["DUOTHER"], "now", 0),
+        lambda settings, *, timeout=20.0: IbkrHealth(
+            True,
+            ["DUOTHER"],
+            "now",
+            0,
+            True,
+            "what-if order preview accepted for AAPL",
+        ),
     )
     check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
     assert not check.ok

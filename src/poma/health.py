@@ -39,7 +39,7 @@ def check_data_provider(settings: Settings) -> Check:
 
 
 def check_ibkr(settings: Settings) -> Check:
-    """Confirm the IBKR API is reachable and authenticated for the active account."""
+    """Confirm the IBKR API is reachable, authenticated, and trade-enabled."""
     # Imported lazily so health checks that do not touch IBKR (dry-run) avoid the dependency.
     from poma.broker import probe_ibkr
 
@@ -56,7 +56,8 @@ def check_ibkr(settings: Settings) -> Check:
     detail = (
         f"connected to {settings.ibkr_host}:{settings.ibkr_port}, "
         f"accounts={result.accounts or ['none']}, "
-        f"server_time={result.server_time}, stock_positions={result.stock_positions}"
+        f"server_time={result.server_time}, stock_positions={result.stock_positions}, "
+        f"trading_permissions={result.trading_permissions_message}"
     )
     account_ok = settings.ibkr_account in result.accounts
     if not account_ok:
@@ -65,6 +66,8 @@ def check_ibkr(settings: Settings) -> Check:
             False,
             f"configured IBKR_ACCOUNT={settings.ibkr_account} not in {result.accounts}",
         )
+    if not result.trading_permissions_ok:
+        return Check("ibkr", False, detail)
     return Check("ibkr", result.connected, detail)
 
 

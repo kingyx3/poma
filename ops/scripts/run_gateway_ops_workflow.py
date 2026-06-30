@@ -116,14 +116,39 @@ def main() -> int:
         )
         timed("Collect gateway diagnostics", lambda: remote(command, timeout=240))
 
+    def restart_gateway_for_trading_login(reason: str) -> None:
+        print(reason)
+        print(
+            "Restarting IB Gateway to force a fresh primary trading/market-data login. "
+            "Approve IBKR Mobile if prompted; this may disconnect any other active trading session."
+        )
+        timed(
+            "Restart ibgateway for trading-enabled login",
+            lambda: remote("sudo systemctl restart ibgateway", timeout=240),
+        )
+
+    def gateway_startup_progress(elapsed_seconds: int) -> int:
+        command = (
+            "sudo poma-diagnose-ibgateway startup-check --log-lines 80 "
+            f"--elapsed-seconds {elapsed_seconds} "
+            f"--fail-no-progress-after {no_progress_after}"
+        )
+        return timed("Gateway startup progress check", lambda: remote(command, timeout=120))
+
     def api_ready(mode: str, required: bool) -> int:
         timeout_seconds = int(twofa_timeout)
         poll_interval_seconds = int(poll_seconds)
-        deadline = time.monotonic() + timeout_seconds
+        started = time.monotonic()
+        deadline = started + timeout_seconds
         stable = 0
         attempt = 1
-        print(f"Waiting up to {timeout_seconds}s for broker auth and Gateway API readiness.")
+        print(f"Waiting up to {timeout_seconds}s for broker auth and Gateway API trading readiness.")
+        print(
+            "The readiness check includes a non-transmitted IBKR what-if order preview, so a "
+            "read-only / no Trading-Market-Data-permissions login will be retried before deploy succeeds."
+        )
         while time.monotonic() < deadline:
+            elapsed_seconds = int(time.monotonic() - started)
             poll = timed(
                 f"Socket/service poll attempt {attempt}",
                 lambda: remote(
@@ -142,14 +167,31 @@ def main() -> int:
                         + mode
                         + " -e DATA_PROVIDER=fixture poma ibkr-check'"
                     )
-                    if remote(check, timeout=240) == 0:
-                        print("IBKR API handshake succeeded; Gateway is authenticated and serving the API.")
+                    check_status = remote(check, timeout=240)
+                    if check_status == 0:
+                        print("IBKR API handshake and trading permission preview succeeded; Gateway is ready to submit orders.")
                         return 0
+                    restart_gateway_for_trading_login(
+                        "IBKR API socket opened but trading readiness failed. "
+                        "This usually means Gateway logged in without Trading/Market Data permissions."
+                    )
+                    stable = 0
+            elif poll == 1:
+                stable = 0
+                print("Gateway service is active but API socket is closed; checking startup progress.")
+                startup_status = gateway_startup_progress(elapsed_seconds)
+                if startup_status == 2:
+                    print(
+                        "Gateway startup stalled before opening the API socket; collecting diagnostics.",
+                        file=sys.stderr,
+                    )
+                    diagnose()
+                    return 1
             else:
                 stable = 0
             time.sleep(poll_interval_seconds)
             attempt += 1
-        print("Broker auth or Gateway API readiness timed out.", file=sys.stderr)
+        print("Broker auth, Gateway API, or trading permission readiness timed out.", file=sys.stderr)
         diagnose()
         return 1
 
@@ -164,6 +206,13 @@ def main() -> int:
         return remote("sudo systemctl restart ibgateway", timeout=180)
     if action == "logs":
         return remote(f"sudo journalctl -u ibgateway -n {log_lines} --no-pager", timeout=180)
+    if action == "clear-rebalance-state":
+        return remote(
+            "sudo install -d -o poma -g poma /opt/poma/state && "
+            "sudo rm -f /opt/poma/state/rebalance_state.json && "
+            "echo 'Cleared /opt/poma/state/rebalance_state.json; next eligible monitor run may rebalance again.'",
+            timeout=180,
+        )
     if action == "verify-socket":
         if repair_runtime() != 0:
             return 1
@@ -203,7 +252,7 @@ def main() -> int:
         diagnose()
         return 1
     if mode == "paper":
-        print("Paper Gateway configure will verify API readiness directly.")
+        print("Paper Gateway configure will verify API and trading readiness directly.")
         return api_ready(mode, required=True)
 
     wait_command = (
