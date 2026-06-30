@@ -127,7 +127,7 @@ jobs:
           if [ "${unknown}" = "true" ]; then
             deploy_required=true
             gateway_required=true
-            reason="changed files unavailable; fail-open by running deploy and gateway configuration"
+            reason="changed files unavailable; fail-open by running deploy and gateway checks where configured"
             : > "${changed_files}"
           else
             while IFS= read -r path; do
@@ -140,12 +140,9 @@ jobs:
               fi
             done < "${changed_files}"
 
-            # Any deploy-required change may apply a Terraform plan that recreates the VM.
-            # Configure Gateway afterward so a fresh boot disk receives IB Gateway and IBC.
-            if [ "${deploy_required}" = "true" ]; then
-              gateway_required=true
-            fi
-
+            # VM/app deploy and Gateway configure are intentionally separate:
+            # deploy_required only controls Terraform/app work; gateway_required only controls
+            # Gateway Ops validation for Gateway-owned paths or unknown change sets.
             if [ "${deploy_required}" = "true" ] || [ "${gateway_required}" = "true" ]; then
               reason="deploy_required=${deploy_required}, gateway_required=${gateway_required} based on changed paths"
             fi
@@ -222,18 +219,9 @@ jobs:
       deploy_smoke: true
     secrets: inherit
 
-  stg-configure-gateway:
-    needs: [changes, stg-deploy]
-    if: >-
-      ${{ always() && github.event_name == 'push' &&
-          (needs.stg-deploy.result == 'success' || needs.stg-deploy.result == 'skipped') &&
-          (needs.changes.result != 'success' || needs.changes.outputs.gateway_required == 'true') }}
-    uses: ./.github/workflows/ib-gateway-ops.yml
-    with:
-      deploy_environment: stg
-      action: configure-paper
-      log_lines: 200
-    secrets: inherit
+  # Staging Auto CI/CD intentionally stops after VM/app deploy. Gateway lifecycle operations are
+  # owned by the IB Gateway Ops workflow and are not chained from deploy, so pushes to main never
+  # rewrite broker login credentials or run configure-paper for stg.
 
   # Publishing a non-prerelease GitHub release promotes to live/prd. prereleases are ignored so
   # they can be used for staging/testing without touching real money. prd GitHub Environment
