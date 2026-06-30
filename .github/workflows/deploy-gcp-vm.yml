@@ -433,6 +433,29 @@ jobs:
             set -euo pipefail
 
             remote_started="$(date +%s)"
+            remote_failure_diagnostics() {
+              local status="$?"
+              if [ "${status}" -eq 0 ]; then
+                return 0
+              fi
+              echo "REMOTE FAILURE status=${status}; collecting deploy diagnostics" >&2
+              pwd >&2 || true
+              id poma >&2 || true
+              sudo -u poma id >&2 || true
+              ls -la /opt/poma >&2 || true
+              find /opt/poma -maxdepth 2 -mindepth 1 -printf '%M %u:%g %p\n' 2>/dev/null | sort >&2 || true
+              docker --version >&2 || true
+              docker compose version >&2 || true
+              systemctl is-active docker cron >&2 || true
+              df -h / /opt/poma >&2 || true
+              docker system df >&2 || true
+              if [ -f /opt/poma/.compose.env ]; then
+                sed 's/^POMA_IMAGE=.*/POMA_IMAGE=<redacted>/' /opt/poma/.compose.env >&2 || true
+              fi
+              exit "${status}"
+            }
+            trap remote_failure_diagnostics EXIT
+
             remote_timed() {
               local label="$1" status start
               shift
@@ -444,6 +467,20 @@ jobs:
               set -e
               echo "REMOTE TIMING END ${label}: $(( $(date +%s) - start ))s (status=${status})"
               return "${status}"
+            }
+
+            remote_retry_with_backoff() {
+              local label="$1" max_attempts="$2" attempt=1
+              shift 2
+              until "$@"; do
+                if [ "${attempt}" -ge "${max_attempts}" ]; then
+                  echo "${label} failed after ${attempt} remote attempt(s)." >&2
+                  return 1
+                fi
+                attempt=$((attempt + 1))
+                echo "${label} failed; retrying remote attempt ${attempt}/${max_attempts} in 20s..." >&2
+                sleep 20
+              done
             }
 
             remote_timed "Prepare app directory" sudo mkdir -p /opt/poma
@@ -487,7 +524,8 @@ jobs:
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + smoke + cron).
-            remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
+            remote_retry_with_backoff "Docker pull and smoke test" 2 \
+              remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
             remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
             echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
