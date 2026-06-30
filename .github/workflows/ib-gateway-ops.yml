@@ -45,15 +45,15 @@ jobs:
   gateway-ops:
     name: IB Gateway ${{ inputs.action }} (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     environment: ${{ inputs.deploy_environment }}
     env:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       LOG_LINES: ${{ inputs.log_lines }}
-      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360
+      IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 600
       IB_GATEWAY_SOCKET_POLL_SECONDS: 5
-      IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200
+      IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 540
       IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
       IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
       IBKR_LOGIN_ID_PAPER: ${{ secrets.IBKR_LOGIN_ID_PAPER }}
