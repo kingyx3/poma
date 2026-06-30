@@ -203,14 +203,38 @@ def print_startup(log_lines: int) -> StartupClassification:
     return classification
 
 
+def print_visible_startup_failure(classification: StartupClassification, log_lines: int, reason: str) -> None:
+    print("::endgroup::")
+    section("Visible gateway startup diagnostic")
+    print("VISIBLE_STARTUP_CHECK_STATUS=failed")
+    print(f"VISIBLE_STARTUP_STAGE={classification.stage}")
+    print(f"VISIBLE_STARTUP_ACTION={classification.action}")
+    print(f"VISIBLE_STARTUP_REASON={classification.reason}")
+    print(f"VISIBLE_STARTUP_FAILURE_REASON={reason}")
+    section("Gateway-related processes")
+    print(redact(process_summary()))
+    section("Relevant listening ports")
+    print(redact(listener_summary()))
+    section("Recent login/API log hints")
+    text = recent_log_text(log_lines)
+    if text:
+        print(text)
+    else:
+        print("No login, 2FA, API, socket, or error hints found in recent Gateway/IBC logs.")
+        print("Gateway/IBC likely has not reached the IBKR login/2FA stage yet.")
+
+
 def startup_check(log_lines: int, elapsed_seconds: int, fail_no_progress_after: int) -> int:
     classification = print_startup(log_lines)
     if classification.action == "ready":
         return 0
     if elapsed_seconds >= fail_no_progress_after:
-        print("Startup progress deadline exceeded before API readiness; failing fast so full diagnostics are collected.")
+        message = "Startup progress deadline exceeded before API readiness; failing fast so full diagnostics are collected."
+        print(message)
+        print_visible_startup_failure(classification, log_lines, message)
         return 2
     if classification.action == "fail":
+        print_visible_startup_failure(classification, log_lines, "Startup classifier marked this state as non-recoverable.")
         return 2
     return 1
 
