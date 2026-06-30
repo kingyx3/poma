@@ -17,9 +17,14 @@ def test_upload_install_step_reports_stage_timings() -> None:
         "timed \"VM readiness\" ensure_vm_ready",
         "timed \"App package upload\"",
         "timed \"Environment upload\"",
-        "timed \"Remote install, Docker build, smoke, cron\"",
+        "timed \"Remote install, Docker pull, smoke, cron\"",
         "REMOTE TIMING BEGIN",
-        "remote_timed \"Docker build and smoke test\"",
+        "trap remote_failure_diagnostics EXIT",
+        "REMOTE FAILURE status=${status}; collecting deploy diagnostics",
+        "docker compose version",
+        "remote_retry_with_backoff",
+        "retrying remote attempt",
+        "remote_timed \"Docker pull and smoke test\"",
         "remote_timed \"Install cron schedule\"",
         "TIMING Upload and install on VM total",
     )
@@ -39,8 +44,10 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         "timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan",
         "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
         "timeout --kill-after=30s 2m tar",
-        "timeout-minutes: 35",
-        "Remote install, Docker build, smoke, cron",
+        "docker-compose.vm.yml",
+        "timeout-minutes: 55",
+        "timeout-minutes: 90",
+        "Remote install, Docker pull, smoke, cron",
     )
     for snippet in expected_snippets:
         assert snippet in workflow
@@ -57,6 +64,8 @@ def test_prebuilt_image_workflow_pushes_main_and_sha_tags_with_cache() -> None:
         "docker/setup-buildx-action@v3",
         "docker/login-action@v3",
         "docker buildx build",
+        '--build-arg "APP_UID=1000"',
+        '--build-arg "APP_GID=1000"',
         "--push",
         "--tag \"${image}:main\"",
         "--tag \"${image}:${GITHUB_SHA}\"",
@@ -70,8 +79,16 @@ def test_prebuilt_image_workflow_pushes_main_and_sha_tags_with_cache() -> None:
 def test_deploy_polling_and_retries_are_bounded() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "local deadline=$((SECONDS + 240)) attempt=0" in workflow
-    assert "startup revision ${startup_revision} not ready within 4m" in workflow
+    assert "local deadline=$((SECONDS + 600)) attempt=0" in workflow
+    assert "startup revision ${startup_revision} not ready within 10m" in workflow
+    assert "startup_failed=$(cat /var/lib/poma/vm-startup-failed" in workflow
+    assert "VM startup script failed before writing the readiness sentinel" in workflow
+    assert "exit 42" in workflow
+    assert "id poma >/dev/null 2>&1" in workflow
+    assert "systemctl is-active --quiet docker" in workflow
+    assert "systemctl is-active --quiet cron" in workflow
+    assert "test -f /var/lib/cloud/instance/boot-finished" not in workflow
+    assert "print_vm_bootstrap_status" in workflow
     assert "retry_with_backoff" in workflow
     assert "max_attempts" in workflow
     assert "failed after ${attempt} attempt(s)" in workflow
@@ -84,12 +101,13 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
 
     expected_snippets = (
         "timed \"runtime directory checks\"",
+        "timed \"runtime identity checks\" ensure_runtime_identity",
         "timed \"compose image configuration\" write_compose_env",
         "timed \"vm compose file\" ensure_vm_compose_file",
         "timed \"docker image pull\" pull_image",
         "Docker disk/cache usage before image pull",
-        "timeout --kill-after=30s 8m compose pull poma",
-        "timeout --kill-after=30s 3m compose run --rm",
+        "timeout_compose 8m pull poma",
+        "timeout_compose 3m run --rm",
         "timed \"deploy smoke test\" run_deploy_smoke",
         "timed \"dangling image prune\" prune_dangling_images",
         "DEFAULT_IMAGE_TAG=\"${DEFAULT_IMAGE_TAG:-main}\"",
@@ -98,6 +116,7 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         assert snippet in script
 
     assert "docker compose build" not in script
+    assert 'timeout --kill-after=30s "${duration}" docker compose' in script
     assert "DOCKER_BUILDKIT" not in script
 
 

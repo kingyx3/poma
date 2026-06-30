@@ -14,6 +14,8 @@ def test_vm_recreates_when_startup_script_changes() -> None:
 
     assert 'resource "terraform_data" "startup_revision"' in tf
     assert "startup_revision = md5(join" in tf
+    assert "local.app_uid" in tf
+    assert "local.app_gid" in tf
     assert "input = local.startup_revision" in tf
     assert "poma-startup-revision  = local.startup_revision" in tf
     assert "replace_triggered_by = [terraform_data.startup_revision]" in tf

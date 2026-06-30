@@ -7,6 +7,8 @@ COMPOSE_ENV_FILE="${COMPOSE_ENV_FILE:-.compose.env}"
 DEFAULT_IMAGE_REGISTRY="${DEFAULT_IMAGE_REGISTRY:-ghcr.io}"
 DEFAULT_IMAGE_REPOSITORY="${DEFAULT_IMAGE_REPOSITORY:-kingyx3/poma}"
 DEFAULT_IMAGE_TAG="${DEFAULT_IMAGE_TAG:-main}"
+EXPECTED_APP_UID="${EXPECTED_APP_UID:-1000}"
+EXPECTED_APP_GID="${EXPECTED_APP_GID:-1000}"
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -32,6 +34,21 @@ timed() {
 
 compose() {
   docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+}
+
+timeout_compose() {
+  local duration="$1"
+  shift
+
+  timeout --kill-after=30s "${duration}" docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+}
+
+ensure_runtime_identity() {
+  if [ "${POMA_UID}" != "${EXPECTED_APP_UID}" ] || [ "${POMA_GID}" != "${EXPECTED_APP_GID}" ]; then
+    echo "Deploy user uid=${POMA_UID} gid=${POMA_GID} must match image app identity ${EXPECTED_APP_UID}:${EXPECTED_APP_GID}." >&2
+    echo "Apply Terraform startup changes so the VM recreates the poma user with the expected identity." >&2
+    exit 1
+  fi
 }
 
 prepare_runtime_dirs() {
@@ -84,7 +101,7 @@ pull_image() {
   log "Docker disk/cache usage before image pull:"
   docker system df || true
 
-  timeout --kill-after=30s 8m compose pull poma
+  timeout_compose 8m pull poma
 
   log "Docker disk/cache usage after image pull:"
   docker system df || true
@@ -94,7 +111,7 @@ run_deploy_smoke() {
   local after_count before_count
 
   before_count="$(find reports -maxdepth 1 -type f -name 'rebalance-*.json' | wc -l)"
-  timeout --kill-after=30s 3m compose run --rm \
+  timeout_compose 3m run --rm \
     -e DATA_PROVIDER=fixture \
     -e TRADING_MODE=dry_run \
     poma rebalance --session-date deploy-smoke --dry-run
@@ -117,8 +134,11 @@ cd "${APP_DIR}"
 
 export POMA_UID="${POMA_UID:-$(id -u)}"
 export POMA_GID="${POMA_GID:-$(id -g)}"
+# Terraform startup and the prebuilt image both pin the app identity to 1000:1000,
+# so pulled containers can write the host runtime mounts without rebuilding on the VM.
 
 log "Deploying ${APP_DIR} as uid=${POMA_UID} gid=${POMA_GID}; image=${POMA_IMAGE:-auto}; smoke=${RUN_DEPLOY_SMOKE:-true}"
+timed "runtime identity checks" ensure_runtime_identity
 timed "runtime directory checks" prepare_runtime_dirs
 timed "compose image configuration" write_compose_env
 timed "vm compose file" ensure_vm_compose_file

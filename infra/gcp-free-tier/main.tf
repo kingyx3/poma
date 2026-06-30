@@ -1,5 +1,7 @@
 locals {
   app_user = "poma"
+  app_uid  = "1000"
+  app_gid  = "1000"
   app_dir  = "/opt/poma"
   labels = {
     app       = "poma"
@@ -9,12 +11,16 @@ locals {
   startup_revision = md5(join(":", [
     file("${path.module}/startup.sh"),
     local.app_user,
+    local.app_uid,
+    local.app_gid,
     local.app_dir,
   ]))
 
   # Rendered once so both the VM metadata and the replacement trigger see the same content.
   startup_script = templatefile("${path.module}/startup.sh", {
     app_user         = local.app_user
+    app_uid          = local.app_uid
+    app_gid          = local.app_gid
     app_dir          = local.app_dir
     startup_revision = local.startup_revision
   })
