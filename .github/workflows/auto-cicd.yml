@@ -90,10 +90,6 @@ jobs:
               ops/scripts/run_gateway_ops_workflow.py)
                 return 0
                 ;;
-              infra/gcp-free-tier/*|\
-              ops/deploy/environments/*)
-                return 0
-                ;;
               *)
                 return 1
                 ;;
