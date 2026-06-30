@@ -26,4 +26,9 @@ jobs:
           image_owner="kingyx3"
           image_name="poma"
           image="${image_registry}/${image_owner}/${image_name}"
-          docker buildx build --push --tag "${image}:main" .
+          docker buildx build \
+            --push \
+            --tag "${image}:main" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            .
