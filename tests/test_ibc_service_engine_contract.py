@@ -26,6 +26,14 @@ def test_service_script_waits_for_real_gateway_process_not_wrapper_path() -> Non
     assert "Real Gateway process or API listener detected" in script
 
 
+def test_service_script_extends_ibc_login_dialog_timeout() -> None:
+    script = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT_SECONDS:-240" in script
+    assert "set_ini LoginDialogDisplayTimeout" in script
+    assert "Pinned IBC LoginDialogDisplayTimeout" in script
+
+
 def test_service_script_does_not_fragile_patch_generated_files() -> None:
     script = SERVICE_SCRIPT.read_text(encoding="utf-8")
 
