@@ -64,6 +64,7 @@ def helper_revision() -> str:
 def app_ibkr_check_command(mode: str, required: bool) -> str:
     missing_status = 1 if required else 0
     missing_message = "POMA app not deployed at /opt/poma" if required else "POMA app not deployed at /opt/poma; skipping."
+    transient_pattern = "TimeoutError|API connection failed|unreachable|Connect call failed|ConnectionRefusedError|timed out"
     return (
         "set -eu; "
         f"if [ ! -d /opt/poma ]; then echo '{missing_message}' >&2; exit {missing_status}; fi; "
@@ -88,12 +89,16 @@ def app_ibkr_check_command(mode: str, required: bool) -> str:
         "set -e; "
         "cat \"$output\"; "
         "if [ \"$status\" -eq 0 ]; then exit 0; fi; "
+        "if grep -Eiq 'not trading-enabled|Trading/Market Data permissions|primary trading session is active|configured IBKR_ACCOUNT=.*not in' \"$output\"; then "
+        "exit 1; "
+        "fi; "
         "if ! nc -z 127.0.0.1 7497; then "
         "echo 'IBKR API socket dropped during container readiness check; retrying without restarting Gateway.' >&2; "
         f"exit {TRANSIENT_GATEWAY_READINESS_STATUS}; "
         "fi; "
-        "if grep -Eiq 'not trading-enabled|Trading/Market Data permissions|primary trading session is active|configured IBKR_ACCOUNT=.*not in' \"$output\"; then "
-        "exit 1; "
+        f"if grep -Eiq '{transient_pattern}' \"$output\"; then "
+        "echo 'IBKR API handshake is not ready yet; retrying without restarting Gateway.' >&2; "
+        f"exit {TRANSIENT_GATEWAY_READINESS_STATUS}; "
         "fi; "
         "echo 'IBKR readiness check failed for a non-login reason; refusing to restart Gateway. Check app config/container runtime diagnostics above.' >&2; "
         f"exit {APP_READINESS_INFRA_FAILURE_STATUS}"
@@ -168,6 +173,10 @@ def main() -> int:
             lambda: remote("sudo systemctl restart ibgateway", timeout=240),
         )
 
+    def start_gateway_service() -> None:
+        print("Gateway service is inactive; starting it idempotently and continuing readiness loop.")
+        timed("Start inactive ibgateway service", lambda: remote("sudo systemctl start ibgateway", timeout=240))
+
     def gateway_startup_progress(elapsed_seconds: int) -> int:
         command = (
             "sudo poma-diagnose-ibgateway startup-check --log-lines 80 "
@@ -206,7 +215,7 @@ def main() -> int:
                         print("IBKR API handshake and trading permission preview succeeded; Gateway is ready to submit orders.")
                         return 0
                     if check_status == TRANSIENT_GATEWAY_READINESS_STATUS:
-                        print("IBKR readiness check raced a Gateway socket restart; continuing the idempotent readiness loop.")
+                        print("IBKR readiness check raced Gateway startup/auth; continuing the idempotent readiness loop.")
                         stable = 0
                     elif check_status == APP_READINESS_INFRA_FAILURE_STATUS:
                         print(
@@ -232,6 +241,9 @@ def main() -> int:
                     )
                     diagnose()
                     return 1
+            elif poll == 2:
+                stable = 0
+                start_gateway_service()
             else:
                 stable = 0
             time.sleep(poll_interval_seconds)
@@ -269,11 +281,11 @@ def main() -> int:
         return 2
 
     login_id = env("BROKER_LOGIN_ID")
-    login_secret = env("BROKER_LOGIN_VALUE")
+    login_value = env("BROKER_LOGIN_VALUE")
     if repair_runtime() != 0:
         return 1
     mode = action.removeprefix("configure-")
-    configure_input = f"{login_id}\n{login_secret}\n{mode}\n"
+    configure_input = f"{login_id}\n{login_value}\n{mode}\n"
     if timed(
         "Configure IBC auth values",
         lambda: gcloud(
