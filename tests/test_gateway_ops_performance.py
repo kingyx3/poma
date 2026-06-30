@@ -20,9 +20,9 @@ def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     workflow = _workflow()
 
     assert "python3 ops/scripts/run_gateway_ops_workflow.py" in workflow
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 600" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
-    assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 200" in workflow
+    assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 540" in workflow
     assert "Resolve broker login secrets" in workflow
 
 
@@ -113,8 +113,8 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
     workflow = _workflow()
     runner = _runner()
 
-    assert "timeout-minutes: 25" in workflow
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 360" in workflow
+    assert "timeout-minutes: 30" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 600" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "timeout=480" in runner
     assert "timeout=900" in runner
