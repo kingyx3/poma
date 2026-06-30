@@ -1,204 +1,193 @@
 #!/bin/sh
 set -eu
 
-# The IB Gateway runner script (/usr/local/bin/poma-run-ib-gateway) and the systemd unit
-# (/etc/systemd/system/ibgateway.service) are rendered by ops/scripts/install_ibc_config_helper.py.
-# This script applies small production hardening after that render, then reloads and enables
-# the service. Always run install_ibc_config_helper.py before this script.
+# install_ibc_config_helper.py installs the base systemd unit and pins the IBC
+# launcher. This helper installs the final foreground supervisor that systemd
+# uses for configured Gateway sessions.
 
 RUNNER="/usr/local/bin/poma-run-ib-gateway"
-UNIT="/etc/systemd/system/ibgateway.service"
 ENGINE="/usr/local/bin/poma-ibc-gateway-engine"
+UNIT="/etc/systemd/system/ibgateway.service"
+DIAG="/usr/local/bin/poma-diagnose-ibgateway"
 
-if [ ! -x "${RUNNER}" ] || [ ! -f "${UNIT}" ]; then
-  echo "Missing ${RUNNER} or ${UNIT}." >&2
+if [ ! -f "${UNIT}" ]; then
+  echo "Missing ${UNIT}." >&2
   echo "Run 'sudo python3 ops/scripts/install_ibc_config_helper.py' before this script." >&2
   exit 1
 fi
 
-python3 - <<'PY'
-from __future__ import annotations
+cat >"${RUNNER}" <<'RUNNER'
+#!/usr/bin/env bash
+set -euo pipefail
 
-import re
-from pathlib import Path
+export HOME="/home/poma"
+export DISPLAY="${DISPLAY:-:99}"
+export IB_GATEWAY_DIR="${IB_GATEWAY_DIR:-/opt/ibgateway}"
+export IBC_DIR="${IBC_DIR:-/opt/ibc}"
+export IB_GATEWAY_VNC_PORT="${IB_GATEWAY_VNC_PORT:-5900}"
+export TWS_SETTINGS_PATH="${TWS_SETTINGS_PATH:-/home/poma/Jts}"
+export IB_GATEWAY_RUNTIME_DIR="${IB_GATEWAY_RUNTIME_DIR:-/run/poma-ibgateway}"
+export IB_GATEWAY_LOG_DIR="${IB_GATEWAY_LOG_DIR:-/var/log/poma/ibgateway}"
 
-ENGINE = Path("/usr/local/bin/poma-ibc-gateway-engine")
-RUNNER = Path("/usr/local/bin/poma-run-ib-gateway")
-UNIT = Path("/etc/systemd/system/ibgateway.service")
-DIAG = Path("/usr/local/bin/poma-diagnose-ibgateway")
+mkdir -p "${HOME}/Jts" "${HOME}/ibc/logs" "${IB_GATEWAY_RUNTIME_DIR}" "${IB_GATEWAY_LOG_DIR}"
 
-ENGINE.write_text(
-    r'''#!/usr/bin/env python3
-from __future__ import annotations
+require_command() {
+  local command="$1"
+  if ! command -v "${command}" >/dev/null 2>&1; then
+    echo "Missing required command: ${command}. Run IB Gateway Ops to repair the VM bootstrap." >&2
+    exit 127
+  fi
+}
 
-import os
-import socket
-import subprocess
-import sys
-import time
-from datetime import datetime, timezone
-from pathlib import Path
+cleanup() {
+  jobs -p | xargs -r kill || true
+}
+trap cleanup EXIT
 
-HOME = Path(os.environ.get("HOME", "/home/poma"))
-IBC_DIR = Path(os.environ.get("IBC_DIR", "/opt/ibc"))
-LOG_DIR = Path(os.environ.get("IB_GATEWAY_LOG_DIR", "/var/log/poma/ibgateway"))
-CONFIG = HOME / "ibc" / "config.ini"
-LAUNCHER = IBC_DIR / "gatewaystart.sh"
-WRAPPER_LOG = LOG_DIR / "gatewaystart-wrapper.log"
-LOG_DIRS = (LOG_DIR, HOME / "ibc" / "logs", Path("/tmp/poma-ibgateway"))
-HOLD_SECONDS = int(os.environ.get("IB_GATEWAY_ENGINE_STARTUP_HOLD_SECONDS", "360"))
+require_command Xvfb
+require_command fluxbox
+require_command java
+require_command x11vnc
 
+Xvfb "${DISPLAY}" -screen 0 1280x1024x24 -nolisten tcp >"${IB_GATEWAY_LOG_DIR}/xvfb.log" 2>&1 &
+sleep 2
+fluxbox >"${IB_GATEWAY_LOG_DIR}/fluxbox.log" 2>&1 &
+x11vnc \
+  -display "${DISPLAY}" \
+  -localhost \
+  -forever \
+  -shared \
+  -nopw \
+  -rfbport "${IB_GATEWAY_VNC_PORT}" \
+  >"${IB_GATEWAY_LOG_DIR}/x11vnc.log" 2>&1 &
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def reset_logs() -> None:
-    for directory in LOG_DIRS:
-        directory.mkdir(parents=True, exist_ok=True)
-        for path in directory.rglob("*"):
-            if path.is_file():
-                try:
-                    path.write_text("", encoding="utf-8")
-                except OSError:
-                    pass
-
-
-def log(message: str) -> None:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    with WRAPPER_LOG.open("a", encoding="utf-8") as handle:
-        handle.write(f"{now()} {message}\n")
-
-
-def api_port_open() -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", 7497), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-def gateway_alive() -> bool:
-    return subprocess.run(
-        ["pgrep", "-u", str(os.getuid()), "-f", "java|ibgateway"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode == 0
-
-
-def main() -> int:
-    reset_logs()
-    if not CONFIG.exists() or CONFIG.stat().st_size == 0:
-        log(f"IBC config missing at {CONFIG}; refusing raw Gateway fallback.")
-        return 127
-    if not LAUNCHER.exists() or not os.access(LAUNCHER, os.X_OK):
-        log(f"IBC launcher missing or not executable at {LAUNCHER}.")
-        return 127
-
-    log("Starting IBC gatewaystart.sh -inline for IB Gateway/TWS API on port 7497.")
-    with WRAPPER_LOG.open("a", encoding="utf-8") as handle:
-        launcher = subprocess.Popen(
-            ["bash", str(LAUNCHER), "-inline"],
-            cwd=str(IBC_DIR),
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-        )
-
-    deadline = time.monotonic() + HOLD_SECONDS
-    while time.monotonic() < deadline:
-        if api_port_open() or gateway_alive():
-            log("Gateway process or API listener detected; keeping systemd foreground engine alive.")
-            break
-        status = launcher.poll()
-        if status is not None:
-            # gatewaystart.sh exited before Java/Gateway stayed alive.
-            log(f"gatewaystart.sh returned before Java/Gateway was visible; status={status}; keeping engine active for diagnostics.")
-            break
-        time.sleep(2)
-
-    while True:
-        if api_port_open() or gateway_alive() or time.monotonic() < deadline:
-            time.sleep(2)
-            continue
-        log("Gateway process/API listener absent after startup hold deadline; exiting for systemd restart.")
-        return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-''',
-    encoding="utf-8",
-)
-ENGINE.chmod(0o755)
-
-runner_text = RUNNER.read_text(encoding="utf-8")
-engine_branch = '''if [ -s "${HOME}/ibc/config.ini" ]; then
-  # Config exists but /opt/ibc/gatewaystart.sh is missing or non-executable must fail.
-  # poma-ibc-gateway-engine supervises gatewaystart.sh -inline and refuses raw Gateway fallback.
+if [ -s "${HOME}/ibc/config.ini" ]; then
   exec /usr/local/bin/poma-ibc-gateway-engine
 fi
-'''
-if engine_branch not in runner_text:
-    old_branches = (
-        '''if [ -x "${IBC_DIR}/gatewaystart.sh" ] && [ -s "${HOME}/ibc/config.ini" ]; then
-  cd "${IBC_DIR}"
-  exec "${IBC_DIR}/gatewaystart.sh" -inline
-fi
-''',
-        '''if [ -s "${HOME}/ibc/config.ini" ]; then
-  if [ ! -x "${IBC_DIR}/gatewaystart.sh" ]; then
-    echo "Config exists but /opt/ibc/gatewaystart.sh is missing or not executable; refusing raw Gateway fallback." >&2
-    echo "Run IB Gateway Ops repair/configure so IBC can reach broker login and 2FA." >&2
-    exit 127
-  fi
-  cd "${IBC_DIR}"
-  wrapper_log="${IB_GATEWAY_LOG_DIR}/gatewaystart-wrapper.log"
-  echo "Starting /opt/ibc/gatewaystart.sh for IB Gateway/TWS API on port 7497." >>"${wrapper_log}"
-  bash "${IBC_DIR}/gatewaystart.sh" -inline >>"${wrapper_log}" 2>&1
-  status="$?"
-  echo "gatewaystart.sh exited with status=${status}." >>"${wrapper_log}"
-  exit "${status}"
-fi
-''',
-        '''if [ -s "${HOME}/ibc/config.ini" ]; then
-  if [ ! -x "${IBC_DIR}/gatewaystart.sh" ]; then
-    echo "Config exists but /opt/ibc/gatewaystart.sh is missing or not executable; refusing raw Gateway fallback." >&2
-    echo "Run IB Gateway Ops repair/configure so IBC can reach broker login and 2FA." >&2
-    exit 127
-  fi
-  cd "${IBC_DIR}"
-  echo "Starting /opt/ibc/gatewaystart.sh for IB Gateway/TWS API on port 7497." >>"${IB_GATEWAY_LOG_DIR}/gatewaystart-wrapper.log"
-  exec -a poma-ibc-gatewaystart bash "${IBC_DIR}/gatewaystart.sh" -inline
-fi
-''',
-    )
-    for old_branch in old_branches:
-        if old_branch in runner_text:
-            runner_text = runner_text.replace(old_branch, engine_branch)
-            break
-    else:
-        raise SystemExit("Unable to harden IBC startup branch; runner shape changed unexpectedly.")
-if "require_command java" not in runner_text:
-    runner_text = runner_text.replace("require_command fluxbox\n", "require_command fluxbox\nrequire_command java\n")
-RUNNER.write_text(runner_text, encoding="utf-8")
-RUNNER.chmod(0o755)
 
-unit_text = UNIT.read_text(encoding="utf-8")
-unit_text = re.sub(r"(?m)^MemoryMax=.*\n?", "", unit_text)
-UNIT.write_text(unit_text, encoding="utf-8")
+gateway_executable="$(find "${IB_GATEWAY_DIR}" -type f -name ibgateway -perm -111 2>/dev/null | sort -V | tail -n1 || true)"
+if [ -z "${gateway_executable}" ]; then
+  echo "Unable to find an executable IB Gateway binary under ${IB_GATEWAY_DIR}." >&2
+  echo "Run IB Gateway Ops to repair the VM bootstrap and install IB Gateway." >&2
+  exit 127
+fi
 
-if not DIAG.exists():
-    raise SystemExit("missing /usr/local/bin/poma-diagnose-ibgateway after install")
-diag_text = DIAG.read_text(encoding="utf-8")
-if "_STARTUP_GRACE_STAGES" not in diag_text:
-    raise SystemExit("poma-diagnose-ibgateway is missing _STARTUP_GRACE_STAGES; update the diagnose script.")
-if "_STARTUP_LOG_NOISY_STAGES" not in diag_text:
-    raise SystemExit("poma-diagnose-ibgateway is missing _STARTUP_LOG_NOISY_STAGES; update the diagnose script.")
-if 'poma-ibc-gateway-engine' not in diag_text:
-    raise SystemExit("poma-diagnose-ibgateway does not detect poma-ibc-gateway-engine as a gateway process.")
-DIAG.chmod(0o755)
-PY
+echo "IBC config is not present yet; starting raw IB Gateway only for first-time bootstrap/recovery." >&2
+exec "${gateway_executable}"
+RUNNER
+
+cat >"${ENGINE}" <<'ENGINE'
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOME="${HOME:-/home/poma}"
+IBC_DIR="${IBC_DIR:-/opt/ibc}"
+LOG_DIR="${IB_GATEWAY_LOG_DIR:-/var/log/poma/ibgateway}"
+CONFIG="${HOME}/ibc/config.ini"
+LAUNCHER="${IBC_DIR}/gatewaystart.sh"
+WRAPPER_LOG="${LOG_DIR}/gatewaystart-wrapper.log"
+HOLD_SECONDS="${IB_GATEWAY_ENGINE_STARTUP_HOLD_SECONDS:-360}"
+API_PORT="${IB_GATEWAY_API_PORT:-7497}"
+LOGIN_DIALOG_DISPLAY_TIMEOUT="${IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT_SECONDS:-240}"
+
+log() {
+  mkdir -p "${LOG_DIR}"
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"${WRAPPER_LOG}"
+}
+
+reset_logs() {
+  local directory
+  for directory in "${LOG_DIR}" "${HOME}/ibc/logs" /tmp/poma-ibgateway; do
+    mkdir -p "${directory}"
+    find "${directory}" -type f -exec truncate -s 0 {} + 2>/dev/null || true
+  done
+}
+
+set_ini() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="${key}" -v value="${value}" '
+    BEGIN { done = 0 }
+    index($0, key "=") == 1 { print key "=" value; done = 1; next }
+    { print }
+    END { if (!done) print key "=" value }
+  ' "${CONFIG}" >"${tmp}"
+  cat "${tmp}" >"${CONFIG}"
+  rm -f "${tmp}"
+}
+
+ensure_runtime_config() {
+  set_ini LoginDialogDisplayTimeout "${LOGIN_DIALOG_DISPLAY_TIMEOUT}"
+  log "Pinned IBC LoginDialogDisplayTimeout=${LOGIN_DIALOG_DISPLAY_TIMEOUT} before Gateway launch."
+}
+
+api_port_open() {
+  nc -z 127.0.0.1 "${API_PORT}" >/dev/null 2>&1
+}
+
+gateway_alive() {
+  pgrep -u "$(id -u)" -f 'ibcalpha\.ibc\.IbcGateway|/ibgateway($|[[:space:]])' >/dev/null 2>&1
+}
+
+reset_logs
+if [ ! -s "${CONFIG}" ]; then
+  log "IBC config missing at ${CONFIG}; refusing raw Gateway fallback."
+  exit 127
+fi
+if [ ! -x "${LAUNCHER}" ]; then
+  log "IBC launcher missing or not executable at ${LAUNCHER}; refusing raw Gateway fallback."
+  exit 127
+fi
+ensure_runtime_config
+
+log "Starting IBC gatewaystart.sh -inline for IB Gateway/TWS API on port ${API_PORT}."
+(cd "${IBC_DIR}" && bash "${LAUNCHER}" -inline >>"${WRAPPER_LOG}" 2>&1) &
+launcher_pid="$!"
+deadline=$((SECONDS + HOLD_SECONDS))
+
+while [ "${SECONDS}" -lt "${deadline}" ]; do
+  if api_port_open || gateway_alive; then
+    log "Real Gateway process or API listener detected; keeping systemd foreground engine alive."
+    break
+  fi
+  if ! kill -0 "${launcher_pid}" >/dev/null 2>&1; then
+    wait "${launcher_pid}" || launcher_status="$?"
+    log "gatewaystart.sh exited before Java/Gateway stayed alive; status=${launcher_status:-0}; keeping engine active for diagnostics."
+    break
+  fi
+  sleep 2
+done
+
+while true; do
+  if api_port_open || gateway_alive || [ "${SECONDS}" -lt "${deadline}" ]; then
+    sleep 2
+    continue
+  fi
+  log "Gateway process/API listener absent after startup hold deadline; exiting for systemd restart."
+  exit 1
+done
+ENGINE
+
+chmod 755 "${RUNNER}" "${ENGINE}"
+
+if ! grep -q 'ExecStart=/usr/local/bin/poma-run-ib-gateway' "${UNIT}"; then
+  echo "${UNIT} does not point systemd at ${RUNNER}." >&2
+  exit 1
+fi
+
+if [ ! -x "${DIAG}" ]; then
+  echo "Missing ${DIAG}." >&2
+  exit 1
+fi
+
+if ! grep -q '_STARTUP_GRACE_STAGES' "${DIAG}" || \
+   ! grep -q '_STARTUP_LOG_NOISY_STAGES' "${DIAG}" || \
+   ! grep -q 'poma-ibc-gateway-engine' "${DIAG}"; then
+  echo "${DIAG} is missing required IBC startup-stage diagnostics." >&2
+  exit 1
+fi
 
 systemctl daemon-reload
 systemctl enable --now ibgateway
