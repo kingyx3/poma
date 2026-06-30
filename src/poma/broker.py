@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
 from poma.config import OrderType, Settings, TradingMode
-from poma.models import CurrentPosition, OrderResult, ProposedTrade
+from poma.models import CurrentPosition, OrderResult, PortfolioBalances, ProposedTrade
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
@@ -17,6 +18,9 @@ BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
 ORDER_NOT_ACCEPTED_STATUS = "OrderNotAccepted"
 TRADING_PERMISSION_PROBE_SYMBOL = "AAPL"
 TRADING_PERMISSION_PROBE_LIMIT_PRICE = 1.0
+USD_CASH_TAGS = ("TotalCashValue", "TotalCashBalance", "CashBalance", "SettledCash")
+NET_LIQUIDATION_TAGS = ("NetLiquidation", "NetLiquidationByCurrency")
+GROSS_POSITION_VALUE_TAGS = ("GrossPositionValue",)
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
@@ -71,6 +75,9 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
 
 
 class Broker(Protocol):
+    def account_balances(self) -> PortfolioBalances:
+        ...
+
     def positions(self) -> list[CurrentPosition]:
         ...
 
@@ -83,6 +90,16 @@ class Broker(Protocol):
 
 
 class DryRunBroker:
+    def __init__(self, fallback_portfolio_value_usd: float = 0.0) -> None:
+        self.fallback_portfolio_value_usd = fallback_portfolio_value_usd
+
+    def account_balances(self) -> PortfolioBalances:
+        return PortfolioBalances(
+            cash_usd=self.fallback_portfolio_value_usd,
+            positions_market_value_usd=0.0,
+            net_liquidation_usd=self.fallback_portfolio_value_usd,
+        )
+
     def positions(self) -> list[CurrentPosition]:
         return []
 
@@ -158,29 +175,58 @@ class IbkrBroker:
             raise BrokerUnavailable(trading_message)
         self._assert_connected(ib)
 
+    def account_balances(self) -> PortfolioBalances:
+        ib = self._connect()
+        try:
+            positions = self._positions_from_ib(ib)
+            positions_market_value = sum(position.market_value for position in positions)
+            summary_rows = list(_request_account_summary(ib, self.settings.ibkr_account))
+            cash_usd = _find_account_value(summary_rows, USD_CASH_TAGS, self.settings.ibkr_account)
+            net_liquidation_usd = _find_account_value(
+                summary_rows,
+                NET_LIQUIDATION_TAGS,
+                self.settings.ibkr_account,
+            )
+            summary_positions_value = _find_account_value(
+                summary_rows,
+                GROSS_POSITION_VALUE_TAGS,
+                self.settings.ibkr_account,
+            )
+            if summary_positions_value is not None and summary_positions_value > 0:
+                positions_market_value = summary_positions_value
+            if cash_usd is None:
+                raise BrokerUnavailable("IBKR did not return a USD cash balance for the configured account")
+            return PortfolioBalances(
+                cash_usd=cash_usd,
+                positions_market_value_usd=positions_market_value,
+                net_liquidation_usd=net_liquidation_usd,
+            )
+        finally:
+            ib.disconnect()
+
     def positions(self) -> list[CurrentPosition]:
         ib = self._connect()
         try:
-            rows: list[CurrentPosition] = []
-            for item in ib.portfolio():
-                if item.contract.secType != "STK":
-                    continue
-                account_mismatch = (
-                    self.settings.ibkr_account
-                    and item.account != self.settings.ibkr_account
-                )
-                if account_mismatch:
-                    continue
-                rows.append(
-                    CurrentPosition(
-                        ticker=item.contract.symbol.upper(),
-                        quantity=float(item.position),
-                        market_value=float(item.marketValue),
-                    )
-                )
-            return rows
+            return self._positions_from_ib(ib)
         finally:
             ib.disconnect()
+
+    def _positions_from_ib(self, ib: IB) -> list[CurrentPosition]:
+        rows: list[CurrentPosition] = []
+        for item in ib.portfolio():
+            if item.contract.secType != "STK":
+                continue
+            account_mismatch = self.settings.ibkr_account and item.account != self.settings.ibkr_account
+            if account_mismatch:
+                continue
+            rows.append(
+                CurrentPosition(
+                    ticker=item.contract.symbol.upper(),
+                    quantity=float(item.position),
+                    market_value=float(item.marketValue),
+                )
+            )
+        return rows
 
     def submit_trades(
         self,
@@ -236,10 +282,7 @@ class IbkrBroker:
                         continue
 
                     consecutive_acceptance_failures += 1
-                    if (
-                        consecutive_acceptance_failures
-                        >= self.settings.max_consecutive_order_acceptance_failures
-                    ):
+                    if consecutive_acceptance_failures >= self.settings.max_consecutive_order_acceptance_failures:
                         remaining = trades[index + 1 :]
                         if remaining:
                             results.extend(
@@ -358,7 +401,6 @@ class IbkrBroker:
                         message=cancel_message,
                     )
                 ib.sleep(1.0)
-            timeout_message = cancel_message
         return self._order_result(
             proposed,
             trade,
@@ -397,6 +439,38 @@ class IbkrBroker:
         if trade.limit_price is None:
             raise ValueError(f"missing limit price for {trade.ticker}")
         return LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
+
+
+def _request_account_summary(ib: IB, account: str | None) -> Iterable[object]:
+    try:
+        return ib.accountSummary(account or "")
+    except TypeError:
+        return ib.accountSummary()
+
+
+def _find_account_value(rows: Iterable[object], tags: tuple[str, ...], account: str | None) -> float | None:
+    for row in rows:
+        if account and getattr(row, "account", "") not in ("", account):
+            continue
+        if getattr(row, "tag", "") not in tags:
+            continue
+        currency = str(getattr(row, "currency", "") or "USD").upper()
+        if currency not in {"USD", "BASE"}:
+            continue
+        parsed = _parse_account_value(getattr(row, "value", None))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_account_value(value: object) -> float | None:
+    try:
+        parsed = float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
 
 
 def _probe_trading_permissions(ib: IB, settings: Settings) -> tuple[bool, str]:
@@ -494,5 +568,5 @@ def order_results_have_no_accepted_orders(results: list[OrderResult]) -> bool:
 
 def build_broker(settings: Settings) -> Broker:
     if settings.trading_mode == TradingMode.DRY_RUN:
-        return DryRunBroker()
+        return DryRunBroker(settings.portfolio_value_usd)
     return IbkrBroker(settings)
