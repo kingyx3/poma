@@ -23,6 +23,10 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _github_secret_ref(name: str) -> str:
+    return "${{ " + f"secrets.{name}" + " }}"
+
+
 def test_workflows_use_current_action_versions() -> None:
     workflows = (
         _text(CI_WORKFLOW),
@@ -51,12 +55,15 @@ def test_deploy_workflow_routes_paper_to_paper_account() -> None:
 
 def test_gateway_ops_routes_paper_login_secrets_to_configure_paper() -> None:
     workflow = _text(GATEWAY_OPS_WORKFLOW)
-    secret_resolver = workflow.split("Resolve broker login secrets", 1)[1].split("Resolve generated deployment config", 1)[0]
+    secret_resolver = workflow.split("Resolve broker login secrets", 1)[1].split(
+        "Resolve generated deployment config",
+        1,
+    )[0]
     paper_block = secret_resolver.split("configure-paper)", 1)[1].split(";;", 1)[0]
     live_block = secret_resolver.split("configure-live)", 1)[1].split(";;", 1)[0]
 
-    assert "${{ secrets.IBKR_LOGIN_ID_PAPER }}" in workflow
-    assert "${{ secrets.IBKR_LOGIN_SECRET_PAPER }}" in workflow
+    assert _github_secret_ref("IBKR_LOGIN_ID_PAPER") in workflow
+    assert _github_secret_ref("IBKR_LOGIN_SECRET_PAPER") in workflow
     assert "IBKR_LOGIN_ID_PAPER and IBKR_LOGIN_SECRET_PAPER" in paper_block
     assert 'echo "BROKER_LOGIN_ID=${IBKR_LOGIN_ID_PAPER}"' in paper_block
     assert 'echo "BROKER_LOGIN_VALUE=${IBKR_LOGIN_SECRET_PAPER}"' in paper_block
