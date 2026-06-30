@@ -1,0 +1,1 @@
+Gateway startup diagnostics must print VISIBLE_STARTUP_STAGE and VISIBLE_STARTUP_REASON in the main workflow log when startup-check fails after the no-progress deadline.
