@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 IBC_CONFIG = Path("/home/poma/ibc/config.ini")
 GATEWAYSTART = Path("/opt/ibc/gatewaystart.sh")
@@ -24,17 +25,56 @@ SENSITIVE_KEYS = {"IbLoginId", "IbPassword", "TWSUSERID", "TWSPASSWORD"}
 _STARTUP_GRACE_STAGES = frozenset({"service-active-no-process"})
 _STARTUP_LOG_NOISY_STAGES = frozenset({"gateway-log-error"})
 PROCESS_RE = re.compile(r"ibgateway|gatewaystart|poma-ibc-gateway-engine|ibc|Xvfb|fluxbox|x11vnc|java", re.I)
+TWO_FA_HINTS = re.compile(r"second factor|2fa|two-factor|mobile app|approve", re.I)
+LOGIN_STAGE_HINTS = re.compile(r"login|authenticat|credentials|username|password", re.I)
+FATAL_LOG_HINTS = re.compile(r"error|failed|exception|unable to|cannot|denied|fatal|oom|killed", re.I)
+
+
+class StartupClassification(NamedTuple):
+    stage: str
+    action: str
+    reason: str
+
+
+def classify_startup_state(
+    *,
+    service_exists: bool,
+    service_active: bool,
+    api_socket_open: bool,
+    config_exists: bool,
+    has_xvfb: bool,
+    has_fluxbox: bool,
+    has_x11vnc: bool,
+    has_gatewaystart: bool,
+    has_java: bool,
+    has_ibgateway: bool,
+    log_text: str,
+) -> StartupClassification:
+    if api_socket_open:
+        return StartupClassification("api-socket-open", "ready", "IB Gateway API port 7497 is listening.")
+    if not service_exists:
+        return StartupClassification("no-systemd-service", "fail", "ibgateway.service is not installed.")
+    if not service_active:
+        return StartupClassification("service-not-active", "fail", "ibgateway.service is not active.")
+    if not has_xvfb:
+        return StartupClassification("service-active-no-xvfb", "fail", "ibgateway.service is active but Xvfb is not running.")
+    if not has_fluxbox or not has_x11vnc:
+        return StartupClassification("headless-gui-incomplete", "fail", "headless display started but GUI sidecars are missing.")
+    if config_exists and not has_gatewaystart:
+        return StartupClassification("ibc-not-running", "fail", "IBC config exists but gatewaystart.sh is not running; Gateway likely never reached login.")
+    if not (has_java or has_ibgateway):
+        return StartupClassification("java-gateway-not-running", "fail", "No Java/IB Gateway process is running, so no IBKR mobile notification can be sent.")
+    if TWO_FA_HINTS.search(log_text):
+        return StartupClassification("login-reached-2fa-pending", "continue", "Gateway reached 2FA/login authorization, but API port 7497 is still closed.")
+    if LOGIN_STAGE_HINTS.search(log_text):
+        return StartupClassification("login-reached-awaiting-auth", "continue", "Gateway reached login/authentication, but API port 7497 is still closed.")
+    if FATAL_LOG_HINTS.search(log_text):
+        return StartupClassification("gateway-log-error", "continue", "Recent Gateway/IBC logs contain an error before API readiness.")
+    return StartupClassification("gateway-running-no-api-socket", "continue", "Gateway support processes are running, but API port 7497 has not opened.")
 
 
 def run(command: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=timeout,
-    )
+    return subprocess.run(command, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
 
 
 def section(title: str) -> None:
@@ -82,6 +122,10 @@ def listener_open(port: str = "7497") -> bool:
     return run(["nc", "-z", "127.0.0.1", port], timeout=10).returncode == 0
 
 
+def service_exists() -> bool:
+    return SERVICE.exists() or run(["systemctl", "cat", "ibgateway"], timeout=10).returncode == 0
+
+
 def service_active() -> bool:
     return run(["systemctl", "is-active", "--quiet", "ibgateway"], timeout=10).returncode == 0
 
@@ -90,6 +134,17 @@ def process_summary() -> str:
     result = run(["ps", "auxww"], timeout=10)
     lines = [line for line in result.stdout.splitlines() if PROCESS_RE.search(line) and "diagnose_ib_gateway_runtime" not in line]
     return "\n".join(lines) if lines else "no Gateway/IBC/Xvfb/fluxbox/x11vnc/java processes found"
+
+
+def process_flags(process_text: str) -> dict[str, bool]:
+    return {
+        "xvfb": bool(re.search(r"\bXvfb\b", process_text)),
+        "fluxbox": bool(re.search(r"\bfluxbox\b", process_text)),
+        "x11vnc": bool(re.search(r"\bx11vnc\b", process_text)),
+        "gatewaystart": bool(re.search(r"poma-ibc-gateway-engine|gatewaystart\.sh", process_text)),
+        "java": bool(re.search(r"\bjava\b", process_text, re.I)),
+        "ibgateway": bool(re.search(r"\bibgateway\b", process_text, re.I)),
+    }
 
 
 def listener_summary() -> str:
@@ -121,45 +176,41 @@ def recent_log_text(log_lines: int) -> str:
     return redact("\n".join(chunks))
 
 
-def startup_stage(log_lines: int) -> tuple[str, str]:
-    if listener_open("7497"):
-        return "api-socket-open", "IB Gateway API port 7497 is listening."
-    if not service_active():
-        return "service-not-active", "ibgateway.service is not active."
+def classify_startup(log_lines: int) -> StartupClassification:
     processes = process_summary()
-    log_text = recent_log_text(log_lines)
-    if "Xvfb" not in processes:
-        return "service-active-no-xvfb", "ibgateway.service is active but Xvfb is not running."
-    if "poma-ibc-gateway-engine" in processes and "java" not in processes.lower():
-        return "ibc-engine-no-java", "IBC engine is alive but no Java/IB Gateway process is visible."
-    if re.search(r"second factor|2fa|mobile app|approve", log_text, re.I):
-        return "login-reached-2fa-pending", "Gateway reached 2FA/login authorization, but API port 7497 is still closed."
-    if re.search(r"login|authenticat|credentials|username|password", log_text, re.I):
-        return "login-reached-awaiting-auth", "Gateway reached login/authentication, but API port 7497 is still closed."
-    if re.search(r"error|failed|exception|unable to|cannot|denied|fatal|oom|killed", log_text, re.I):
-        return "gateway-log-error", "Recent Gateway/IBC logs contain an error before API readiness."
-    return "gateway-running-no-api-socket", "Gateway support processes are running, but API port 7497 has not opened."
+    flags = process_flags(processes)
+    return classify_startup_state(
+        service_exists=service_exists(),
+        service_active=service_active(),
+        api_socket_open=listener_open("7497"),
+        config_exists=IBC_CONFIG.exists(),
+        has_xvfb=flags["xvfb"],
+        has_fluxbox=flags["fluxbox"],
+        has_x11vnc=flags["x11vnc"],
+        has_gatewaystart=flags["gatewaystart"],
+        has_java=flags["java"],
+        has_ibgateway=flags["ibgateway"],
+        log_text=recent_log_text(log_lines),
+    )
 
 
-def print_startup(log_lines: int) -> tuple[str, str]:
-    stage, reason = startup_stage(log_lines)
+def print_startup(log_lines: int) -> StartupClassification:
+    classification = classify_startup(log_lines)
     section("Startup classification")
-    print(f"STARTUP_STAGE={stage}")
-    print(f"STARTUP_ACTION={'ready' if stage == 'api-socket-open' else 'continue'}")
-    print(f"STARTUP_REASON={reason}")
-    return stage, reason
+    print(f"STARTUP_STAGE={classification.stage}")
+    print(f"STARTUP_ACTION={classification.action}")
+    print(f"STARTUP_REASON={classification.reason}")
+    return classification
 
 
 def startup_check(log_lines: int, elapsed_seconds: int, fail_no_progress_after: int) -> int:
-    stage, _reason = print_startup(log_lines)
-    if stage == "api-socket-open":
+    classification = print_startup(log_lines)
+    if classification.action == "ready":
         return 0
     if elapsed_seconds >= fail_no_progress_after:
-        print(
-            "Startup progress deadline exceeded before API readiness; failing fast so full diagnostics are collected."
-        )
+        print("Startup progress deadline exceeded before API readiness; failing fast so full diagnostics are collected.")
         return 2
-    if stage in {"service-not-active", "service-active-no-xvfb", "ibc-engine-no-java"}:
+    if classification.action == "fail":
         return 2
     return 1
 
@@ -177,13 +228,7 @@ def validate_config(mode: str) -> int:
         values = read_key_values(IBC_CONFIG)
         for key in sorted(values):
             print(f"{key}={'***' if key in SENSITIVE_KEYS else values[key]}")
-        expected = {
-            "TradingMode": mode,
-            "OverrideTwsApiPort": "7497",
-            "AcceptIncomingConnectionAction": "accept",
-            "AllowBlindTrading": "yes",
-            "ReloginAfterSecondFactorAuthenticationTimeout": "yes",
-        }
+        expected = {"TradingMode": mode, "OverrideTwsApiPort": "7497", "AcceptIncomingConnectionAction": "accept", "AllowBlindTrading": "yes", "ReloginAfterSecondFactorAuthenticationTimeout": "yes"}
         if owner != "poma":
             errors.append(f"{IBC_CONFIG} owner is {owner}, expected poma")
         if mode_bits != 0o600:
