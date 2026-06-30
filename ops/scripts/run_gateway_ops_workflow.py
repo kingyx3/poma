@@ -17,6 +17,8 @@ HELPER_SCRIPTS = [
     "ops/scripts/diagnose_ib_gateway_runtime.py",
     "ops/scripts/wait_ib_gateway_2fa.py",
 ]
+TRANSIENT_GATEWAY_READINESS_STATUS = 75
+APP_READINESS_INFRA_FAILURE_STATUS = 76
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -57,6 +59,45 @@ def helper_revision() -> str:
     for script in HELPER_SCRIPTS:
         digest.update(Path(script).read_bytes())
     return digest.hexdigest()
+
+
+def app_ibkr_check_command(mode: str, required: bool) -> str:
+    missing_status = 1 if required else 0
+    missing_message = "POMA app not deployed at /opt/poma" if required else "POMA app not deployed at /opt/poma; skipping."
+    return (
+        "set -eu; "
+        f"if [ ! -d /opt/poma ]; then echo '{missing_message}' >&2; exit {missing_status}; fi; "
+        "cd /opt/poma; "
+        "compose_file=''; "
+        "if [ -f docker-compose.yml ]; then compose_file=docker-compose.yml; "
+        "elif [ -f compose.yaml ]; then compose_file=compose.yaml; "
+        f"else echo '{missing_message}' >&2; exit {missing_status}; fi; "
+        "override=$(mktemp /tmp/poma-compose-host-network.XXXXXX.yml); "
+        "output=$(mktemp /tmp/poma-ibkr-check.XXXXXX.log); "
+        "cleanup() { rm -f \"$override\" \"$output\"; }; trap cleanup EXIT; "
+        "cat > \"$override\" <<'YAML'\n"
+        "services:\n"
+        "  poma:\n"
+        "    network_mode: host\n"
+        "YAML\n"
+        "chmod 644 \"$override\"; "
+        "echo 'Using host-network compose override for idempotent IBKR readiness check.'; "
+        "set +e; "
+        f"sudo -u poma docker compose -f \"$compose_file\" -f \"$override\" run --rm -e TRADING_MODE={mode} -e DATA_PROVIDER=fixture poma ibkr-check >\"$output\" 2>&1; "
+        "status=$?; "
+        "set -e; "
+        "cat \"$output\"; "
+        "if [ \"$status\" -eq 0 ]; then exit 0; fi; "
+        "if ! nc -z 127.0.0.1 7497; then "
+        "echo 'IBKR API socket dropped during container readiness check; retrying without restarting Gateway.' >&2; "
+        f"exit {TRANSIENT_GATEWAY_READINESS_STATUS}; "
+        "fi; "
+        "if grep -Eiq 'not trading-enabled|Trading/Market Data permissions|primary trading session is active|configured IBKR_ACCOUNT=.*not in' \"$output\"; then "
+        "exit 1; "
+        "fi; "
+        "echo 'IBKR readiness check failed for a non-login reason; refusing to restart Gateway. Check app config/container runtime diagnostics above.' >&2; "
+        f"exit {APP_READINESS_INFRA_FAILURE_STATUS}"
+    )
 
 
 def main() -> int:
@@ -160,22 +201,26 @@ def main() -> int:
                 stable += 1
                 print(f"Gateway API socket stability guard: {stable}/2.")
                 if stable >= 2:
-                    check = (
-                        "if ! test -f /opt/poma/docker-compose.yml && ! test -f /opt/poma/compose.yaml; then "
-                        + ("echo 'POMA app not deployed at /opt/poma' >&2; exit 1; " if required else "echo 'POMA app not deployed at /opt/poma; skipping.'; exit 0; ")
-                        + "fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE="
-                        + mode
-                        + " -e DATA_PROVIDER=fixture poma ibkr-check'"
-                    )
-                    check_status = remote(check, timeout=240)
+                    check_status = remote(app_ibkr_check_command(mode, required), timeout=240)
                     if check_status == 0:
                         print("IBKR API handshake and trading permission preview succeeded; Gateway is ready to submit orders.")
                         return 0
-                    restart_gateway_for_trading_login(
-                        "IBKR API socket opened but trading readiness failed. "
-                        "This usually means Gateway logged in without Trading/Market Data permissions."
-                    )
-                    stable = 0
+                    if check_status == TRANSIENT_GATEWAY_READINESS_STATUS:
+                        print("IBKR readiness check raced a Gateway socket restart; continuing the idempotent readiness loop.")
+                        stable = 0
+                    elif check_status == APP_READINESS_INFRA_FAILURE_STATUS:
+                        print(
+                            "IBKR readiness check failed due to app/container/config wiring, not broker login state; collecting diagnostics without restarting Gateway.",
+                            file=sys.stderr,
+                        )
+                        diagnose()
+                        return 1
+                    else:
+                        restart_gateway_for_trading_login(
+                            "IBKR API socket opened but trading readiness failed. "
+                            "This usually means Gateway logged in without Trading/Market Data permissions."
+                        )
+                        stable = 0
             elif poll == 1:
                 stable = 0
                 print("Gateway service is active but API socket is closed; checking startup progress.")
