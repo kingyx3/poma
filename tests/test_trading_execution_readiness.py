@@ -180,6 +180,63 @@ def test_ibkr_broker_reads_cash_and_position_balances_before_rebalance(
     assert balances.net_liquidation_usd == 20_000
 
 
+def test_ibkr_broker_reads_balances_from_authenticated_account_values_when_summary_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContract:
+        secType = "STK"
+        symbol = "MSFT"
+
+    class FakePortfolioItem:
+        contract = FakeContract()
+        account = "DU1234567"
+        position = 10
+        marketValue = 4_000
+
+    class FakeIB:
+        def __init__(self) -> None:
+            self.connected = False
+            self.RequestTimeout = None
+            self.account_summary_queries: list[str] = []
+            self.account_value_queries: list[str] = []
+
+        def connect(self, *_args, **_kwargs) -> None:
+            self.connected = True
+
+        def isConnected(self) -> bool:  # noqa: N802 - mirrors ib_insync API
+            return self.connected
+
+        def portfolio(self) -> list[FakePortfolioItem]:
+            return [FakePortfolioItem()]
+
+        def accountSummary(self, account: str = "") -> list[AccountSummaryRow]:  # noqa: N802
+            self.account_summary_queries.append(account)
+            return []
+
+        def accountValues(self, account: str = "") -> list[AccountSummaryRow]:  # noqa: N802
+            self.account_value_queries.append(account)
+            return [
+                AccountSummaryRow("TotalCashValue", "12,500"),
+                AccountSummaryRow("NetLiquidation", "16500"),
+                AccountSummaryRow("GrossPositionValue", "4000"),
+            ]
+
+        def disconnect(self) -> None:
+            self.connected = False
+
+    fake_ib = FakeIB()
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+
+    balances = IbkrBroker(_settings(monkeypatch)).account_balances()
+
+    assert fake_ib.account_summary_queries == ["DU1234567", ""]
+    assert fake_ib.account_value_queries == ["DU1234567", ""]
+    assert balances.cash_usd == 12_500
+    assert balances.positions_market_value_usd == 4_000
+    assert balances.total_value_usd == 16_500
+    assert balances.net_liquidation_usd == 16_500
+
+
 def test_final_order_status_alert_message_includes_status_and_fill_details() -> None:
     message = order_status_alert(
         "2026-06-29",

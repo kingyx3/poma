@@ -180,15 +180,15 @@ class IbkrBroker:
         try:
             positions = self._positions_from_ib(ib)
             positions_market_value = sum(position.market_value for position in positions)
-            summary_rows = list(_request_account_summary(ib, self.settings.ibkr_account))
-            cash_usd = _find_account_value(summary_rows, USD_CASH_TAGS, self.settings.ibkr_account)
+            account_rows = list(_request_account_values(ib, self.settings.ibkr_account))
+            cash_usd = _find_account_value(account_rows, USD_CASH_TAGS, self.settings.ibkr_account)
             net_liquidation_usd = _find_account_value(
-                summary_rows,
+                account_rows,
                 NET_LIQUIDATION_TAGS,
                 self.settings.ibkr_account,
             )
             summary_positions_value = _find_account_value(
-                summary_rows,
+                account_rows,
                 GROSS_POSITION_VALUE_TAGS,
                 self.settings.ibkr_account,
             )
@@ -441,11 +441,43 @@ class IbkrBroker:
         return LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
 
 
-def _request_account_summary(ib: IB, account: str | None) -> Iterable[object]:
-    try:
-        return ib.accountSummary(account or "")
-    except TypeError:
-        return ib.accountSummary()
+def _request_account_values(ib: IB, account: str | None) -> Iterable[object]:
+    """Return account balance rows from every IBKR cache exposed by the auth session.
+
+    IB Gateway/ib_insync can expose balances through account summary rows, account value
+    rows populated by the authenticated session, or both. Querying both makes rebalances
+    resilient to sessions where one cache is empty even though the authenticated account
+    data is available.
+    """
+    rows: list[object] = []
+    for summary_account in _account_summary_queries(account):
+        try:
+            rows.extend(ib.accountSummary(summary_account))
+        except TypeError:
+            rows.extend(ib.accountSummary())
+            break
+    for values_account in _account_values_queries(account):
+        account_values = getattr(ib, "accountValues", None)
+        if account_values is None:
+            break
+        try:
+            rows.extend(account_values(values_account))
+        except TypeError:
+            rows.extend(account_values())
+            break
+    return rows
+
+
+def _account_summary_queries(account: str | None) -> tuple[str, ...]:
+    if account:
+        return (account, "")
+    return ("",)
+
+
+def _account_values_queries(account: str | None) -> tuple[str, ...]:
+    if account:
+        return (account, "")
+    return ("",)
 
 
 def _find_account_value(rows: Iterable[object], tags: tuple[str, ...], account: str | None) -> float | None:
