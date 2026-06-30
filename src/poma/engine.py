@@ -13,7 +13,7 @@ from poma.broker import (
 from poma.config import Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
 from poma.history import CapSnapshotHistory
-from poma.models import OrderResult, RebalancePlan
+from poma.models import OrderResult, PortfolioBalances, RebalancePlan
 from poma.portfolio import build_strategy_capital_plan
 from poma.risk import (
     enforce_order_limits,
@@ -59,16 +59,18 @@ class RebalanceEngine:
 
     def build_plan(self, session_date: str, run_id: str) -> RebalancePlan:
         settings = self.settings
+        warnings: list[str] = []
+        balances = self._rebalance_balances(warnings)
+        portfolio_value_usd = balances.total_value_usd
         capital_plan = build_strategy_capital_plan(
-            settings.portfolio_value_usd,
+            portfolio_value_usd,
             settings.strategy_allocations,
         )
         strategy_capital = capital_plan.capital_for(settings.active_strategy)
         current = self.data_client.current_universe_snapshot()
-        warnings: list[str] = []
         if capital_plan.unallocated_pct > 1e-9:
             warnings.append(
-                f"{capital_plan.unallocated_pct:.2%} of PORTFOLIO_VALUE_USD is not allocated "
+                f"{capital_plan.unallocated_pct:.2%} of portfolio value is not allocated "
                 "to active strategies"
             )
         historical = None
@@ -98,7 +100,7 @@ class RebalanceEngine:
             for row in current.itertuples()
             if getattr(row, "price", None) is not None
         }
-        positions = self.broker.positions()
+        positions = [] if any(BLOCK_MARKER in warning for warning in warnings) else self.broker.positions()
         trades, trade_warnings = generate_trades(
             targets=targets,
             current_positions=positions,
@@ -133,13 +135,50 @@ class RebalanceEngine:
             trades=trades,
             execution_results=[],
             warnings=warnings,
-            portfolio_value_usd=settings.portfolio_value_usd,
+            portfolio_value_usd=portfolio_value_usd,
+            portfolio_cash_usd=balances.cash_usd,
+            portfolio_positions_value_usd=balances.positions_market_value_usd,
+            portfolio_net_liquidation_usd=balances.net_liquidation_usd,
             strategy_name=strategy_capital.name,
             strategy_allocation_pct=strategy_capital.allocation_pct,
             strategy_capital_usd=strategy_capital.capital_usd,
             total_allocated_pct=capital_plan.total_allocated_pct,
             total_allocated_usd=capital_plan.total_allocated_usd,
         )
+
+    def _rebalance_balances(self, warnings: list[str]) -> PortfolioBalances:
+        settings = self.settings
+        if settings.trading_mode == TradingMode.DRY_RUN:
+            return PortfolioBalances(
+                cash_usd=settings.portfolio_value_usd,
+                positions_market_value_usd=0.0,
+                net_liquidation_usd=settings.portfolio_value_usd,
+            )
+
+        try:
+            balances = self.broker.account_balances()
+        except Exception as exc:  # noqa: BLE001 - broker detail is safer as a blocking warning
+            warnings.append(
+                "unable to read broker cash and portfolio balances before rebalancing; "
+                f"{BLOCK_MARKER}: {exc}"
+            )
+            return PortfolioBalances(
+                cash_usd=settings.portfolio_value_usd,
+                positions_market_value_usd=0.0,
+                net_liquidation_usd=settings.portfolio_value_usd,
+            )
+
+        if balances.total_value_usd <= 0:
+            warnings.append(
+                "broker cash and portfolio balances produced a non-positive portfolio value; "
+                f"{BLOCK_MARKER}"
+            )
+            return PortfolioBalances(
+                cash_usd=settings.portfolio_value_usd,
+                positions_market_value_usd=0.0,
+                net_liquidation_usd=settings.portfolio_value_usd,
+            )
+        return balances
 
     def is_blocked(self, plan: RebalancePlan) -> bool:
         return any(BLOCK_MARKER in warning for warning in plan.warnings)
