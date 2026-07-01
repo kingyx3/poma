@@ -99,3 +99,52 @@ def test_paper_live_execution_requires_ibkr_account() -> None:
 
     with pytest.raises(RuntimeError, match="paper trading requires IBKR_ACCOUNT"):
         settings.assert_safe_for_execution()
+
+
+def test_execution_pricing_defaults_favor_fresh_side_of_market_ibkr_quotes() -> None:
+    settings = Settings(TELEGRAM_BOT_TOKEN="token", TELEGRAM_CHAT_ID="chat")
+
+    assert settings.execution_price_source.value == "ibkr"
+    assert settings.execution_price_basis.value == "side_of_market"
+    assert settings.execution_quote_max_age_seconds == 60
+    assert settings.execution_max_spread_bps == 50.0
+    assert settings.allow_delayed_execution_quotes is False
+    assert settings.allow_last_price_fallback is False
+
+
+def test_last_price_basis_requires_explicit_fallback_opt_in() -> None:
+    with pytest.raises(ValidationError, match="ALLOW_LAST_PRICE_FALLBACK"):
+        Settings(
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="chat",
+            EXECUTION_PRICE_BASIS="last",
+        )
+
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        EXECUTION_PRICE_BASIS="last",
+        ALLOW_LAST_PRICE_FALLBACK=True,
+    )
+    assert settings.execution_price_basis.value == "last"
+
+
+def test_live_trading_blocks_snapshot_execution_price_source_by_default() -> None:
+    with pytest.raises(ValidationError, match="ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE"):
+        Settings(
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="chat",
+            TRADING_MODE="live",
+            ALLOW_LIVE_TRADING=True,
+            EXECUTION_PRICE_SOURCE="snapshot",
+        )
+
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        TRADING_MODE="live",
+        ALLOW_LIVE_TRADING=True,
+        EXECUTION_PRICE_SOURCE="snapshot",
+        ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE=True,
+    )
+    assert settings.execution_price_source.value == "snapshot"

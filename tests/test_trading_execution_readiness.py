@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,14 @@ from poma.risk import enforce_turnover_limit, generate_trades
 from poma.strategy import build_equal_weight_targets
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_validate_runtime_config():
+    module_path = REPO_ROOT / "ops/scripts/validate_runtime_config.py"
+    spec = importlib.util.spec_from_file_location("validate_runtime_config", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @dataclass(frozen=True)
@@ -434,3 +443,46 @@ def test_deploy_validates_rendered_runtime_config() -> None:
 
     assert validator.exists()
     assert "python ops/scripts/validate_runtime_config.py --env-file .env.deploy" in workflow
+
+
+def test_validate_runtime_config_requires_ibkr_execution_price_source_for_paper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        monkeypatch,
+        DATA_PROVIDER="yahoo",
+        EXECUTION_PRICE_SOURCE="snapshot",
+        ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE="true",
+    )
+    errors = _load_validate_runtime_config().validate(settings)
+    assert any("EXECUTION_PRICE_SOURCE=ibkr" in error for error in errors)
+
+
+def test_validate_runtime_config_rejects_overly_stale_quote_age_for_paper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch, DATA_PROVIDER="yahoo", EXECUTION_QUOTE_MAX_AGE_SECONDS="200")
+    errors = _load_validate_runtime_config().validate(settings)
+    assert any("EXECUTION_QUOTE_MAX_AGE_SECONDS" in error for error in errors)
+
+
+def test_validate_runtime_config_rejects_delayed_quotes_allowed_for_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        monkeypatch,
+        DATA_PROVIDER="yahoo",
+        TRADING_MODE="live",
+        ALLOW_LIVE_TRADING="true",
+        ALLOW_DELAYED_EXECUTION_QUOTES="true",
+    )
+    errors = _load_validate_runtime_config().validate(settings)
+    assert any("ALLOW_DELAYED_EXECUTION_QUOTES" in error for error in errors)
+
+
+def test_validate_runtime_config_accepts_safe_default_execution_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch, DATA_PROVIDER="yahoo")
+    errors = _load_validate_runtime_config().validate(settings)
+    assert not any("EXECUTION_" in error for error in errors)

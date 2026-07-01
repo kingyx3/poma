@@ -56,9 +56,13 @@ Do not skip paper validation. Before live:
 
 ## Order lifecycle follow-up
 
-Reaching `PreSubmitted`/`Submitted` only means IBKR accepted the order; a working limit order can sit unfilled indefinitely. Schedule `poma reconcile-orders` on its own cron entry (every 1-2 minutes is reasonable) so working orders are followed up even after the rebalance process exits: it polls IBKR for every open POMA-tagged order, replaces a still-unfilled order once with a more aggressive limit after `REPLACE_AFTER_SECONDS`, cancels it after `CANCEL_AFTER_SECONDS` if still unfilled, and sends a Telegram alert on every lifecycle change. It is a no-op in `dry_run` mode and safe to run even when there is nothing open.
+Reaching `PreSubmitted`/`Submitted` only means IBKR accepted the order; a working limit order can sit unfilled indefinitely. Schedule `poma reconcile-orders` on its own cron entry (every 1-2 minutes is reasonable) so working orders are followed up even after the rebalance process exits: it polls IBKR for every open POMA-tagged order, replaces a still-unfilled order once after `REPLACE_AFTER_SECONDS`, cancels it after `CANCEL_AFTER_SECONDS` if still unfilled, and sends a Telegram alert on every lifecycle change. The replace price is computed from a fresh IBKR quote at reconcile time (`REPLACE_PRICE_IMPROVEMENT_BPS` applied on top of the current side-of-market price), not by blindly improving the order's old limit price — if no valid fresh quote is available the replace is skipped for that pass rather than repricing off stale data. It is a no-op in `dry_run` mode and safe to run even when there is nothing open.
 
 The next scheduled rebalance also checks the order ledger for anything still open from a *prior* session before planning. By default (`STALE_ORDER_POLICY=block`) it blocks until those orders are reconciled or cancelled manually; set `STALE_ORDER_POLICY=cancel` to have it cancel them automatically instead. Orders still open from the *current* session are reported but never block a retry of that same session.
+
+## Execution pricing and quote safety
+
+Paper/live orders are priced off a fresh IBKR quote (`EXECUTION_PRICE_SOURCE=ibkr`, the default), fetched immediately before submission — not the Yahoo screener snapshot used for universe/target planning; see "Strategy pricing vs. execution pricing" in `docs/configuration.md`. If IBKR cannot supply a valid quote for a ticker (missing, older than `EXECUTION_QUOTE_MAX_AGE_SECONDS`, wider than `EXECUTION_MAX_SPREAD_BPS`, or delayed without `ALLOW_DELAYED_EXECUTION_QUOTES=true`), that trade is blocked rather than submitted at a stale or fallback price; other trades in the same batch are unaffected. Order lifecycle Telegram alerts and the order ledger both include the quote source, basis, age, and spread each order was priced from.
 
 ## Session state control
 

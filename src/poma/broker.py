@@ -10,8 +10,23 @@ from typing import Protocol
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
 from poma.config import OrderType, Settings, TradingMode
-from poma.models import AccountSnapshot, CurrentPosition, OpenOrderSnapshot, OrderResult, OrderSide, ProposedTrade
+from poma.execution_pricing import compute_spread_bps
+from poma.models import (
+    AccountSnapshot,
+    CurrentPosition,
+    ExecutionQuote,
+    OpenOrderSnapshot,
+    OrderResult,
+    OrderSide,
+    ProposedTrade,
+)
 from poma.order_lifecycle import ORDER_REF_PREFIX
+
+# ib_insync reports market data type as an int on the ticker/reqMarketDataType callback:
+# 1=live, 2=frozen, 3=delayed, 4=delayed-frozen. Only live/frozen reflect real-time prices.
+MARKET_DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed_frozen"}
+DELAYED_MARKET_DATA_TYPES = {"delayed", "delayed_frozen"}
+EXECUTION_QUOTE_WAIT_SECONDS = 2.0
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
@@ -91,6 +106,15 @@ class Broker(Protocol):
         """Poll the broker for currently open POMA orders, for lifecycle reconciliation."""
         ...
 
+    def execution_quotes(self, tickers: list[str]) -> dict[str, ExecutionQuote]:
+        """Fetch fresh execution-time quotes for the given tickers, keyed by ticker.
+
+        Called immediately before order submission (and again during reconciliation replace
+        decisions) so paper/live pricing anchors on a current broker quote instead of the
+        Yahoo screener snapshot used for planning.
+        """
+        ...
+
     def cancel_order(self, order_id: int) -> bool:
         ...
 
@@ -146,6 +170,11 @@ class DryRunBroker:
 
     def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
         return []
+
+    def execution_quotes(self, tickers: list[str]) -> dict[str, ExecutionQuote]:
+        # dry_run never places broker orders, so it has no execution-time quote source; the
+        # engine keeps using the Yahoo snapshot reference price it already planned with.
+        return {}
 
     def cancel_order(self, order_id: int) -> bool:
         return False
@@ -523,6 +552,34 @@ class IbkrBroker:
         finally:
             ib.disconnect()
 
+    def execution_quotes(self, tickers: list[str]) -> dict[str, ExecutionQuote]:
+        """Snapshot bid/ask/last for every ticker in one IBKR session, right before submission.
+
+        Every subscription is requested up front and cancelled together after a single wait,
+        rather than one connect per ticker, so freshness is comparable across the whole batch.
+        """
+        unique_tickers = sorted({ticker.upper() for ticker in tickers})
+        if not unique_tickers:
+            return {}
+        ib = self._connect()
+        try:
+            self._assert_connected(ib)
+            market_data_by_ticker = {
+                ticker: ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
+                for ticker in unique_tickers
+            }
+            ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
+            retrieved_at = datetime.now(UTC)
+            quotes = {
+                ticker: _execution_quote_from_market_data(ticker, market_data, retrieved_at)
+                for ticker, market_data in market_data_by_ticker.items()
+            }
+            for market_data in market_data_by_ticker.values():
+                ib.cancelMktData(market_data.contract)
+            return quotes
+        finally:
+            ib.disconnect()
+
     def cancel_order(self, order_id: int) -> bool:
         ib = self._connect()
         try:
@@ -726,6 +783,44 @@ def _manual_result(proposed: ProposedTrade, status: str, message: str | None = N
         average_fill_price=None,
         message=message,
         order_ref=proposed.order_ref,
+    )
+
+
+def _valid_price(value: float | None) -> float | None:
+    """Normalize an IBKR tick field: NaN or non-positive values mean "no data"."""
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(parsed) or parsed <= 0:
+        return None
+    return parsed
+
+
+def _execution_quote_from_market_data(ticker: str, market_data: object, retrieved_at: datetime) -> ExecutionQuote:
+    bid = _valid_price(getattr(market_data, "bid", None))
+    ask = _valid_price(getattr(market_data, "ask", None))
+    last = _valid_price(getattr(market_data, "last", None))
+    close = _valid_price(getattr(market_data, "close", None))
+    tick_time = getattr(market_data, "time", None)
+    tick_time_iso = tick_time.isoformat() if isinstance(tick_time, datetime) else None
+    age_seconds = (retrieved_at - tick_time).total_seconds() if isinstance(tick_time, datetime) else None
+    market_data_type = MARKET_DATA_TYPE_NAMES.get(getattr(market_data, "marketDataType", None))
+    return ExecutionQuote(
+        ticker=ticker,
+        source="ibkr",
+        retrieved_at_utc=retrieved_at.isoformat(),
+        selected_price_as_of_utc=tick_time_iso,
+        age_seconds=age_seconds,
+        bid=bid,
+        ask=ask,
+        last=last,
+        close=close,
+        spread_bps=compute_spread_bps(bid, ask),
+        is_delayed=market_data_type in DELAYED_MARKET_DATA_TYPES,
+        raw_market_data_type=market_data_type,
     )
 
 

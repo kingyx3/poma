@@ -37,6 +37,21 @@ class StaleOrderPolicy(StrEnum):
     CANCEL = "cancel"
 
 
+class ExecutionPriceSource(StrEnum):
+    """Where paper/live order pricing reads its execution-time reference quote from."""
+
+    IBKR = "ibkr"
+    SNAPSHOT = "snapshot"
+
+
+class ExecutionPriceBasis(StrEnum):
+    """Which part of the quote a trade's reference price is selected from."""
+
+    SIDE_OF_MARKET = "side_of_market"
+    MIDPOINT = "midpoint"
+    LAST = "last"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -107,6 +122,28 @@ class Settings(BaseSettings):
     replace_price_improvement_bps: float = Field(default=15.0, alias="REPLACE_PRICE_IMPROVEMENT_BPS")
     stale_order_policy: StaleOrderPolicy = Field(default=StaleOrderPolicy.BLOCK, alias="STALE_ORDER_POLICY")
 
+    # Execution pricing: paper/live orders anchor on a fresh broker quote captured immediately
+    # before submission, not the Yahoo screener snapshot used for universe/target planning.
+    execution_price_source: ExecutionPriceSource = Field(
+        default=ExecutionPriceSource.IBKR,
+        alias="EXECUTION_PRICE_SOURCE",
+    )
+    execution_price_basis: ExecutionPriceBasis = Field(
+        default=ExecutionPriceBasis.SIDE_OF_MARKET,
+        alias="EXECUTION_PRICE_BASIS",
+    )
+    execution_quote_max_age_seconds: PositiveInt = Field(
+        default=60,
+        alias="EXECUTION_QUOTE_MAX_AGE_SECONDS",
+    )
+    execution_max_spread_bps: PositiveFloat = Field(default=50.0, alias="EXECUTION_MAX_SPREAD_BPS")
+    allow_delayed_execution_quotes: bool = Field(default=False, alias="ALLOW_DELAYED_EXECUTION_QUOTES")
+    allow_last_price_fallback: bool = Field(default=False, alias="ALLOW_LAST_PRICE_FALLBACK")
+    allow_unsafe_execution_price_source: bool = Field(
+        default=False,
+        alias="ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE",
+    )
+
     ibkr_host: str = Field(default="127.0.0.1", alias="IBKR_HOST")
     ibkr_port: int = Field(default=7497, alias="IBKR_PORT")
     ibkr_client_id: int = Field(default=101, alias="IBKR_CLIENT_ID")
@@ -172,6 +209,23 @@ class Settings(BaseSettings):
             )
         if self.cancel_after_seconds <= self.replace_after_seconds:
             raise ValueError("CANCEL_AFTER_SECONDS must be greater than REPLACE_AFTER_SECONDS")
+        if (
+            self.execution_price_basis == ExecutionPriceBasis.LAST
+            and not self.allow_last_price_fallback
+        ):
+            raise ValueError(
+                "EXECUTION_PRICE_BASIS=last requires ALLOW_LAST_PRICE_FALLBACK=true"
+            )
+        live_unsafe_price_source = (
+            self.trading_mode == TradingMode.LIVE
+            and self.execution_price_source == ExecutionPriceSource.SNAPSHOT
+            and not self.allow_unsafe_execution_price_source
+        )
+        if live_unsafe_price_source:
+            raise ValueError(
+                "LIVE trading requires EXECUTION_PRICE_SOURCE=ibkr unless "
+                "ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE=true"
+            )
         return self
 
     def strategy_allocation_map(self) -> dict[str, float]:

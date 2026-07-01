@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from poma.execution_pricing import build_limit_price
 from poma.models import CurrentPosition, OrderSide, ProposedTrade, TargetPosition
 
 # --- Target risk: combined portfolio-level target checks -----------------------------------
@@ -17,11 +18,6 @@ def validate_targets(targets: list[TargetPosition], max_position_pct: float) -> 
     return warnings
 
 
-def _build_limit_price(side: OrderSide, reference_price: float, offset_bps: float) -> float:
-    multiplier = 1 + offset_bps / 10_000 if side == OrderSide.BUY else 1 - offset_bps / 10_000
-    return round(reference_price * multiplier, 2)
-
-
 # --- Trade risk: order generation and per-batch limits --------------------------------------
 
 
@@ -34,6 +30,12 @@ def generate_trades(
     min_weight_delta_pct: float,
     limit_offset_bps: float,
 ) -> tuple[list[ProposedTrade], list[str]]:
+    """Stage A (planning): size trade quantities off the Yahoo snapshot price.
+
+    This never becomes the final execution limit price for paper/live orders; it only sizes
+    quantity/notional for the plan. ``poma.execution_pricing.apply_execution_quotes`` reprices
+    off a fresh broker quote immediately before submission (see ``ExecutionManager``).
+    """
     current_by_ticker = {p.ticker: p for p in current_positions}
     target_by_ticker = {t.ticker: t.target_notional for t in targets}
     tickers = sorted(set(current_by_ticker) | set(target_by_ticker))
@@ -70,7 +72,7 @@ def generate_trades(
                 quantity=quantity,
                 notional=abs(delta),
                 reference_price=reference_price,
-                limit_price=_build_limit_price(side, reference_price, limit_offset_bps),
+                limit_price=build_limit_price(side, reference_price, limit_offset_bps),
                 reason="rebalance_to_target_weight",
             )
         )

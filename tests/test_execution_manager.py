@@ -9,6 +9,7 @@ from conftest import make_settings
 from poma.execution_manager import ExecutionManager
 from poma.models import (
     AccountSnapshot,
+    ExecutionQuote,
     OpenOrderSnapshot,
     OrderResult,
     OrderSide,
@@ -27,6 +28,8 @@ class RecordingBroker:
         self.cancelled_order_ids: list[int] = []
         self.open_order_snapshots: list[OpenOrderSnapshot] = []
         self.next_order_id = 1
+        self.quotes_override: dict[str, ExecutionQuote] | None = None
+        self.execution_quote_requests: list[list[str]] = []
 
     def account_snapshot(self) -> AccountSnapshot:
         return AccountSnapshot(cash_usd=10_000.0, positions=(), positions_market_value_usd=0.0)
@@ -55,6 +58,26 @@ class RecordingBroker:
 
     def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
         return self.open_order_snapshots
+
+    def execution_quotes(self, tickers: list[str]) -> dict[str, ExecutionQuote]:
+        self.execution_quote_requests.append(list(tickers))
+        if self.quotes_override is not None:
+            return {ticker: self.quotes_override[ticker] for ticker in tickers if ticker in self.quotes_override}
+        retrieved_at = datetime.now(UTC).isoformat()
+        return {
+            ticker: ExecutionQuote(
+                ticker=ticker,
+                source="ibkr",
+                retrieved_at_utc=retrieved_at,
+                selected_price_as_of_utc=retrieved_at,
+                age_seconds=0.0,
+                bid=99.95,
+                ask=100.05,
+                last=100.0,
+                spread_bps=10.0,
+            )
+            for ticker in tickers
+        }
 
     def cancel_order(self, order_id: int) -> bool:
         self.cancelled_order_ids.append(order_id)
@@ -272,3 +295,152 @@ def test_reconcile_with_no_open_orders_is_a_noop(tmp_path: Path) -> None:
 
     assert summary.checked == 0
     assert summary.updates == ()
+
+
+def _quote(ticker: str, **overrides: object) -> ExecutionQuote:
+    values: dict[str, object] = {
+        "ticker": ticker,
+        "source": "ibkr",
+        "retrieved_at_utc": "2026-07-01T14:30:00+00:00",
+        "selected_price_as_of_utc": "2026-07-01T14:30:00+00:00",
+        "age_seconds": 0.0,
+        "bid": 99.95,
+        "ask": 100.05,
+        "last": 100.0,
+    }
+    values.update(overrides)
+    return ExecutionQuote(**values)
+
+
+def test_submit_plan_reprices_trades_off_fresh_broker_quotes(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    broker.quotes_override = {"AAPL": _quote("AAPL", bid=199.90, ask=200.10)}
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    trade = _trade("AAPL", OrderSide.BUY)
+
+    manager.submit_plan(_plan([trade]))
+
+    submitted = broker.submitted_batches[0][0]
+    assert submitted.reference_price == 200.10
+    assert submitted.reference_price_source == "ibkr"
+    assert submitted.reference_price_basis == "side_of_market"
+    entry = store.load_open_orders()[0]
+    assert entry.reference_price == 200.10
+    assert entry.reference_price_source == "ibkr"
+
+
+def test_submit_plan_blocks_trade_with_no_execution_quote(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    broker.quotes_override = {}
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    trade = _trade("AAPL", OrderSide.BUY)
+
+    results = manager.submit_plan(_plan([trade]))
+
+    assert results[0].status == "QuoteBlocked"
+    assert "missing ibkr execution quote for AAPL" in results[0].message
+    assert broker.submitted_batches == []
+    assert store.load_open_orders() == []
+
+
+def test_submit_plan_blocks_only_the_ticker_with_a_bad_quote(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    broker.quotes_override = {
+        "AAPL": _quote("AAPL"),
+        "MSFT": _quote("MSFT", age_seconds=None),
+    }
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    trades = [_trade("AAPL", OrderSide.BUY), _trade("MSFT", OrderSide.BUY)]
+
+    results = manager.submit_plan(_plan(trades))
+
+    results_by_ticker = {result.ticker: result for result in results}
+    assert results_by_ticker["AAPL"].status == "Submitted"
+    assert results_by_ticker["MSFT"].status == "QuoteBlocked"
+    assert [trade.ticker for trade in broker.submitted_batches[0]] == ["AAPL"]
+
+
+def test_submit_plan_skips_repricing_when_execution_price_source_is_snapshot(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    broker.quotes_override = {}
+    store = OrderStore(tmp_path)
+    settings = make_settings(EXECUTION_PRICE_SOURCE="snapshot")
+    manager = ExecutionManager(broker, store, settings)
+    trade = _trade("AAPL", OrderSide.BUY)
+
+    manager.submit_plan(_plan([trade]))
+
+    assert broker.execution_quote_requests == []
+    assert broker.submitted_batches[0][0].reference_price == 100.0
+
+
+def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    manager = ExecutionManager(broker, store, settings)
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.10)]))
+
+    entry = store.load_open_orders()[0]
+    stale_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
+    store.upsert(dc_replace(entry, submitted_at=stale_time))
+
+    broker.open_order_snapshots = [
+        OpenOrderSnapshot(
+            order_ref=entry.order_ref,
+            order_id=entry.order_id,
+            perm_id=None,
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            raw_status="Submitted",
+            filled=0.0,
+            remaining=5.0,
+            avg_fill_price=None,
+        )
+    ]
+    # Ask has since dropped well below the original stale limit price; a fresh-quote replace
+    # should follow the market down instead of blindly improving off the stale $100.10 limit.
+    broker.quotes_override = {"AAPL": _quote("AAPL", bid=79.80, ask=79.90)}
+
+    summary = manager.reconcile()
+
+    assert summary.updates[0].action == "replace"
+    updated = store.load_open_orders()[0]
+    assert updated.limit_price < 90.0
+    assert updated.reference_price == 79.90
+    assert updated.reference_price_source == "ibkr"
+
+
+def test_reconcile_replace_is_skipped_when_no_fresh_quote_is_available(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    manager = ExecutionManager(broker, store, settings)
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.0)]))
+
+    entry = store.load_open_orders()[0]
+    stale_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
+    store.upsert(dc_replace(entry, submitted_at=stale_time))
+
+    broker.open_order_snapshots = [
+        OpenOrderSnapshot(
+            order_ref=entry.order_ref,
+            order_id=entry.order_id,
+            perm_id=None,
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            raw_status="Submitted",
+            filled=0.0,
+            remaining=5.0,
+            avg_fill_price=None,
+        )
+    ]
+    broker.quotes_override = {}
+
+    summary = manager.reconcile()
+
+    assert summary.updates[0].action is None
+    assert store.load_open_orders()[0].replace_count == 0

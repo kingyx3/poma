@@ -29,9 +29,16 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `MIN_WEIGHT_DELTA_PCT` | yes | `0.0025` | Suppresses tiny target/current weight differences. |
 | `ORDER_TYPE` | yes | `limit` | Use `limit` by default. |
 | `ALLOW_MARKET_ORDERS` | live market only | `false` | Explicit opt-in for live market orders. |
-| `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset from reference price. |
+| `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset applied on top of the *selected execution reference price* (see below), not the Yahoo screener snapshot. |
 | `MAX_ORDER_NOTIONAL_USD` | yes | `2000` | Blocks unexpectedly large orders. Must be at least `MIN_TRADE_NOTIONAL_USD`. |
 | `MAX_DAILY_TRADES` | yes | `100` | Allows a full rebalance while still capping trade count. Must be at least `MAX_HOLDINGS` for full bootstrap. |
+| `EXECUTION_PRICE_SOURCE` | yes | `ibkr` | Where the execution-time reference price comes from for paper/live orders. `ibkr` reads a fresh broker quote immediately before submission; `snapshot` falls back to the Yahoo screener price. Live trading rejects `snapshot` unless `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE=true`. `dry_run` always uses the snapshot regardless of this setting, since there is no broker to quote from. |
+| `EXECUTION_PRICE_BASIS` | yes | `side_of_market` | Which part of the broker quote a trade is priced from: `side_of_market` (BUY uses ask, SELL uses bid), `midpoint` (requires both bid and ask), or `last` (requires `ALLOW_LAST_PRICE_FALLBACK=true`). |
+| `EXECUTION_QUOTE_MAX_AGE_SECONDS` | yes | `60` | Maximum age of a broker quote before it is considered stale and the trade is blocked. Deploy validation caps this at 120s for paper/live. |
+| `EXECUTION_MAX_SPREAD_BPS` | yes | `50` | Maximum allowed bid/ask spread, in basis points, before a trade is blocked as too wide to price safely. |
+| `ALLOW_DELAYED_EXECUTION_QUOTES` | yes | `false` | Whether a broker quote flagged as delayed (not live/frozen market data) may still be used. Deploy validation blocks `true` for `TRADING_MODE=live`. |
+| `ALLOW_LAST_PRICE_FALLBACK` | yes | `false` | Required to be `true` before `EXECUTION_PRICE_BASIS=last` is accepted. |
+| `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE` | yes | `false` | Explicit override required for `TRADING_MODE=live` with `EXECUTION_PRICE_SOURCE=snapshot`. Leave `false` unless you understand the staleness risk. |
 | `NON_FRACTIONAL_TICKERS` | no | `` (empty) | Comma-separated tickers to round down to whole shares instead of sending fractional orders. Every other ticker defaults to fractional-friendly sizing, since a small managed cap depends on fractional quantities to hit target weights. Only list tickers confirmed to reject fractional orders at the broker. |
 | `ORDER_STATUS_TIMEOUT_SECONDS` | yes | `60` | Time to wait for broker order status before marking follow-up needed. |
 | `CANCEL_STALE_ORDERS` | yes | `true` | Request cancel when an order does not reach a terminal status in time. |
@@ -52,6 +59,28 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 
 `CASH_BUFFER_PCT` is intentionally not part of the current runtime contract. Cash is represented as a `cash` allocation sleeve in `STRATEGY_ALLOCATIONS`, not as a hidden buffer inside the active strategy.
+
+## Strategy pricing vs. execution pricing
+
+The Yahoo screener snapshot price and the paper/live execution price answer two different
+questions and are never the same read:
+
+- **Strategy market data** (Yahoo snapshot, via `DATA_PROVIDER`/`UNIVERSE`): drives universe
+  selection, market-cap ranking, and target-weight/notional sizing. It also sizes *planning*
+  trade quantities (`poma.risk.generate_trades`), and it is what `dry_run` mode uses end to end
+  since there is no broker connection to quote from.
+- **Execution market data** (`EXECUTION_PRICE_SOURCE=ibkr` by default): a fresh IBKR bid/ask/last
+  quote fetched immediately before a paper/live order is submitted (and again immediately before
+  a reconciliation replace). This — not the Yahoo snapshot — is what `LIMIT_OFFSET_BPS` is offset
+  from, and what the final order quantity/limit price are computed against.
+
+Paper/live execution blocks the affected order (with a `block execution` warning, the same
+marker used elsewhere in the risk engine) instead of silently falling back to the Yahoo price
+when the IBKR quote is missing, older than `EXECUTION_QUOTE_MAX_AGE_SECONDS`, wider than
+`EXECUTION_MAX_SPREAD_BPS`, or flagged delayed without `ALLOW_DELAYED_EXECUTION_QUOTES=true`.
+Every submitted order's ledger entry (`poma.order_lifecycle.OrderLedgerEntry`) records the quote
+source, basis, timestamp, age, and spread it was priced from, and Telegram order-status alerts
+include the same summary.
 
 ## Portfolio sizing and existing account equity
 
@@ -121,6 +150,8 @@ Bootstrap apply writes generated, non-secret GCP deployment identifiers to `ops/
 
 - `TRADING_MODE=live` is blocked unless `ALLOW_LIVE_TRADING=true`.
 - `ORDER_TYPE=market` in live mode is blocked unless `ALLOW_MARKET_ORDERS=true`.
+- `TRADING_MODE=live` with `EXECUTION_PRICE_SOURCE=snapshot` is blocked unless `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE=true`.
+- Paper/live orders block (not silently reprice from a stale/fallback source) on a missing, stale, too-wide, or delayed execution quote. See "Strategy pricing vs. execution pricing" above.
 - `MAX_POSITION_PCT`, `MAX_TURNOVER_PCT`, `STRATEGY_ALLOCATIONS`, and min-trade thresholds are validated at startup.
 - The deploy workflow renders paper runtime `IBKR_ACCOUNT` from `IBKR_ACCOUNT_PAPER`. Live mode uses `IBKR_ACCOUNT`.
 - Paper Gateway login secrets are separate from the paper account id: `IBKR_LOGIN_ID_PAPER` / `IBKR_LOGIN_SECRET_PAPER` authenticate Gateway, while `IBKR_ACCOUNT_PAPER` selects the account the app may trade.

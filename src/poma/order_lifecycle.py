@@ -7,6 +7,7 @@ from enum import StrEnum
 from poma.models import OpenOrderSnapshot, OrderResult, OrderSide
 
 ORDER_REF_PREFIX = "poma"
+EXECUTION_QUOTE_BLOCKED_STATUS = "QuoteBlocked"
 
 
 class OrderLifecycleState(StrEnum):
@@ -47,7 +48,7 @@ WORKING_LIFECYCLE_STATES = frozenset(
 )
 
 _RAW_TERMINAL_CANCELLED = {"Cancelled", "ApiCancelled"}
-_RAW_SUBMISSION_FAILURE = {"Failed", "BrokerUnavailable", "OrderNotAccepted"}
+_RAW_SUBMISSION_FAILURE = {"Failed", "BrokerUnavailable", "OrderNotAccepted", EXECUTION_QUOTE_BLOCKED_STATUS}
 
 
 def build_order_ref(run_id: str, index: int, ticker: str, side: OrderSide) -> str:
@@ -111,6 +112,12 @@ class OrderLedgerEntry:
     quantity: float
     limit_price: float | None
     strategy: str | None = None
+    reference_price: float | None = None
+    reference_price_source: str | None = None
+    reference_price_basis: str | None = None
+    reference_price_as_of_utc: str | None = None
+    quote_age_seconds: float | None = None
+    quote_spread_bps: float | None = None
     order_id: int | None = None
     perm_id: int | None = None
     submitted_at: str | None = None

@@ -4,9 +4,11 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from poma.broker import Broker, OrderStatusCallback
-from poma.config import Settings, StaleOrderPolicy
+from poma.config import ExecutionPriceSource, Settings, StaleOrderPolicy
+from poma.execution_pricing import apply_execution_quotes, build_limit_price, compute_spread_bps, select_execution_price
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.order_lifecycle import (
+    EXECUTION_QUOTE_BLOCKED_STATUS,
     WORKING_LIFECYCLE_STATES,
     OrderLedgerEntry,
     OrderLifecycleState,
@@ -62,7 +64,9 @@ class ExecutionManager:
         Sells are staged first so a rebalance does not rely on buying power that has not yet
         been confirmed by the broker. Every trade in ``plan.trades`` is tagged with a stable
         ``orderRef`` and recorded in the durable order ledger before submission, so a crash
-        mid-run still leaves a trace of what was sent.
+        mid-run still leaves a trace of what was sent. Immediately before each phase is sent to
+        the broker, it is repriced off a fresh execution quote (see ``_reprice_for_execution``);
+        trades that fail a freshness/spread/delayed-quote check are blocked instead of submitted.
         """
         sells = [trade for trade in plan.trades if trade.side == OrderSide.SELL]
         buys = [trade for trade in plan.trades if trade.side == OrderSide.BUY]
@@ -76,15 +80,69 @@ class ExecutionManager:
         for phase_trades in (tagged_sells, tagged_buys):
             if not phase_trades:
                 continue
+            submittable, blocked_results = self._reprice_for_execution(plan, phase_trades, status_callback)
+            for trade, result in blocked_results:
+                results_by_ticker[trade.ticker] = result
+            if not submittable:
+                continue
             phase_results = self.broker.submit_trades(
-                phase_trades,
+                submittable,
                 status_callback=self._wrap_callback(plan, status_callback),
             )
-            for trade, result in zip(phase_trades, phase_results, strict=True):
+            for trade, result in zip(submittable, phase_results, strict=True):
                 results_by_ticker[trade.ticker] = result
                 self._record_result(plan, trade, result)
 
         return [results_by_ticker[trade.ticker] for trade in plan.trades]
+
+    def _reprice_for_execution(
+        self,
+        plan: RebalancePlan,
+        trades: list[ProposedTrade],
+        status_callback: OrderStatusCallback | None,
+    ) -> tuple[list[ProposedTrade], list[tuple[ProposedTrade, OrderResult]]]:
+        """Reprice one submission batch off a fresh broker quote fetched right before sending it.
+
+        Fetching quotes here, immediately before ``broker.submit_trades``, keeps the gap between
+        "read the quote" and "place the order" as small as possible. Trades that fail a
+        freshness/spread/delayed-quote check are recorded as blocked rather than submitted.
+        """
+        if self.settings.execution_price_source != ExecutionPriceSource.IBKR or not trades:
+            return trades, []
+
+        quotes = self.broker.execution_quotes([trade.ticker for trade in trades])
+        repriced, warnings = apply_execution_quotes(trades, quotes, self.settings)
+        repriced_by_ticker = {trade.ticker: trade for trade in repriced}
+
+        submittable: list[ProposedTrade] = []
+        blocked: list[tuple[ProposedTrade, OrderResult]] = []
+        for trade in trades:
+            updated = repriced_by_ticker.get(trade.ticker)
+            if updated is not None:
+                self._record_planned(plan, updated)
+                submittable.append(updated)
+                continue
+            reason = next(
+                (warning for warning in warnings if trade.ticker in warning),
+                "execution quote check failed; block execution",
+            )
+            result = OrderResult(
+                ticker=trade.ticker,
+                side=trade.side,
+                quantity=trade.quantity,
+                notional=trade.notional,
+                order_id=None,
+                status=EXECUTION_QUOTE_BLOCKED_STATUS,
+                filled=0.0,
+                average_fill_price=None,
+                message=reason,
+                order_ref=trade.order_ref,
+            )
+            self._record_result(plan, trade, result)
+            if status_callback is not None:
+                status_callback(trade, result)
+            blocked.append((trade, result))
+        return submittable, blocked
 
     def _tag(self, run_id: str, trades: list[ProposedTrade], *, offset: int) -> list[ProposedTrade]:
         return [
@@ -103,6 +161,12 @@ class ExecutionManager:
             side=trade.side,
             quantity=trade.quantity,
             limit_price=trade.limit_price,
+            reference_price=trade.reference_price,
+            reference_price_source=trade.reference_price_source,
+            reference_price_basis=trade.reference_price_basis,
+            reference_price_as_of_utc=trade.reference_price_as_of_utc,
+            quote_age_seconds=trade.quote_age_seconds,
+            quote_spread_bps=trade.quote_spread_bps,
             lifecycle_state=OrderLifecycleState.PLANNED,
         )
         self.store.upsert(entry)
@@ -120,6 +184,12 @@ class ExecutionManager:
                 side=trade.side,
                 quantity=trade.quantity,
                 limit_price=trade.limit_price,
+                reference_price=trade.reference_price,
+                reference_price_source=trade.reference_price_source,
+                reference_price_basis=trade.reference_price_basis,
+                reference_price_as_of_utc=trade.reference_price_as_of_utc,
+                quote_age_seconds=trade.quote_age_seconds,
+                quote_spread_bps=trade.quote_spread_bps,
             )
         self.store.upsert(entry.with_order_result(result))
 
@@ -229,13 +299,9 @@ class ExecutionManager:
                 "cancel",
             )
         if elapsed >= self.settings.replace_after_seconds and entry.replace_count < 1 and entry.order_id is not None:
-            if entry.limit_price is None:
+            new_limit, quote_metadata = self._fresh_replace_limit_price(entry)
+            if new_limit is None:
                 return None
-            new_limit = more_aggressive_limit_price(
-                entry.side,
-                entry.limit_price,
-                self.settings.replace_price_improvement_bps,
-            )
             new_ref = f"{entry.ledger_key}:r{entry.replace_count + 1}"
             snapshot = self.broker.replace_order(
                 order_id=entry.order_id,
@@ -252,6 +318,42 @@ class ExecutionManager:
                 limit_price=new_limit,
                 replace_count=entry.replace_count + 1,
                 submitted_at=now.isoformat(),
+                **quote_metadata,
             )
             return replaced, "replace"
         return None
+
+    def _fresh_replace_limit_price(self, entry: OrderLedgerEntry) -> tuple[float | None, dict[str, object]]:
+        """Reprice a replacement off a fresh broker quote instead of the order's stale old limit.
+
+        Blindly improving from the previous limit price can chase a quote that has since moved
+        the other way (see ``docs/configuration.md``). When no valid fresh quote is available,
+        this skips the replace for this reconcile pass rather than repricing off stale data.
+        """
+        settings = self.settings
+        if settings.execution_price_source != ExecutionPriceSource.IBKR:
+            if entry.limit_price is None:
+                return None, {}
+            return (
+                more_aggressive_limit_price(entry.side, entry.limit_price, settings.replace_price_improvement_bps),
+                {},
+            )
+
+        quotes = self.broker.execution_quotes([entry.ticker])
+        quote = quotes.get(entry.ticker)
+        if quote is None:
+            return None, {}
+        price, _warnings = select_execution_price(quote, entry.side, settings)
+        if price is None:
+            return None, {}
+        new_limit = build_limit_price(entry.side, price, settings.replace_price_improvement_bps)
+        spread_bps = quote.spread_bps if quote.spread_bps is not None else compute_spread_bps(quote.bid, quote.ask)
+        metadata: dict[str, object] = {
+            "reference_price": price,
+            "reference_price_source": settings.execution_price_source.value,
+            "reference_price_basis": settings.execution_price_basis.value,
+            "reference_price_as_of_utc": quote.selected_price_as_of_utc,
+            "quote_age_seconds": quote.age_seconds,
+            "quote_spread_bps": spread_bps,
+        }
+        return new_limit, metadata

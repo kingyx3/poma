@@ -98,6 +98,36 @@ class ProposedTrade:
     limit_price: float | None
     reason: str
     order_ref: str | None = None
+    reference_price_source: str = "snapshot"
+    reference_price_basis: str = "snapshot_price"
+    reference_price_as_of_utc: str | None = None
+    quote_age_seconds: float | None = None
+    quote_spread_bps: float | None = None
+
+
+@dataclass(frozen=True)
+class ExecutionQuote:
+    """One broker-side market data read for a ticker, captured just before order submission.
+
+    This is the execution-time counterpart to the Yahoo screener snapshot: the snapshot still
+    drives universe selection and target sizing, but paper/live order pricing is anchored on
+    this fresher, broker-sourced quote instead.
+    """
+
+    ticker: str
+    source: str
+    retrieved_at_utc: str
+    basis: str = "raw"
+    selected_price: float | None = None
+    selected_price_as_of_utc: str | None = None
+    age_seconds: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    last: float | None = None
+    close: float | None = None
+    spread_bps: float | None = None
+    is_delayed: bool = False
+    raw_market_data_type: str | None = None
 
 
 @dataclass(frozen=True)

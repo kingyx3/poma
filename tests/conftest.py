@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from poma.config import Settings
-from poma.models import AccountSnapshot, OrderResult, ProposedTrade
+from poma.models import AccountSnapshot, ExecutionQuote, OrderResult, ProposedTrade
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -58,3 +60,20 @@ class FakeBroker:
             for trade, result in zip(trades, results, strict=True):
                 status_callback(trade, result)
         return results
+
+    def execution_quotes(self, tickers: list[str]) -> dict[str, ExecutionQuote]:
+        retrieved_at = datetime.now(UTC).isoformat()
+        return {
+            ticker: ExecutionQuote(
+                ticker=ticker,
+                source="ibkr",
+                retrieved_at_utc=retrieved_at,
+                selected_price_as_of_utc=retrieved_at,
+                age_seconds=0.0,
+                bid=99.95,
+                ask=100.05,
+                last=100.0,
+                spread_bps=10.0,
+            )
+            for ticker in tickers
+        }
