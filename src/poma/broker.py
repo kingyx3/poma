@@ -26,6 +26,8 @@ from poma.order_lifecycle import IDEMPOTENT_REPLAY_STATUS, ORDER_REF_PREFIX
 # 1=live, 2=frozen, 3=delayed, 4=delayed-frozen. Only live/frozen reflect real-time prices.
 MARKET_DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed_frozen"}
 DELAYED_MARKET_DATA_TYPES = {"delayed", "delayed_frozen"}
+LIVE_MARKET_DATA_TYPE = 1
+DELAYED_MARKET_DATA_TYPE = 3
 EXECUTION_QUOTE_WAIT_SECONDS = 2.0
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
@@ -209,6 +211,12 @@ class IbkrBroker:
             )
             ib.RequestTimeout = IBKR_CONNECT_TIMEOUT_SECONDS
             self._assert_connected(ib)
+            # Gateway remembers whichever market data type was last requested on this client id
+            # rather than defaulting to live every session, so a fresh connection can silently
+            # return no ticks at all even once the account has live entitlements. Request live
+            # data explicitly every connection instead of relying on Gateway's session state or
+            # a one-time TWS/Gateway UI setting.
+            ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
         except Exception:
             ib.disconnect()
             raise
@@ -569,6 +577,8 @@ class IbkrBroker:
                 for ticker in unique_tickers
             }
             ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
+            if self.settings.allow_delayed_execution_quotes:
+                self._retry_missing_quotes_as_delayed(ib, market_data_by_ticker)
             retrieved_at = datetime.now(UTC)
             quotes = {
                 ticker: _execution_quote_from_market_data(ticker, market_data, retrieved_at)
@@ -579,6 +589,29 @@ class IbkrBroker:
             return quotes
         finally:
             ib.disconnect()
+
+    def _retry_missing_quotes_as_delayed(self, ib: IB, market_data_by_ticker: dict[str, object]) -> None:
+        """Re-request, as delayed data, any ticker that got no tick at all from the live request.
+
+        `reqMarketDataType` only affects subsequent requests, so tickers that already received a
+        live tick keep it; only the ones with no tick are cancelled and re-subscribed under
+        delayed data. Selection still enforces `ALLOW_DELAYED_EXECUTION_QUOTES` per quote, so a
+        symbol without even delayed data available still blocks execution as before.
+        """
+        missing_tickers = [
+            ticker
+            for ticker, market_data in market_data_by_ticker.items()
+            if not isinstance(getattr(market_data, "time", None), datetime)
+        ]
+        if not missing_tickers:
+            return
+        for ticker in missing_tickers:
+            ib.cancelMktData(getattr(market_data_by_ticker[ticker], "contract"))  # noqa: B009
+        ib.reqMarketDataType(DELAYED_MARKET_DATA_TYPE)
+        for ticker in missing_tickers:
+            market_data_by_ticker[ticker] = ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
+        ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
+        ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
 
     def cancel_order(self, order_id: int) -> bool:
         ib = self._connect()

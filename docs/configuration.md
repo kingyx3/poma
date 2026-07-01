@@ -36,7 +36,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `EXECUTION_PRICE_BASIS` | yes | `side_of_market` | Which part of the broker quote a trade is priced from: `side_of_market` (BUY uses ask, SELL uses bid), `midpoint` (requires both bid and ask), or `last` (requires `ALLOW_LAST_PRICE_FALLBACK=true`). |
 | `EXECUTION_QUOTE_MAX_AGE_SECONDS` | yes | `60` | Maximum age of a broker quote before it is considered stale and the trade is blocked. Deploy validation caps this at 120s for paper/live. |
 | `EXECUTION_MAX_SPREAD_BPS` | yes | `50` | Maximum allowed bid/ask spread, in basis points, before a trade is blocked as too wide to price safely. |
-| `ALLOW_DELAYED_EXECUTION_QUOTES` | yes | `false` | Whether a broker quote flagged as delayed (not live/frozen market data) may still be used. Deploy validation blocks `true` for `TRADING_MODE=live`. |
+| `ALLOW_DELAYED_EXECUTION_QUOTES` | yes | `false` | Whether a broker quote flagged as delayed (not live/frozen market data) may still be used. When `true`, `IbkrBroker` also automatically retries any ticker that got no live tick at all as delayed data (`reqMarketDataType`) before giving up on it — no manual Gateway/TWS market-data-type step required. Deploy validation blocks `true` for `TRADING_MODE=live`. |
 | `ALLOW_LAST_PRICE_FALLBACK` | yes | `false` | Required to be `true` before `EXECUTION_PRICE_BASIS=last` is accepted. |
 | `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE` | yes | `false` | Explicit override required for `TRADING_MODE=live` with `EXECUTION_PRICE_SOURCE=snapshot`. Leave `false` unless you understand the staleness risk. |
 | `NON_FRACTIONAL_TICKERS` | no | `` (empty) | Comma-separated tickers to round down to whole shares instead of sending fractional orders. Every other ticker defaults to fractional-friendly sizing, since a small managed cap depends on fractional quantities to hit target weights. Only list tickers confirmed to reject fractional orders at the broker. |
@@ -81,6 +81,14 @@ when the IBKR quote is missing, older than `EXECUTION_QUOTE_MAX_AGE_SECONDS`, wi
 Every submitted order's ledger entry (`poma.order_lifecycle.OrderLedgerEntry`) records the quote
 source, basis, timestamp, age, and spread it was priced from, and Telegram order-status alerts
 include the same summary.
+
+`IbkrBroker` explicitly requests live market data (`reqMarketDataType(1)`) on every connection
+rather than relying on Gateway remembering a data type from a prior session or client id, since a
+fresh connection can otherwise silently return no ticks at all even with live entitlements in
+place. A ticker with no tick after that (missing quote timestamp, not merely stale) is retried as
+delayed data automatically when `ALLOW_DELAYED_EXECUTION_QUOTES=true`; tickers that already
+received a live tick are left alone. A symbol with no data under either mode still blocks
+execution.
 
 ## Portfolio sizing and existing account equity
 

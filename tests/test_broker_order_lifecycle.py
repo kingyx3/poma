@@ -59,7 +59,10 @@ class FakeIB:
     placed_orders: list[tuple[object, object]] = field(default_factory=list)
     next_order_id: int = 100
     market_data_by_symbol: dict[str, FakeMarketData] = field(default_factory=dict)
+    market_data_after_delayed_by_symbol: dict[str, FakeMarketData] = field(default_factory=dict)
     cancelled_market_data_symbols: list[str] = field(default_factory=list)
+    market_data_type_requests: list[int] = field(default_factory=list)
+    current_market_data_type: int = 1
 
     def connect(self, *_args, **_kwargs) -> None:
         self.connected = True
@@ -98,7 +101,13 @@ class FakeIB:
         return None
 
     def reqMktData(self, contract, *_args, **_kwargs):  # noqa: N802, ANN201 - mirrors ib_insync API
+        if self.current_market_data_type == 3 and contract.symbol in self.market_data_after_delayed_by_symbol:
+            return self.market_data_after_delayed_by_symbol[contract.symbol]
         return self.market_data_by_symbol[contract.symbol]
+
+    def reqMarketDataType(self, data_type: int) -> None:  # noqa: N802
+        self.market_data_type_requests.append(data_type)
+        self.current_market_data_type = data_type
 
     def cancelMktData(self, contract) -> None:  # noqa: N802
         self.cancelled_market_data_symbols.append(contract.symbol)
@@ -271,6 +280,65 @@ def test_execution_quotes_treats_missing_tick_time_as_unknown_age(monkeypatch: p
 
     assert quotes["NVDA"].age_seconds is None
     assert quotes["NVDA"].selected_price_as_of_utc is None
+    # ALLOW_DELAYED_EXECUTION_QUOTES defaults to false: no delayed retry is attempted, so only
+    # the live-mode request from _connect() is ever issued.
+    assert fake_ib.market_data_type_requests == [1]
+
+
+def test_connect_requests_live_market_data_type_on_every_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(open_trades=[])
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    broker.cancel_order(999)
+
+    assert fake_ib.market_data_type_requests == [1]
+
+
+def test_execution_quotes_falls_back_to_delayed_data_when_allowed_and_no_live_tick_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tick_time = datetime.now(UTC)
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "NVDA": FakeMarketData(contract=FakeContract(symbol="NVDA"), time=None),
+        },
+        market_data_after_delayed_by_symbol={
+            "NVDA": FakeMarketData(
+                contract=FakeContract(symbol="NVDA"), bid=100.0, ask=100.20, time=tick_time, marketDataType=3
+            ),
+        },
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch, ALLOW_DELAYED_EXECUTION_QUOTES="true"))
+
+    quotes = broker.execution_quotes(["NVDA"])
+
+    assert quotes["NVDA"].is_delayed is True
+    assert quotes["NVDA"].age_seconds is not None
+    # live on connect, delayed for the retry, then back to live for any later request this session.
+    assert fake_ib.market_data_type_requests == [1, 3, 1]
+
+
+def test_execution_quotes_does_not_retry_tickers_that_already_have_a_live_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tick_time = datetime.now(UTC)
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "AAPL": FakeMarketData(
+                contract=FakeContract(symbol="AAPL"), bid=199.90, ask=200.10, last=200.00, time=tick_time
+            ),
+        }
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch, ALLOW_DELAYED_EXECUTION_QUOTES="true"))
+
+    quotes = broker.execution_quotes(["AAPL"])
+
+    assert quotes["AAPL"].is_delayed is False
+    # No missing tickers, so the delayed-data retry path is never entered.
+    assert fake_ib.market_data_type_requests == [1]
 
 
 def _result(status: str, *, filled: float = 0.0, message: str | None = None) -> OrderResult:
