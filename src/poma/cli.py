@@ -13,13 +13,15 @@ from poma.broker import BROKER_UNAVAILABLE_STATUS, build_broker
 from poma.config import Settings, TradingMode, get_settings
 from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
+from poma.execution_manager import ExecutionManager
 from poma.health import check_ibkr, run_checks
 from poma.history import CapSnapshotHistory
 from poma.journal import ExecutionJournal
 from poma.market_calendar import should_rebalance_now
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
-from poma.order_status_alerts import order_status_alert
+from poma.order_status_alerts import lifecycle_status_alert, order_status_alert
+from poma.order_store import OrderStore
 from poma.state import LocalState
 
 app = typer.Typer(no_args_is_help=True, help="POMA market-cap rebalancer.")
@@ -211,7 +213,11 @@ def _run_rebalance(
         allow_outside_market_hours=allow_outside_market_hours,
     )
 
-    engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.data_dir))
+    engine = RebalanceEngine(
+        settings,
+        history=CapSnapshotHistory(settings.data_dir),
+        order_store=OrderStore(settings.state_dir),
+    )
     journal = ExecutionJournal(settings.state_dir)
     plan = engine.build_plan(session_date, run_id)
     report_path = _write_report(plan, settings.report_dir)
@@ -411,6 +417,45 @@ def ibkr_check() -> None:
     console.print(f"ibkr {marker}: {check.detail}")
     if not check.ok:
         raise typer.Exit(code=1)
+
+
+@app.command(name="reconcile-orders")
+def reconcile_orders() -> None:
+    """Poll IBKR for open POMA orders and apply the replace-once/cancel timeout policy.
+
+    Intended to run on a schedule (e.g. every 1-2 minutes) after a rebalance so working limit
+    orders are followed up even after the rebalance process has exited. Also useful before the
+    next scheduled rebalance to clear/inspect anything left open from a prior session.
+    """
+    settings = get_settings()
+    if settings.trading_mode == TradingMode.DRY_RUN:
+        console.print("dry_run mode never places broker orders; nothing to reconcile.")
+        return
+
+    broker = build_broker(settings)
+    store = OrderStore(settings.state_dir)
+    manager = ExecutionManager(broker, store, settings)
+    summary = manager.reconcile()
+    if summary.checked == 0:
+        console.print("No open orders to reconcile.")
+        return
+
+    table = Table("ticker", "side", "status", "filled/qty", "action", "matched")
+    for update in summary.updates:
+        entry = update.entry
+        table.add_row(
+            entry.ticker,
+            entry.side.value,
+            entry.lifecycle_state.value,
+            f"{entry.filled_qty:g}/{entry.quantity:g}",
+            update.action or "-",
+            "yes" if update.matched else "no",
+        )
+    console.print(table)
+
+    for update in summary.updates:
+        if update.action is not None or update.entry.is_terminal:
+            send_alert(settings, lifecycle_status_alert(update.entry, update.action))
 
 
 @app.command()

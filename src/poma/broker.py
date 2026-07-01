@@ -10,7 +10,8 @@ from typing import Protocol
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
 from poma.config import OrderType, Settings, TradingMode
-from poma.models import AccountSnapshot, CurrentPosition, OrderResult, ProposedTrade
+from poma.models import AccountSnapshot, CurrentPosition, OpenOrderSnapshot, OrderResult, OrderSide, ProposedTrade
+from poma.order_lifecycle import ORDER_REF_PREFIX
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
@@ -86,6 +87,26 @@ class Broker(Protocol):
     ) -> list[OrderResult]:
         ...
 
+    def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
+        """Poll the broker for currently open POMA orders, for lifecycle reconciliation."""
+        ...
+
+    def cancel_order(self, order_id: int) -> bool:
+        ...
+
+    def replace_order(
+        self,
+        *,
+        order_id: int,
+        ticker: str,
+        side: OrderSide,
+        quantity: float,
+        new_limit_price: float,
+        order_ref: str,
+    ) -> OpenOrderSnapshot:
+        """Cancel the given order and place a fresh replacement, returning its new snapshot."""
+        ...
+
 
 class DryRunBroker:
     def __init__(self, fallback_portfolio_value_usd: float = 0.0) -> None:
@@ -122,6 +143,24 @@ class DryRunBroker:
             for trade, result in zip(trades, results, strict=True):
                 status_callback(trade, result)
         return results
+
+    def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
+        return []
+
+    def cancel_order(self, order_id: int) -> bool:
+        return False
+
+    def replace_order(
+        self,
+        *,
+        order_id: int,
+        ticker: str,
+        side: OrderSide,
+        quantity: float,
+        new_limit_price: float,
+        order_ref: str,
+    ) -> OpenOrderSnapshot:
+        raise NotImplementedError("dry_run mode never places broker orders to replace")
 
 
 class IbkrBroker:
@@ -428,14 +467,124 @@ class IbkrBroker:
             filled=float(status.filled or 0.0),
             average_fill_price=_none_if_zero(status.avgFillPrice),
             message=diagnostic,
+            order_ref=proposed.order_ref,
+            perm_id=getattr(trade.order, "permId", None),
         )
 
     def _build_order(self, trade: ProposedTrade) -> MarketOrder | LimitOrder:
         if self.settings.order_type == OrderType.MARKET:
-            return MarketOrder(trade.side.value, abs(trade.quantity))
-        if trade.limit_price is None:
-            raise ValueError(f"missing limit price for {trade.ticker}")
-        return LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
+            order: MarketOrder | LimitOrder = MarketOrder(trade.side.value, abs(trade.quantity))
+        else:
+            if trade.limit_price is None:
+                raise ValueError(f"missing limit price for {trade.ticker}")
+            order = LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
+        order.tif = self.settings.order_time_in_force
+        if trade.order_ref:
+            order.orderRef = trade.order_ref
+        return order
+
+    def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
+        """Poll for currently open orders placed with a POMA orderRef, for reconciliation.
+
+        ``reqAllOpenOrders`` (rather than ``reqOpenOrders``) is required here because the
+        reconciliation command connects with its own client id, distinct from the client id
+        that originally submitted the orders; only ``reqAllOpenOrders`` returns orders placed
+        by other client ids on the same account.
+        """
+        ib = self._connect()
+        try:
+            self._assert_connected(ib)
+            ib.reqAllOpenOrders()
+            ib.sleep(1.0)
+            snapshots: list[OpenOrderSnapshot] = []
+            for trade in ib.openTrades():
+                order = trade.order
+                order_ref = str(getattr(order, "orderRef", "") or "")
+                if not order_ref.startswith(f"{ORDER_REF_PREFIX}:"):
+                    continue
+                account = getattr(order, "account", "") or ""
+                if self.settings.ibkr_account and account not in ("", self.settings.ibkr_account):
+                    continue
+                status = trade.orderStatus
+                snapshots.append(
+                    OpenOrderSnapshot(
+                        order_ref=order_ref,
+                        order_id=getattr(order, "orderId", None),
+                        perm_id=getattr(order, "permId", None),
+                        ticker=trade.contract.symbol.upper(),
+                        side=OrderSide.BUY if order.action == "BUY" else OrderSide.SELL,
+                        raw_status=status.status or "",
+                        filled=float(status.filled or 0.0),
+                        remaining=float(status.remaining or 0.0),
+                        avg_fill_price=_none_if_zero(status.avgFillPrice),
+                    )
+                )
+            return snapshots
+        finally:
+            ib.disconnect()
+
+    def cancel_order(self, order_id: int) -> bool:
+        ib = self._connect()
+        try:
+            self._assert_connected(ib)
+            ib.reqAllOpenOrders()
+            ib.sleep(1.0)
+            target = next((trade.order for trade in ib.openTrades() if trade.order.orderId == order_id), None)
+            if target is None:
+                return False
+            ib.cancelOrder(target)
+            ib.sleep(1.0)
+            return True
+        finally:
+            ib.disconnect()
+
+    def replace_order(
+        self,
+        *,
+        order_id: int,
+        ticker: str,
+        side: OrderSide,
+        quantity: float,
+        new_limit_price: float,
+        order_ref: str,
+    ) -> OpenOrderSnapshot:
+        """Cancel the working order and place a fresh one with an updated limit price.
+
+        This is a cancel-and-resubmit, not an in-place IBKR order modification, so the new
+        order gets its own ``order_ref``/``orderId``; the caller is responsible for updating
+        the ledger entry's identity to track the replacement.
+        """
+        ib = self._connect()
+        try:
+            self._assert_connected(ib)
+            ib.reqAllOpenOrders()
+            ib.sleep(1.0)
+            target = next((trade.order for trade in ib.openTrades() if trade.order.orderId == order_id), None)
+            if target is not None:
+                ib.cancelOrder(target)
+                ib.sleep(1.0)
+            contract = Stock(ticker, "SMART", "USD")
+            order = LimitOrder(side.value, abs(quantity), new_limit_price)
+            order.tif = self.settings.order_time_in_force
+            order.orderRef = order_ref
+            if self.settings.ibkr_account:
+                order.account = self.settings.ibkr_account
+            trade = ib.placeOrder(contract, order)
+            ib.sleep(1.0)
+            status = trade.orderStatus
+            return OpenOrderSnapshot(
+                order_ref=order_ref,
+                order_id=getattr(trade.order, "orderId", None),
+                perm_id=getattr(trade.order, "permId", None),
+                ticker=ticker,
+                side=side,
+                raw_status=status.status or "Submitted",
+                filled=float(status.filled or 0.0),
+                remaining=float(status.remaining or abs(quantity)),
+                avg_fill_price=_none_if_zero(status.avgFillPrice),
+            )
+        finally:
+            ib.disconnect()
 
 
 def _request_account_values(ib: IB, account: str | None) -> Iterable[object]:
@@ -576,6 +725,7 @@ def _manual_result(proposed: ProposedTrade, status: str, message: str | None = N
         filled=0.0,
         average_fill_price=None,
         message=message,
+        order_ref=proposed.order_ref,
     )
 
 

@@ -78,6 +78,9 @@ Terraform creates one small VM, one standard boot disk, one dedicated VPC/subnet
 
 ```text
 plan rebalance
+  -> paper/live: check the order ledger for unresolved orders from a prior session
+      -> STALE_ORDER_POLICY=block (default): block this rebalance until reconciled/cancelled
+      -> STALE_ORDER_POLICY=cancel: cancel them, then continue planning
   -> paper/live: read one broker AccountSnapshot (cash + positions + net liquidation)
   -> resolve portfolio value via MANAGED_CAP_MODE
   -> build a StrategyTargetBook per allocated strategy sleeve
@@ -88,13 +91,32 @@ plan rebalance
   -> paper/live: execution-start Telegram alert
       -> broker readiness check: connected, authenticated, configured account visible
       -> if unavailable: deduplicated broker-unavailable alert + no order-created spam
-      -> if ready: submit orders and emit broker-accepted status/final/failure callbacks
+      -> if ready:
+          -> tag every order with an idempotent orderRef (poma:<run_id>:<index>:<ticker>:<side>)
+          -> submit sell orders first, then buy orders, each with explicit ORDER_TIME_IN_FORCE
+          -> record every submission and status change in the order ledger
+          -> emit broker-accepted status/final/failure callbacks
       -> write final report + reconciliation (state/reconciliations/<run_id>.json)
       -> Telegram final summary
       -> local state status: completed or completed_with_order_issues
 ```
 
 Order status notifications are best-effort. Telegram failure never causes duplicate trading attempts or changes local run-state semantics.
+
+## Order lifecycle management
+
+Reaching `PreSubmitted`/`Submitted` only means IBKR accepted the order; a limit order can sit there unfilled indefinitely. POMA tracks that separately from broker acceptance with a durable order ledger and an explicit follow-up command:
+
+```text
+ExecutionManager (src/poma/execution_manager.py)
+  -> tags every trade with a stable orderRef and records a lifecycle ledger entry
+  -> stages sells before buys so a rebalance never assumes unconfirmed sell proceeds
+  -> IbkrBroker (src/poma/broker.py) stays a thin adapter: submit/cancel/replace/query only
+  -> internal lifecycle: planned -> submitted -> broker_accepted -> partially_filled
+       -> filled | replace_pending -> cancel_pending -> cancelled | rejected | expired
+```
+
+`poma reconcile-orders` polls the broker for every open POMA-tagged order (matched by `orderRef`, which survives an API reconnect) and applies the timeout policy: replace once with a more aggressive limit after `REPLACE_AFTER_SECONDS`, then cancel after `CANCEL_AFTER_SECONDS` if still unfilled. Run it on a schedule (e.g. every 1-2 minutes) so working orders are followed up even after the rebalance process has exited; it also sends a Telegram alert on every lifecycle change. The next scheduled rebalance itself checks for orders left open from a *prior* session before planning (see `STALE_ORDER_POLICY` in `docs/configuration.md`) so a forgotten open order cannot silently double up with a fresh plan.
 
 ## Runtime files
 
@@ -103,6 +125,9 @@ state/rebalance_state.json       # last completed trading session
                                      # includes completed_with_order_issues as terminal
 state/orders/<run_id>.json       # planned trades, strategy attribution, target book hash,
                                      # and the expected account snapshot; written before submission
+state/orders/open_orders.jsonl   # durable order lifecycle ledger snapshot; one line per order
+                                     # not yet in a terminal state, keyed by orderRef
+state/orders/order_events.jsonl # append-only log of every lifecycle transition ever recorded
 state/reconciliations/<run_id>.json  # order results and a post-trade account snapshot;
                                      # written after submission, best-effort
 
@@ -126,4 +151,7 @@ reports/*.json                   # generated rebalance reports
 | Wrong IBKR account | Deploy validation requires an account id; `poma ibkr-check` verifies it appears in managed accounts. |
 | Gateway not authenticated or connection lost before order acceptance | Broker readiness and per-order connection guards mark the batch `BrokerUnavailable` without emitting misleading `Created` alerts. |
 | Order timeout/cancel/failure | Order lifecycle alert plus final `completed_with_order_issues` state. |
+| Limit order accepted but never fills | `poma reconcile-orders` replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`, independent of the rebalance process lifetime. |
+| Open orders left over from a prior session | The next rebalance blocks (or auto-cancels, per `STALE_ORDER_POLICY`) instead of silently layering a new plan on top. |
+| Process crash mid-submission | Every order is tagged with an idempotent `orderRef` and recorded in the order ledger before submission, so a reconnect can recognize what was already sent. |
 | Public SSH exposure | Terraform only allows SSH through IAP TCP forwarding. |

@@ -59,6 +59,7 @@ pytest
 | `poma refresh-market-data` | Fetch the configured provider, save current/historical snapshots under `DATA_DIR`, and prepare rank-history inputs. |
 | `poma monitor` | Cron entrypoint: rebalances once per session when the market timing and state allow it. |
 | `poma rebalance [--dry-run]` | Run a rebalance now. |
+| `poma reconcile-orders` | Poll IBKR for open POMA orders and apply the replace-once/cancel timeout policy; run on a schedule to follow up on working limit orders after the rebalance process exits. |
 | `poma positions` | Print the broker's current stock portfolio. |
 | `poma doctor` | Check config, market-data provider, and IBKR connectivity. |
 | `poma ibkr-check` | Probe only the IBKR API handshake. |

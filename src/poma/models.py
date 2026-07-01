@@ -97,6 +97,7 @@ class ProposedTrade:
     reference_price: float
     limit_price: float | None
     reason: str
+    order_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,23 @@ class OrderResult:
     filled: float
     average_fill_price: float | None
     message: str | None = None
+    order_ref: str | None = None
+    perm_id: int | None = None
+
+
+@dataclass(frozen=True)
+class OpenOrderSnapshot:
+    """One broker-reported open order, as returned by a lifecycle reconciliation poll."""
+
+    order_ref: str | None
+    order_id: int | None
+    perm_id: int | None
+    ticker: str
+    side: OrderSide
+    raw_status: str
+    filled: float
+    remaining: float
+    avg_fill_price: float | None
 
 
 @dataclass(frozen=True)

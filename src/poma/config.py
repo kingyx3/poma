@@ -30,6 +30,13 @@ class ManagedCapMode(StrEnum):
     MIN_OF_BROKER_TOTAL_AND_CAP = "min_of_broker_total_and_cap"
 
 
+class StaleOrderPolicy(StrEnum):
+    """What to do when a new rebalance finds unresolved open orders from a prior session."""
+
+    BLOCK = "block"
+    CANCEL = "cancel"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -94,6 +101,11 @@ class Settings(BaseSettings):
         default=3,
         alias="MAX_CONSECUTIVE_ORDER_ACCEPTANCE_FAILURES",
     )
+    order_time_in_force: str = Field(default="DAY", alias="ORDER_TIME_IN_FORCE")
+    replace_after_seconds: PositiveInt = Field(default=120, alias="REPLACE_AFTER_SECONDS")
+    cancel_after_seconds: PositiveInt = Field(default=300, alias="CANCEL_AFTER_SECONDS")
+    replace_price_improvement_bps: float = Field(default=15.0, alias="REPLACE_PRICE_IMPROVEMENT_BPS")
+    stale_order_policy: StaleOrderPolicy = Field(default=StaleOrderPolicy.BLOCK, alias="STALE_ORDER_POLICY")
 
     ibkr_host: str = Field(default="127.0.0.1", alias="IBKR_HOST")
     ibkr_port: int = Field(default=7497, alias="IBKR_PORT")
@@ -118,7 +130,7 @@ class Settings(BaseSettings):
             raise ValueError("percentage settings must be between 0 and 1")
         return value
 
-    @field_validator("limit_offset_bps")
+    @field_validator("limit_offset_bps", "replace_price_improvement_bps")
     @classmethod
     def bps_non_negative(cls, value: float) -> float:
         if value < 0:
@@ -158,6 +170,8 @@ class Settings(BaseSettings):
                 "MANAGED_CAP_USD must be greater than 0 when "
                 "MANAGED_CAP_MODE=min_of_broker_total_and_cap"
             )
+        if self.cancel_after_seconds <= self.replace_after_seconds:
+            raise ValueError("CANCEL_AFTER_SECONDS must be greater than REPLACE_AFTER_SECONDS")
         return self
 
     def strategy_allocation_map(self) -> dict[str, float]:

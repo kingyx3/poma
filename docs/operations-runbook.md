@@ -54,6 +54,12 @@ Do not skip paper validation. Before live:
 6. Deploy with `trading_mode=live`, `data_provider=yahoo`, and `allow_live_trading=true`.
 7. Manually review the first live report immediately after execution.
 
+## Order lifecycle follow-up
+
+Reaching `PreSubmitted`/`Submitted` only means IBKR accepted the order; a working limit order can sit unfilled indefinitely. Schedule `poma reconcile-orders` on its own cron entry (every 1-2 minutes is reasonable) so working orders are followed up even after the rebalance process exits: it polls IBKR for every open POMA-tagged order, replaces a still-unfilled order once with a more aggressive limit after `REPLACE_AFTER_SECONDS`, cancels it after `CANCEL_AFTER_SECONDS` if still unfilled, and sends a Telegram alert on every lifecycle change. It is a no-op in `dry_run` mode and safe to run even when there is nothing open.
+
+The next scheduled rebalance also checks the order ledger for anything still open from a *prior* session before planning. By default (`STALE_ORDER_POLICY=block`) it blocks until those orders are reconciled or cancelled manually; set `STALE_ORDER_POLICY=cancel` to have it cancel them automatically instead. Orders still open from the *current* session are reported but never block a retry of that same session.
+
 ## Session state control
 
 POMA treats `completed`, `completed_with_order_issues`, `no_orders_accepted`, `dry_run`, `blocked`, and `failed` as session attempts. After any of these statuses, cron will not automatically rebalance that same market session again.
@@ -71,7 +77,8 @@ POMA sends:
 - one deduplicated broker-unavailable alert when the gateway/API is not ready before order acceptance;
 - final rebalance summaries, including `completed_with_order_issues` if any order is not filled or has a diagnostic message;
 - `no_orders_accepted` summaries when IBKR rejects or cancels the whole order batch before any order is accepted;
-- run failure alerts when the rebalance command raises.
+- run failure alerts when the rebalance command raises;
+- order lifecycle alerts from `poma reconcile-orders`: every replace, cancel, and terminal status found on a later poll.
 
 Normal cron checks outside the rebalance window are console-only to avoid Telegram spam.
 
@@ -87,6 +94,8 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 | `completed_with_order_issues` | One or more orders failed, cancelled, timed out, or only partially progressed | Open the latest report in `reports/`, check Telegram order details, then review IBKR activity. |
 | `blocked` rebalance | Risk guard blocked execution, usually broker balance, turnover/order-size/trade-count | Review report warnings and adjust config or Gateway only if the block is expected and safe. |
 | No rank-history snapshot | First run or insufficient snapshot history | Run `poma refresh-market-data`; strategy will fallback to current market-cap ranking until history exists. |
+| Limit order accepted but never fills | Working limit price never crossed the market | Confirm `poma reconcile-orders` is scheduled; it replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`. Run it manually to force an immediate check. |
+| New rebalance blocked: "open order(s) from a prior session" | A previous session's order never reached a terminal state | Run `poma reconcile-orders` to resolve it, or set `STALE_ORDER_POLICY=cancel` to have the next rebalance cancel it automatically. |
 | Telegram missing | Wrong chat id, bot not started in the chat, or Telegram outage | Use **Discover Telegram chat ID** and send `/start` or a new message while it polls. |
 
 ## Useful VM commands
@@ -100,6 +109,7 @@ sudo -u poma $compose run --rm poma doctor
 sudo -u poma $compose run --rm poma ibkr-check
 sudo -u poma $compose run --rm poma positions
 sudo -u poma $compose run --rm poma rebalance --session-date manual-check --dry-run
+sudo -u poma $compose run --rm poma reconcile-orders
 sudo -u poma tail -n 200 logs/poma.log
 ```
 
