@@ -8,6 +8,8 @@ from poma.models import OpenOrderSnapshot, OrderResult, OrderSide
 
 ORDER_REF_PREFIX = "poma"
 EXECUTION_QUOTE_BLOCKED_STATUS = "QuoteBlocked"
+BUYING_POWER_BLOCKED_STATUS = "BuyingPowerBlocked"
+IDEMPOTENT_REPLAY_STATUS = "IdempotentReplay"
 
 
 class OrderLifecycleState(StrEnum):
@@ -48,7 +50,13 @@ WORKING_LIFECYCLE_STATES = frozenset(
 )
 
 _RAW_TERMINAL_CANCELLED = {"Cancelled", "ApiCancelled"}
-_RAW_SUBMISSION_FAILURE = {"Failed", "BrokerUnavailable", "OrderNotAccepted", EXECUTION_QUOTE_BLOCKED_STATUS}
+_RAW_SUBMISSION_FAILURE = {
+    "Failed",
+    "BrokerUnavailable",
+    "OrderNotAccepted",
+    EXECUTION_QUOTE_BLOCKED_STATUS,
+    BUYING_POWER_BLOCKED_STATUS,
+}
 
 
 def build_order_ref(run_id: str, index: int, ticker: str, side: OrderSide) -> str:

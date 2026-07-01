@@ -30,9 +30,12 @@ class RecordingBroker:
         self.next_order_id = 1
         self.quotes_override: dict[str, ExecutionQuote] | None = None
         self.execution_quote_requests: list[list[str]] = []
+        self.cash_usd = 10_000.0
+        self.account_snapshot_calls = 0
 
     def account_snapshot(self) -> AccountSnapshot:
-        return AccountSnapshot(cash_usd=10_000.0, positions=(), positions_market_value_usd=0.0)
+        self.account_snapshot_calls += 1
+        return AccountSnapshot(cash_usd=self.cash_usd, positions=(), positions_market_value_usd=0.0)
 
     def submit_trades(self, trades, status_callback=None) -> list[OrderResult]:
         self.submitted_batches.append(list(trades))
@@ -170,7 +173,7 @@ def test_check_stale_orders_blocks_on_prior_session_open_orders(tmp_path: Path) 
     manager = ExecutionManager(broker, store, make_settings())
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-06-30"))
 
-    check = manager.check_stale_orders("2026-07-01")
+    check = manager.check_stale_orders("2026-07-01", "run-2")
 
     assert any("block execution" in warning for warning in check.warnings)
     assert broker.cancelled_order_ids == []
@@ -182,7 +185,7 @@ def test_check_stale_orders_cancel_policy_cancels_prior_session_orders(tmp_path:
     manager = ExecutionManager(broker, store, make_settings(STALE_ORDER_POLICY="cancel"))
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-06-30"))
 
-    check = manager.check_stale_orders("2026-07-01")
+    check = manager.check_stale_orders("2026-07-01", "run-2")
 
     assert broker.cancelled_order_ids == [1]
     assert not any("block execution" in warning for warning in check.warnings)
@@ -191,16 +194,41 @@ def test_check_stale_orders_cancel_policy_cancels_prior_session_orders(tmp_path:
     assert open_orders[0].lifecycle_state == OrderLifecycleState.CANCEL_PENDING
 
 
-def test_check_stale_orders_does_not_block_on_same_session_open_orders(tmp_path: Path) -> None:
+def test_check_stale_orders_does_not_block_on_same_run_open_orders(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())
-    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-07-01"))
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-07-01", run_id="run-1"))
 
-    check = manager.check_stale_orders("2026-07-01")
+    check = manager.check_stale_orders("2026-07-01", "run-1")
 
     assert not any("block execution" in warning for warning in check.warnings)
-    assert any("this session" in warning for warning in check.warnings)
+    assert any("this run" in warning for warning in check.warnings)
+
+
+def test_check_stale_orders_blocks_on_same_session_different_run_open_orders(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-07-01", run_id="run-1"))
+
+    check = manager.check_stale_orders("2026-07-01", "run-2")
+
+    assert any("block execution" in warning for warning in check.warnings)
+    assert any("different run in this session" in warning for warning in check.warnings)
+    assert broker.cancelled_order_ids == []
+
+
+def test_check_stale_orders_cancel_policy_cancels_same_session_different_run_orders(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings(STALE_ORDER_POLICY="cancel"))
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-07-01", run_id="run-1"))
+
+    check = manager.check_stale_orders("2026-07-01", "run-2")
+
+    assert broker.cancelled_order_ids == [1]
+    assert not any("block execution" in warning for warning in check.warnings)
 
 
 def test_reconcile_replaces_once_after_replace_after_seconds(tmp_path: Path) -> None:
@@ -444,3 +472,65 @@ def test_reconcile_replace_is_skipped_when_no_fresh_quote_is_available(tmp_path:
 
     assert summary.updates[0].action is None
     assert store.load_open_orders()[0].replace_count == 0
+
+
+def test_submit_plan_retry_of_same_run_does_not_resubmit_and_returns_idempotent_replay(
+    tmp_path: Path,
+) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    plan = _plan([_trade("AAPL", OrderSide.BUY)], run_id="run-1")
+
+    first_results = manager.submit_plan(plan)
+    second_results = manager.submit_plan(plan)
+
+    assert first_results[0].status == "Submitted"
+    assert len(broker.submitted_batches) == 1
+    assert second_results[0].status == "IdempotentReplay"
+    assert second_results[0].order_id == first_results[0].order_id
+    open_orders = store.load_open_orders()
+    assert len(open_orders) == 1
+
+
+def test_submit_plan_blocks_buys_when_refreshed_cash_is_insufficient_after_sells(
+    tmp_path: Path,
+) -> None:
+    broker = RecordingBroker()
+    broker.cash_usd = 100.0
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    trades = [_trade("AAPL", OrderSide.BUY), _trade("MSFT", OrderSide.SELL)]
+
+    results = manager.submit_plan(_plan(trades))
+
+    results_by_ticker = {result.ticker: result for result in results}
+    assert results_by_ticker["MSFT"].status == "Submitted"
+    assert results_by_ticker["AAPL"].status == "BuyingPowerBlocked"
+    assert "refreshed broker cash" in results_by_ticker["AAPL"].message
+    assert len(broker.submitted_batches) == 1
+    assert broker.submitted_batches[0][0].side == OrderSide.SELL
+    open_orders = store.load_open_orders()
+    assert all(order.ticker != "AAPL" for order in open_orders)
+
+
+def test_submit_plan_refreshes_cash_after_sell_phase_before_buys(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    trades = [_trade("AAPL", OrderSide.BUY), _trade("MSFT", OrderSide.SELL)]
+
+    manager.submit_plan(_plan(trades))
+
+    assert broker.account_snapshot_calls == 1
+
+
+def test_submit_plan_does_not_refresh_cash_when_there_are_no_buys(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    trades = [_trade("MSFT", OrderSide.SELL)]
+
+    manager.submit_plan(_plan(trades))
+
+    assert broker.account_snapshot_calls == 0

@@ -2,6 +2,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml"
+POMA_CRON = REPO_ROOT / "ops/cron/poma.cron"
 
 
 def test_deploy_runs_app_install_and_cron() -> None:
@@ -9,6 +10,18 @@ def test_deploy_runs_app_install_and_cron() -> None:
 
     assert "bash ops/scripts/deploy.sh" in workflow
     assert "crontab ops/cron/poma.cron" in workflow
+
+
+def test_deployed_cron_schedules_order_reconciliation() -> None:
+    """Working orders must be followed up independent of the rebalance process lifetime.
+
+    Without this cron entry, an accepted-but-unfilled order is never replaced or cancelled
+    (see ``ExecutionManager.reconcile``), so it can sit open indefinitely and block the next
+    session's rebalance via the stale-order check.
+    """
+    cron = POMA_CRON.read_text(encoding="utf-8")
+
+    assert "poma reconcile-orders" in cron
 
 
 def test_deploy_does_not_provision_gateway_runtime() -> None:

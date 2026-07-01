@@ -8,7 +8,9 @@ from poma.config import ExecutionPriceSource, Settings, StaleOrderPolicy
 from poma.execution_pricing import apply_execution_quotes, build_limit_price, compute_spread_bps, select_execution_price
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.order_lifecycle import (
+    BUYING_POWER_BLOCKED_STATUS,
     EXECUTION_QUOTE_BLOCKED_STATUS,
+    IDEMPOTENT_REPLAY_STATUS,
     WORKING_LIFECYCLE_STATES,
     OrderLedgerEntry,
     OrderLifecycleState,
@@ -61,39 +63,143 @@ class ExecutionManager:
     ) -> list[OrderResult]:
         """Submit sells before buys, tagging every order with an idempotent orderRef.
 
-        Sells are staged first so a rebalance does not rely on buying power that has not yet
-        been confirmed by the broker. Every trade in ``plan.trades`` is tagged with a stable
+        Sells are staged first so cash is refreshed from the broker before buys are sized
+        against it (see ``_block_buys_for_insufficient_cash``): unfilled limit sells are never
+        assumed to provide buying power. Every trade in ``plan.trades`` is tagged with a stable
         ``orderRef`` and recorded in the durable order ledger before submission, so a crash
-        mid-run still leaves a trace of what was sent. Immediately before each phase is sent to
-        the broker, it is repriced off a fresh execution quote (see ``_reprice_for_execution``);
-        trades that fail a freshness/spread/delayed-quote check are blocked instead of submitted.
+        mid-run still leaves a trace of what was sent. If a retry of the same run finds a
+        non-terminal ledger entry already recorded for a trade's ``orderRef``, that trade is not
+        resubmitted; an ``IdempotentReplay`` result is returned instead (see
+        ``_idempotent_replay``). Immediately before each phase is sent to the broker, it is
+        repriced off a fresh execution quote (see ``_reprice_for_execution``); trades that fail a
+        freshness/spread/delayed-quote check are blocked instead of submitted.
         """
         sells = [trade for trade in plan.trades if trade.side == OrderSide.SELL]
         buys = [trade for trade in plan.trades if trade.side == OrderSide.BUY]
         tagged_sells = self._tag(plan.run_id, sells, offset=0)
         tagged_buys = self._tag(plan.run_id, buys, offset=len(sells))
 
-        for trade in (*tagged_sells, *tagged_buys):
-            self._record_planned(plan, trade)
-
         results_by_ticker: dict[str, OrderResult] = {}
-        for phase_trades in (tagged_sells, tagged_buys):
-            if not phase_trades:
-                continue
-            submittable, blocked_results = self._reprice_for_execution(plan, phase_trades, status_callback)
-            for trade, result in blocked_results:
-                results_by_ticker[trade.ticker] = result
-            if not submittable:
-                continue
-            phase_results = self.broker.submit_trades(
-                submittable,
-                status_callback=self._wrap_callback(plan, status_callback),
-            )
-            for trade, result in zip(submittable, phase_results, strict=True):
-                results_by_ticker[trade.ticker] = result
-                self._record_result(plan, trade, result)
+        fresh_sells = self._plan_phase(tagged_sells, results_by_ticker, status_callback, plan=plan)
+        fresh_buys = self._plan_phase(tagged_buys, results_by_ticker, status_callback, plan=plan)
+
+        self._submit_phase(plan, fresh_sells, results_by_ticker, status_callback)
+
+        if fresh_buys:
+            block_reason = self._block_buys_for_insufficient_cash(fresh_buys)
+            if block_reason is not None:
+                for trade in fresh_buys:
+                    result = OrderResult(
+                        ticker=trade.ticker,
+                        side=trade.side,
+                        quantity=trade.quantity,
+                        notional=trade.notional,
+                        order_id=None,
+                        status=BUYING_POWER_BLOCKED_STATUS,
+                        filled=0.0,
+                        average_fill_price=None,
+                        message=block_reason,
+                        order_ref=trade.order_ref,
+                    )
+                    results_by_ticker[trade.ticker] = result
+                    self._record_result(plan, trade, result)
+                    if status_callback is not None:
+                        status_callback(trade, result)
+            else:
+                self._submit_phase(plan, fresh_buys, results_by_ticker, status_callback)
 
         return [results_by_ticker[trade.ticker] for trade in plan.trades]
+
+    def _plan_phase(
+        self,
+        trades: list[ProposedTrade],
+        results_by_ticker: dict[str, OrderResult],
+        status_callback: OrderStatusCallback | None,
+        *,
+        plan: RebalancePlan,
+    ) -> list[ProposedTrade]:
+        """Record each trade as planned, skipping (and replaying) any already-submitted retry."""
+        fresh: list[ProposedTrade] = []
+        for trade in trades:
+            replay = self._idempotent_replay(trade)
+            if replay is not None:
+                results_by_ticker[trade.ticker] = replay
+                if status_callback is not None:
+                    status_callback(trade, replay)
+                continue
+            self._record_planned(plan, trade)
+            fresh.append(trade)
+        return fresh
+
+    def _idempotent_replay(self, trade: ProposedTrade) -> OrderResult | None:
+        """Return a replay result if this orderRef was already submitted by an earlier attempt.
+
+        Only a non-terminal ledger entry counts: a ``PLANNED``-only entry means a prior attempt
+        crashed before reaching the broker, so it is safe (and necessary) to submit it now.
+        """
+        assert trade.order_ref is not None
+        entry = self.store.get(trade.order_ref)
+        if entry is None or entry.lifecycle_state == OrderLifecycleState.PLANNED:
+            return None
+        return OrderResult(
+            ticker=trade.ticker,
+            side=trade.side,
+            quantity=trade.quantity,
+            notional=trade.notional,
+            order_id=entry.order_id,
+            status=IDEMPOTENT_REPLAY_STATUS,
+            filled=entry.filled_qty,
+            average_fill_price=entry.avg_fill_price,
+            message=(
+                f"orderRef {trade.order_ref} already {entry.lifecycle_state.value} from an "
+                "earlier attempt of this run; not resubmitted"
+            ),
+            order_ref=trade.order_ref,
+            perm_id=entry.perm_id,
+        )
+
+    def _block_buys_for_insufficient_cash(self, buys: list[ProposedTrade]) -> str | None:
+        """Refresh broker cash after the sell phase and block buys it cannot cover.
+
+        Unfilled (or partially filled) limit sells are not assumed to provide buying power;
+        only cash the broker actually reports after the sell phase counts.
+        """
+        buy_notional = sum(trade.notional for trade in buys)
+        if buy_notional <= 1e-9:
+            return None
+        try:
+            refreshed = self.broker.account_snapshot()
+        except Exception as exc:  # noqa: BLE001 - fail closed on an unreadable post-sell cash read
+            return f"unable to refresh broker cash before submitting buys; block buys: {exc}"
+        if refreshed.cash_usd + 1e-6 < buy_notional:
+            return (
+                f"refreshed broker cash (${refreshed.cash_usd:,.2f}) does not cover planned buy "
+                f"notional (${buy_notional:,.2f}) after the sell phase; unfilled sells are not "
+                "assumed to provide buying power"
+            )
+        return None
+
+    def _submit_phase(
+        self,
+        plan: RebalancePlan,
+        trades: list[ProposedTrade],
+        results_by_ticker: dict[str, OrderResult],
+        status_callback: OrderStatusCallback | None,
+    ) -> None:
+        if not trades:
+            return
+        submittable, blocked_results = self._reprice_for_execution(plan, trades, status_callback)
+        for trade, result in blocked_results:
+            results_by_ticker[trade.ticker] = result
+        if not submittable:
+            return
+        phase_results = self.broker.submit_trades(
+            submittable,
+            status_callback=self._wrap_callback(plan, status_callback),
+        )
+        for trade, result in zip(submittable, phase_results, strict=True):
+            results_by_ticker[trade.ticker] = result
+            self._record_result(plan, trade, result)
 
     def _reprice_for_execution(
         self,
@@ -207,45 +313,58 @@ class ExecutionManager:
 
     # --- Stale-order check before a new rebalance ---------------------------------------
 
-    def check_stale_orders(self, session_date: str) -> StaleOrderCheck:
-        """Block (or cancel) unresolved open orders from a prior session before replanning.
+    def check_stale_orders(self, session_date: str, run_id: str) -> StaleOrderCheck:
+        """Block (or cancel) unresolved open orders that are not from this exact run.
 
-        Open orders from *this* session are reported informationally only: a legitimate retry
-        of the same session should not be blocked by its own still-working orders.
+        Orders from a prior session, or from a *different* run within the same session, are
+        foreign to this attempt and are blocked (or cancelled, per ``stale_order_policy``)
+        before planning continues. Open orders from *this run* are reported informationally
+        only: a legitimate retry of the same run relies on ``submit_plan``'s idempotent replay
+        rather than being blocked by its own still-working orders.
         """
         open_entries = [entry for entry in self.store.load_open_orders() if not entry.is_terminal]
         other_session = [entry for entry in open_entries if entry.session_date != session_date]
-        same_session = [entry for entry in open_entries if entry.session_date == session_date]
+        same_session_foreign_run = [
+            entry for entry in open_entries if entry.session_date == session_date and entry.run_id != run_id
+        ]
+        same_run = [entry for entry in open_entries if entry.session_date == session_date and entry.run_id == run_id]
 
         warnings: list[str] = []
         cancelled: list[str] = []
-        if other_session:
-            tickers = ", ".join(sorted({entry.ticker for entry in other_session}))
+        for group, label in (
+            (other_session, "a prior session"),
+            (same_session_foreign_run, "a different run in this session"),
+        ):
+            if not group:
+                continue
+            tickers = ", ".join(sorted({entry.ticker for entry in group}))
             if self.settings.stale_order_policy == StaleOrderPolicy.CANCEL:
-                for entry in other_session:
+                group_cancelled: list[str] = []
+                for entry in group:
                     if entry.order_id is not None and self.broker.cancel_order(entry.order_id):
                         self.store.upsert(
                             replace(
                                 entry,
                                 lifecycle_state=OrderLifecycleState.CANCEL_PENDING,
-                                terminal_reason="cancelled: unresolved order from a prior session",
+                                terminal_reason=f"cancelled: unresolved order from {label}",
                             )
                         )
-                        cancelled.append(entry.ledger_key)
+                        group_cancelled.append(entry.ledger_key)
+                cancelled.extend(group_cancelled)
                 warnings.append(
-                    f"cancelled {len(cancelled)} open order(s) from a prior session before planning "
+                    f"cancelled {len(group_cancelled)} open order(s) from {label} before planning "
                     f"({tickers})"
                 )
             else:
                 warnings.append(
-                    f"{len(other_session)} open order(s) from a prior session are still unresolved "
+                    f"{len(group)} open order(s) from {label} are still unresolved "
                     f"({tickers}); run `poma reconcile-orders` or cancel manually before this session "
                     f"can trade; block execution"
                 )
-        if same_session:
-            tickers = ", ".join(sorted({entry.ticker for entry in same_session}))
+        if same_run:
+            tickers = ", ".join(sorted({entry.ticker for entry in same_run}))
             warnings.append(
-                f"{len(same_session)} open order(s) from this session are still unresolved ({tickers}); "
+                f"{len(same_run)} open order(s) from this run are still unresolved ({tickers}); "
                 "run `poma reconcile-orders` to follow up"
             )
         return StaleOrderCheck(warnings=tuple(warnings), cancelled_ledger_keys=tuple(cancelled))

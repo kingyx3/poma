@@ -67,7 +67,9 @@ class RebalanceEngine:
         warnings: list[str] = []
         if self.order_store is not None and settings.trading_mode != TradingMode.DRY_RUN:
             warnings.extend(
-                ExecutionManager(self.broker, self.order_store, settings).check_stale_orders(session_date).warnings
+                ExecutionManager(self.broker, self.order_store, settings)
+                .check_stale_orders(session_date, run_id)
+                .warnings
             )
         account_snapshot = self._account_snapshot(warnings)
         portfolio_value_usd = self._resolve_portfolio_value_usd(account_snapshot)
