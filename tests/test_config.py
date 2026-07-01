@@ -35,6 +35,25 @@ def test_default_strategy_is_us_top_market_cap_top_100() -> None:
     assert settings.min_weight_delta_pct == 0.0025
 
 
+def test_non_fractional_tickers_default_to_no_overrides() -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+    )
+    assert settings.execution_rules() == {}
+
+
+def test_non_fractional_tickers_builds_whole_share_rules() -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        NON_FRACTIONAL_TICKERS="aapl, MSFT",
+    )
+    rules = settings.execution_rules()
+    assert set(rules) == {"AAPL", "MSFT"}
+    assert rules["AAPL"].allows_fractional is False
+
+
 def test_strategy_allocations_reject_unregistered_strategy_names() -> None:
     with pytest.raises(ValidationError, match="unregistered strategies"):
         Settings(

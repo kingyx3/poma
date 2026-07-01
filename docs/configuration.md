@@ -32,6 +32,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset from reference price. |
 | `MAX_ORDER_NOTIONAL_USD` | yes | `2000` | Blocks unexpectedly large orders. Must be at least `MIN_TRADE_NOTIONAL_USD`. |
 | `MAX_DAILY_TRADES` | yes | `100` | Allows a full rebalance while still capping trade count. Must be at least `MAX_HOLDINGS` for full bootstrap. |
+| `NON_FRACTIONAL_TICKERS` | no | `` (empty) | Comma-separated tickers to round down to whole shares instead of sending fractional orders. Every other ticker defaults to fractional-friendly sizing, since a small managed cap depends on fractional quantities to hit target weights. Only list tickers confirmed to reject fractional orders at the broker. |
 | `ORDER_STATUS_TIMEOUT_SECONDS` | yes | `60` | Time to wait for broker order status before marking follow-up needed. |
 | `CANCEL_STALE_ORDERS` | yes | `true` | Request cancel when an order does not reach a terminal status in time. |
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
