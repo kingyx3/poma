@@ -78,10 +78,13 @@ class ExecutionManager:
         buys = [trade for trade in plan.trades if trade.side == OrderSide.BUY]
         tagged_sells = self._tag(plan.run_id, sells, offset=0)
         tagged_buys = self._tag(plan.run_id, buys, offset=len(sells))
+        all_tagged = (*tagged_sells, *tagged_buys)
+        latest_by_ref = self.store.get_latest_many(trade.order_ref for trade in all_tagged)
 
         results_by_ticker: dict[str, OrderResult] = {}
-        fresh_sells = self._plan_phase(tagged_sells, results_by_ticker, status_callback, plan=plan)
-        fresh_buys = self._plan_phase(tagged_buys, results_by_ticker, status_callback, plan=plan)
+        plan_phase_kwargs = {"plan": plan, "latest_by_ref": latest_by_ref}
+        fresh_sells = self._plan_phase(tagged_sells, results_by_ticker, status_callback, **plan_phase_kwargs)
+        fresh_buys = self._plan_phase(tagged_buys, results_by_ticker, status_callback, **plan_phase_kwargs)
 
         self._submit_phase(plan, fresh_sells, results_by_ticker, status_callback)
 
@@ -89,18 +92,7 @@ class ExecutionManager:
             block_reason = self._block_buys_for_insufficient_cash(fresh_buys)
             if block_reason is not None:
                 for trade in fresh_buys:
-                    result = OrderResult(
-                        ticker=trade.ticker,
-                        side=trade.side,
-                        quantity=trade.quantity,
-                        notional=trade.notional,
-                        order_id=None,
-                        status=BUYING_POWER_BLOCKED_STATUS,
-                        filled=0.0,
-                        average_fill_price=None,
-                        message=block_reason,
-                        order_ref=trade.order_ref,
-                    )
+                    result = self._blocked_result(trade, BUYING_POWER_BLOCKED_STATUS, block_reason)
                     results_by_ticker[trade.ticker] = result
                     self._record_result(plan, trade, result)
                     if status_callback is not None:
@@ -117,11 +109,12 @@ class ExecutionManager:
         status_callback: OrderStatusCallback | None,
         *,
         plan: RebalancePlan,
+        latest_by_ref: dict[str, OrderLedgerEntry],
     ) -> list[ProposedTrade]:
         """Record each trade as planned, skipping (and replaying) any already-submitted retry."""
         fresh: list[ProposedTrade] = []
         for trade in trades:
-            replay = self._idempotent_replay(trade)
+            replay = self._idempotent_replay(trade, latest_by_ref)
             if replay is not None:
                 results_by_ticker[trade.ticker] = replay
                 if status_callback is not None:
@@ -131,14 +124,21 @@ class ExecutionManager:
             fresh.append(trade)
         return fresh
 
-    def _idempotent_replay(self, trade: ProposedTrade) -> OrderResult | None:
+    def _idempotent_replay(
+        self,
+        trade: ProposedTrade,
+        latest_by_ref: dict[str, OrderLedgerEntry],
+    ) -> OrderResult | None:
         """Return a replay result if this orderRef was already submitted by an earlier attempt.
 
-        Only a non-terminal ledger entry counts: a ``PLANNED``-only entry means a prior attempt
+        Looks up both open and terminal history (see ``OrderStore.get_latest_many``): a same-run
+        retry must recognize an order that already reached a terminal state (e.g. filled) just as
+        much as one still working, or it would resubmit a duplicate for an order that already
+        completed. Only a ``PLANNED``-only entry does not count, since that means a prior attempt
         crashed before reaching the broker, so it is safe (and necessary) to submit it now.
         """
         assert trade.order_ref is not None
-        entry = self.store.get(trade.order_ref)
+        entry = latest_by_ref.get(trade.order_ref)
         if entry is None or entry.lifecycle_state == OrderLifecycleState.PLANNED:
             return None
         return OrderResult(
@@ -178,6 +178,21 @@ class ExecutionManager:
                 "assumed to provide buying power"
             )
         return None
+
+    @staticmethod
+    def _blocked_result(trade: ProposedTrade, status: str, message: str) -> OrderResult:
+        return OrderResult(
+            ticker=trade.ticker,
+            side=trade.side,
+            quantity=trade.quantity,
+            notional=trade.notional,
+            order_id=None,
+            status=status,
+            filled=0.0,
+            average_fill_price=None,
+            message=message,
+            order_ref=trade.order_ref,
+        )
 
     def _submit_phase(
         self,
@@ -232,18 +247,7 @@ class ExecutionManager:
                 (warning for warning in warnings if trade.ticker in warning),
                 "execution quote check failed; block execution",
             )
-            result = OrderResult(
-                ticker=trade.ticker,
-                side=trade.side,
-                quantity=trade.quantity,
-                notional=trade.notional,
-                order_id=None,
-                status=EXECUTION_QUOTE_BLOCKED_STATUS,
-                filled=0.0,
-                average_fill_price=None,
-                message=reason,
-                order_ref=trade.order_ref,
-            )
+            result = self._blocked_result(trade, EXECUTION_QUOTE_BLOCKED_STATUS, reason)
             self._record_result(plan, trade, result)
             if status_callback is not None:
                 status_callback(trade, result)

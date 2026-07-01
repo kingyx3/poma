@@ -20,7 +20,7 @@ from poma.models import (
     OrderSide,
     ProposedTrade,
 )
-from poma.order_lifecycle import ORDER_REF_PREFIX
+from poma.order_lifecycle import IDEMPOTENT_REPLAY_STATUS, ORDER_REF_PREFIX
 
 # ib_insync reports market data type as an int on the ticker/reqMarketDataType callback:
 # 1=live, 2=frozen, 3=delayed, 4=delayed-frozen. Only live/frozen reflect real-time prices.
@@ -830,13 +830,28 @@ def _none_if_zero(value: float | None) -> float | None:
     return float(value)
 
 
+def _is_idempotent_replay(result: OrderResult) -> bool:
+    """An IdempotentReplay result reports on an order an earlier attempt already submitted.
+
+    Its ``message`` is purely informational (not a diagnostic of a problem), and the order it
+    reports on was, by construction, already accepted by (or resolved at) the broker before this
+    run started. It must not be treated as a submission failure just because its own ``status``
+    string is not one of the broker's own accepted-order statuses.
+    """
+    return result.status == IDEMPOTENT_REPLAY_STATUS
+
+
 def order_results_have_issues(results: list[OrderResult]) -> bool:
-    return any(result.status not in SUCCESS_STATUSES or result.message for result in results)
+    return any(
+        not _is_idempotent_replay(result) and (result.status not in SUCCESS_STATUSES or result.message)
+        for result in results
+    )
 
 
 def order_results_have_no_accepted_orders(results: list[OrderResult]) -> bool:
     return bool(results) and all(
-        result.filled <= 0 and result.status not in SUCCESS_STATUSES for result in results
+        not _is_idempotent_replay(result) and result.filled <= 0 and result.status not in SUCCESS_STATUSES
+        for result in results
     )
 
 

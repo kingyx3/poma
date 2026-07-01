@@ -73,7 +73,7 @@ The deploy workflow now fails before Terraform/app deployment when:
 - [ ] Treat any `BrokerUnavailable` report as an infrastructure issue: confirm IBKR Activity shows no accepted orders, rerun **IB Gateway Ops** configure, and require `poma ibkr-check` to pass before trading again.
 - [ ] Review any `failed`, `blocked`, `completed_with_order_issues`, timed-out, cancelled, or partial execution result manually.
 
-Built in and not configurable: a retry of the same run does not resubmit an orderRef already recorded in the ledger (`IdempotentReplay`); a rebalance is blocked if unresolved orders exist from a prior session *or* a different run within the same session; and buys are sized against broker cash refreshed *after* the sell phase, never against unconfirmed sell proceeds (`BuyingPowerBlocked` if that refreshed cash falls short).
+Built in and not configurable: `poma monitor` resumes a session a killed process (crash/OOM/VM restart) left `running`, using the *same* `run_id`, and any orderRef already recorded in the ledger for that run (open or terminal) is not resubmitted (`IdempotentReplay`); a rebalance is blocked if unresolved orders exist from a prior session *or* a different run within the same session; and buys are sized against broker cash refreshed *after* the sell phase, never against unconfirmed sell proceeds (`BuyingPowerBlocked` if that refreshed cash falls short).
 
 ## Alert expectations
 

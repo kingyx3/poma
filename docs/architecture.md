@@ -20,6 +20,8 @@ The app checks the market calendar on every run and only rebalances when:
 2. The market has been open for at least `REBALANCE_AFTER_OPEN_MINUTES`.
 3. The local state file says today's rebalance has not already completed or reached an order-issue terminal state.
 
+If the local state file shows today's session as `running` with no terminal status ever recorded, the previous attempt was killed outright (process crash, OOM, VM restart) before it could record an outcome. `poma monitor` resumes that session with the *same* `run_id` instead of starting a fresh one, which is what lets `ExecutionManager`'s idempotent replay (below) actually recognize and skip orders the killed attempt already got to the broker. A manual `poma rebalance` invocation always mints a new `run_id` and is not part of this recovery path.
+
 ## Capital allocation boundary
 
 ```text
@@ -96,8 +98,8 @@ plan rebalance
       -> if unavailable: deduplicated broker-unavailable alert + no order-created spam
       -> if ready:
           -> tag every order with an idempotent orderRef (poma:<run_id>:<index>:<ticker>:<side>)
-          -> if a non-terminal ledger entry already exists for that orderRef (a retry of this
-             exact run after a crash), do not resubmit it; return an IdempotentReplay result
+          -> if a ledger entry already exists for that orderRef, open or terminal (a retry of
+             this exact run after a crash), do not resubmit it; return an IdempotentReplay result
           -> immediately before each phase: fetch a fresh IBKR execution quote per ticker and
              reprice off it (poma.execution_pricing); block trades that fail a freshness/spread/
              delayed-quote check instead of submitting them (see docs/configuration.md)
@@ -185,7 +187,7 @@ reports/*.json                   # generated rebalance reports
 | Order timeout/cancel/failure | Order lifecycle alert plus final `completed_with_order_issues` state. |
 | Limit order accepted but never fills | `poma reconcile-orders` replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`, independent of the rebalance process lifetime. |
 | Open orders left over from a prior session, or from a different run in the same session | The next rebalance blocks (or auto-cancels, per `STALE_ORDER_POLICY`) instead of silently layering a new plan on top. |
-| Process crash and retry with the same run_id | Any orderRef already recorded non-terminally in the ledger is not resubmitted; `submit_plan` returns an `IdempotentReplay` result for it. |
+| Process killed outright (crash/OOM/VM restart) mid-run | `poma monitor`'s next tick resumes the session left `running` with the same `run_id`; any orderRef already recorded in the ledger (open or terminal) is not resubmitted, and `submit_plan` returns an `IdempotentReplay` result for it instead. |
 | Sell proceeds assumed to fund buys | Buys are sized against broker cash refreshed *after* the sell phase, not the pre-trade cash snapshot; insufficient refreshed cash blocks the buys as `BuyingPowerBlocked` instead of submitting them. |
 | Process crash mid-submission | Every order is tagged with an idempotent `orderRef` and recorded in the order ledger before submission, so a reconnect can recognize what was already sent. |
 | Public SSH exposure | Terraform only allows SSH through IAP TCP forwarding. |

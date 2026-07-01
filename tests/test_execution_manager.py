@@ -493,6 +493,44 @@ def test_submit_plan_retry_of_same_run_does_not_resubmit_and_returns_idempotent_
     assert len(open_orders) == 1
 
 
+def test_submit_plan_retry_after_order_reached_terminal_state_does_not_resubmit(
+    tmp_path: Path,
+) -> None:
+    """A same-run retry must recognize a *terminal* prior order, not just a still-open one.
+
+    Once an order is filled/cancelled/rejected it is dropped from the open-orders snapshot
+    (see OrderStore.upsert), so the idempotency check must also consult terminal history —
+    otherwise a same-run retry after the order already filled would resubmit a duplicate.
+    """
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    plan = _plan([_trade("AAPL", OrderSide.BUY)], run_id="run-1")
+
+    manager.submit_plan(plan)
+    entry = store.load_open_orders()[0]
+    store.upsert(
+        entry.with_order_result(
+            OrderResult(
+                ticker="AAPL",
+                side=OrderSide.BUY,
+                quantity=5.0,
+                notional=500.0,
+                order_id=entry.order_id,
+                status="Filled",
+                filled=5.0,
+                average_fill_price=100.0,
+            )
+        )
+    )
+    assert store.load_open_orders() == []  # now terminal and gone from the open snapshot
+
+    second_results = manager.submit_plan(plan)
+
+    assert second_results[0].status == "IdempotentReplay"
+    assert len(broker.submitted_batches) == 1  # unchanged: no second broker submission
+
+
 def test_submit_plan_blocks_buys_when_refreshed_cash_is_insufficient_after_sells(
     tmp_path: Path,
 ) -> None:

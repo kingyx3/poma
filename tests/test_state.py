@@ -34,3 +34,11 @@ def test_unknown_session_status_is_not_terminal(tmp_path) -> None:
 
     assert not state.has_session_attempt("2026-06-29")
     assert state.session_status("2026-06-29") == "unexpected"
+
+
+def test_session_run_id_returns_the_run_id_for_the_matching_session(tmp_path) -> None:
+    state = LocalState(tmp_path)
+    state.begin_session("2026-06-22", "run-1")
+
+    assert state.session_run_id("2026-06-22") == "run-1"
+    assert state.session_run_id("2026-06-21") is None
