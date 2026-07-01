@@ -6,9 +6,6 @@ name: Build app image
 # :main convenience tag. Auto CI/CD calls this via workflow_call to build a PR's own
 # image before deploying it.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
   workflow_call:
     inputs:
