@@ -240,6 +240,15 @@ def main() -> int:
             "sudo cat /opt/poma/state/rebalance_state.json 2>/dev/null || echo '(missing)'",
             timeout=180,
         )
+    if action == "fix-app-docker-perms":
+        return remote(
+            "sudo usermod -aG docker poma && "
+            "sudo systemctl restart cron && "
+            "id poma && "
+            "echo 'poma added to the docker group and cron restarted; "
+            "the next monitor/reconcile-orders tick should reach the Docker API.'",
+            timeout=180,
+        )
     if action == "clear-rebalance-state":
         return remote(
             "sudo install -d -o poma -g poma /opt/poma/state && "
