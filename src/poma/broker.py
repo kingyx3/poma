@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
+from ib_insync import IB, LimitOrder, MarketOrder, OrderState, Stock, Trade
 
 from poma.config import OrderType, Settings, TradingMode
 from poma.execution_pricing import compute_spread_bps
@@ -66,6 +66,11 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
     Places no orders. Used by the ``doctor`` command and ops verification.
     """
     ib = IB()
+    # ib_insync defaults to silently returning an empty result on a request-level IBKR error
+    # (e.g. error 321 when Read-Only API is enabled), instead of raising. That would make the
+    # what-if trading-permission probe below report a false "ready" verdict. Raise instead so a
+    # read-only Gateway is caught here rather than surfacing later as a rejected live order.
+    ib.RaiseRequestErrors = True
     ib.connect(
         settings.ibkr_host,
         settings.ibkr_port,
@@ -199,6 +204,10 @@ class IbkrBroker:
 
     def _connect(self) -> IB:
         ib = IB()
+        # See the matching comment in probe_ibkr(): without this, ib_insync silently returns an
+        # empty result instead of raising on a request-level IBKR error (e.g. Read-Only API's
+        # error 321), which would make the trading-permission preflight below falsely pass.
+        ib.RaiseRequestErrors = True
         try:
             ib.connect(
                 self.settings.ibkr_host,
@@ -725,6 +734,16 @@ def _probe_trading_permissions(ib: IB, settings: Settings) -> tuple[bool, str]:
             "IBKR session is connected but not trading-enabled. "
             "Gateway may be logged in without Trading/Market Data permissions or another "
             f"primary trading session is active: {detail}",
+        )
+    if not isinstance(state, OrderState):
+        # ib_insync can resolve this call with an empty/placeholder result instead of raising
+        # (notably when Read-Only API rejects the what-if request with error 321). Treat anything
+        # that isn't a real OrderState as not trade-enabled rather than reporting false readiness.
+        return (
+            False,
+            "IBKR session is connected but not trading-enabled. "
+            "The what-if order preview did not return an order state (commonly caused by "
+            f"Read-Only API mode): got {state!r}",
         )
     warning = str(getattr(state, "warningText", "") or "").strip()
     init_margin = str(getattr(state, "initMarginChange", "") or "").strip()

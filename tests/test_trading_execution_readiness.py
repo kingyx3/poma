@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from conftest import make_settings
+from ib_insync import OrderState
 
 from poma.broker import (
     BROKER_UNAVAILABLE_STATUS,
@@ -335,7 +336,7 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
             return "2026-06-29T13:40:00Z"
 
         def whatIfOrder(self, *_args, **_kwargs):  # noqa: N802, ANN202 - ib_insync shape
-            return object()
+            return OrderState()
 
         def placeOrder(self, *_args, **_kwargs):  # noqa: N802, ANN202 - ib_insync shape
             self.place_order_calls += 1
