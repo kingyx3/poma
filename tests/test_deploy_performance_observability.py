@@ -57,10 +57,9 @@ def test_prebuilt_image_workflow_pushes_sha_and_optional_main_tag_with_cache() -
     workflow = IMAGE_WORKFLOW.read_text(encoding="utf-8")
 
     expected_snippets = (
-        # Still builds on pushes to main, but is now reusable so PR/release deploys can build
-        # the exact ref under test and pull it by immutable SHA tag.
-        "branches:",
-        "- main",
+        # Triggered manually or called by other workflows; no push trigger (auto-cicd handles
+        # build+deploy on PR and release events instead).
+        "workflow_dispatch:",
         "workflow_call:",
         "permissions:",
         "packages: write",
@@ -81,6 +80,10 @@ def test_prebuilt_image_workflow_pushes_sha_and_optional_main_tag_with_cache() -
     )
     for snippet in expected_snippets:
         assert snippet in workflow
+
+    # No push trigger: image builds are always initiated by auto-cicd or workflow_dispatch.
+    assert "push:" not in workflow
+    assert "branches:" not in workflow
 
 
 def test_deploy_polling_and_retries_are_bounded() -> None:

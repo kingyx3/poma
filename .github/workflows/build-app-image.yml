@@ -2,13 +2,10 @@ name: Build app image
 
 # Builds and pushes the runtime image to GHCR. Every build publishes an immutable
 # commit-SHA tag (ghcr.io/kingyx3/poma:<sha>) so deploys can pull the exact code under
-# test instead of a mutable, possibly-stale :main. Pushes to main additionally move the
-# :main convenience tag. Auto CI/CD calls this via workflow_call to build a PR's own
-# image before deploying it.
+# test instead of a mutable, possibly-stale :main. Pass tag_main: true to also move the
+# :main convenience tag (auto-cicd does this on release). Auto CI/CD calls this via
+# workflow_call to build a PR's own image before deploying it.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -49,8 +46,8 @@ jobs:
       - name: Resolve image tags
         id: meta
         env:
-          # Move :main on direct pushes to main, or when a caller explicitly asks for it.
-          TAG_MAIN: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.tag_main }}
+          # Move :main when a caller explicitly asks for it (e.g. prd-build-image on release).
+          TAG_MAIN: ${{ inputs.tag_main }}
         run: |
           set -euo pipefail
           image="ghcr.io/kingyx3/poma"
