@@ -38,8 +38,9 @@ Bootstrap also generates environment-specific VM and deployer names, such as `po
 | Input | Type | Required | Allowed/default | Notes |
 |---|---|---:|---|---|
 | `deploy_environment` | choice | yes | `dev`, `stg`, `prd`; default `dev` | Selects `ops/deploy/environments/<env>.env` and GitHub Environment secrets. |
-| `terraform_action` | choice | yes | `plan`, `apply`; default `plan` | `apply` provisions/updates the VM and can deploy the app. |
-| `deploy_app` | boolean | yes | default `true` | Uploads app package and rendered `.env` after Terraform apply. |
+| `deployment_action` | choice | yes | `deploy`, `undeploy`; default `deploy` | `deploy` provisions/updates the VM. `undeploy` plans or applies a Terraform destroy for the selected environment's `gcp-free-tier` state. |
+| `terraform_action` | choice | yes | `plan`, `apply`; default `plan` | `plan` previews the selected deployment action. `apply` executes it. |
+| `deploy_app` | boolean | yes | default `true` | Uploads app package and rendered `.env` after Terraform apply. Ignored when `deployment_action=undeploy`. |
 | `trading_mode` | choice | yes | `dry_run`, `paper`, `live`; default `dry_run` | Rendered into the VM-local `.env`. |
 | `data_provider` | choice | yes | `fixture`, `yahoo`; default `yahoo` | Yahoo is the production provider. Fixture is for tests and dry-runs; deploy validation rejects fixture for paper/live. |
 | `allow_live_trading` | boolean | yes | default `false` | Must be `true` when `trading_mode=live`. |
@@ -99,6 +100,17 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 
 The deploy workflow supplies safe defaults for project-derived settings, region, zone, VM name, app mode, trading defaults, risk limits, provider defaults, and local paths. Do not create GitHub Environment Variables for these defaults. After `.env` rendering, deploy validates the runtime config before Terraform/app deployment so broken account, allocation, provider, and guardrail settings fail early.
 
+## Undeploy a VM
+
+Use the same **Deploy GCP e2-micro VM** workflow and selected `deploy_environment`:
+
+1. Run with `deployment_action=undeploy` and `terraform_action=plan` to review the destroy plan for that environment's `poma/<env>/gcp-free-tier` Terraform state.
+2. Rerun with `deployment_action=undeploy` and `terraform_action=apply` to destroy the VM foundation and remove managed resources from that Terraform state.
+
+The undeploy path still reads `ops/deploy/environments/<env>.env`, authenticates through the generated Workload Identity Federation settings, initializes the selected remote state prefix, and applies the destroy plan. It skips runtime `.env` rendering, broker account checks, app packaging, VM upload, and smoke tests. After a successful undeploy apply, the workflow runs `terraform state list` and fails if the selected state still contains managed resources.
+
+Undeploying the VM does not remove the bootstrap WIF state, the generated `ops/deploy/environments/<env>.env` file, the Terraform state bucket, or GitHub Environment secrets. Remove those separately only when intentionally decommissioning the whole environment.
+
 ## Bootstrap state recovery
 
 If bootstrap fails with `already exists` for the GitHub deployer service account or Workload Identity Pool, the resource exists in GCP but is missing from the selected Terraform state. Common causes are a previous failed partial bootstrap, using a different `deploy_environment`, changing the Terraform backend bucket/prefix, or creating the resource manually.
@@ -107,7 +119,7 @@ The bootstrap workflow runs `ops/scripts/import_gcp_wif_bootstrap_state.sh` afte
 
 ## What deploy does
 
-On apply, the deploy workflow:
+With `deployment_action=deploy` and `terraform_action=apply`, the deploy workflow:
 
 1. Uses the selected GitHub Environment.
 2. Reads `ops/deploy/environments/<env>.env`.
