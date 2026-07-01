@@ -29,7 +29,11 @@ REQUIRED_STARTUP_SNIPPETS = (
     'mkdir -p \\',
     '"$${APP_DIR}/data"',
     "systemctl enable --now docker",
-    "systemctl enable --now cron",
+    # cron uses enable+restart, not enable --now: a long-running cron daemon from an earlier
+    # invocation of this script would not otherwise pick up "$${APP_USER}" gaining docker group
+    # membership (see infra/gcp-free-tier/startup.sh for the full rationale).
+    "systemctl enable cron",
+    "systemctl restart cron",
     "systemctl is-active --quiet docker",
     "systemctl is-active --quiet cron",
 )

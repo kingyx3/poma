@@ -84,7 +84,13 @@ rm -rf /var/lib/apt/lists/*
 usermod -aG docker "$${APP_USER}"
 
 systemctl enable --now docker
-systemctl enable --now cron
+# Use enable+restart (not enable --now) for cron: cron may already be running from an earlier
+# invocation of this script on an already-booted host (e.g. a manual startup-script re-run), and
+# a long-running cron daemon does not pick up "$${APP_USER}" gaining docker group membership until
+# its own process is refreshed. --now is a no-op when the unit is already active, so it alone
+# would leave a stale, ungrouped cron process behind; restart is idempotent either way.
+systemctl enable cron
+systemctl restart cron
 systemctl is-active --quiet docker
 systemctl is-active --quiet cron
 printf '%s %s\n' "$${STARTUP_REVISION}" "$(cat /proc/sys/kernel/random/boot_id)" >"$${READY_SENTINEL}"
