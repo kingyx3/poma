@@ -11,6 +11,18 @@ from poma.models import CurrentPosition, OrderResult, OrderSide, ProposedTrade, 
 runner = CliRunner()
 
 
+def test_cli_command_group_builds() -> None:
+    # Guards against typer/click incompatibilities (e.g. click >=8.2 with typer 0.12.3)
+    # that raise "Secondary flag is not valid for non-boolean flag" when the command group
+    # is constructed, which crashes every `poma` invocation in the deployed image.
+    from typer.main import get_command
+
+    command = get_command(app)
+    assert {"rebalance", "monitor", "doctor", "ibkr-check", "positions"} <= set(
+        command.commands
+    )
+
+
 def test_portfolio_summary_reports_executed_fills() -> None:
     results = [
         OrderResult("AAPL", OrderSide.BUY, 10, 1950.0, 1, "Filled", 10, 195.0),

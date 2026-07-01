@@ -18,7 +18,11 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install dependencies
-        run: pip install -e '.[dev]'
+        # Install against constraints.txt so tests exercise the exact runtime dependency
+        # versions the deployed image ships (e.g. the pinned typer/click pair). Without this
+        # CI silently resolves newer transitive deps and misses image-only breakages such as
+        # the click >=8.2 / typer 0.12.3 command-build crash.
+        run: pip install -e '.[dev]' -c constraints.txt
       - name: Ruff
         run: ruff check .
       - name: Pytest

@@ -141,3 +141,6 @@ def test_dockerfile_uses_buildkit_pip_cache_mounts_and_constraints() -> None:
     assert dockerfile.index("ARG APP_UID=1000") > dockerfile.index("COPY src ./src")
     assert "pandas==2.2.2" in constraints
     assert "yfinance==0.2.64" in constraints
+    # click must be pinned to the 8.1.x line: typer 0.12.3 is incompatible with click >=8.2,
+    # which otherwise crashes every `poma` command in the built image at command-build time.
+    assert "click==8.1.8" in constraints
