@@ -96,6 +96,17 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
     assert "timed out; check VM readiness" in workflow
 
 
+def test_deploy_smoke_input_is_validated_before_remote_shell_interpolation() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "INPUT_DEPLOY_SMOKE: ${{ inputs.deploy_smoke }}" in workflow
+    assert 'case "${deploy_smoke}" in' in workflow
+    assert "true|false) ;;" in workflow
+    assert "deploy_smoke must resolve to true or false" in workflow
+    assert "RUN_DEPLOY_SMOKE='\"${deploy_smoke}\"'" in workflow
+    assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" not in workflow
+
+
 def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 

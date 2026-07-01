@@ -104,6 +104,7 @@ jobs:
       INPUT_TRADING_MODE: ${{ inputs.trading_mode }}
       INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
       INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
+      INPUT_DEPLOY_SMOKE: ${{ inputs.deploy_smoke }}
 
       # Minimal runtime secrets. Telegram is mandatory; IBKR is required by selected modes.
       IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
@@ -421,6 +422,15 @@ jobs:
             done
           }
 
+          deploy_smoke="${INPUT_DEPLOY_SMOKE}"
+          case "${deploy_smoke}" in
+            true|false) ;;
+            *)
+              echo "::error::deploy_smoke must resolve to true or false, got: ${deploy_smoke}"
+              exit 1
+              ;;
+          esac
+
           timed "VM readiness" ensure_vm_ready
 
           timed "App package upload" retry_with_backoff 3m "App package upload" 3 \
@@ -525,7 +535,7 @@ jobs:
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + smoke + cron).
             remote_retry_with_backoff "Docker pull and smoke test" 2 \
-              remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
+              remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE='"${deploy_smoke}"' bash ops/scripts/deploy.sh
             remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
             echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
