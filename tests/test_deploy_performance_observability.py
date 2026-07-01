@@ -17,6 +17,7 @@ def test_upload_install_step_reports_stage_timings() -> None:
         "timed \"VM readiness\" ensure_vm_ready",
         "timed \"App package upload\"",
         "timed \"Environment upload\"",
+        "timed \"Deploy flags upload\"",
         "timed \"Remote install, Docker pull, smoke, cron\"",
         "REMOTE TIMING BEGIN",
         "trap remote_failure_diagnostics EXIT",
@@ -103,8 +104,12 @@ def test_deploy_smoke_input_is_validated_before_remote_shell_interpolation() -> 
     assert 'case "${deploy_smoke}" in' in workflow
     assert "true|false) ;;" in workflow
     assert "deploy_smoke must resolve to true or false" in workflow
-    assert "RUN_DEPLOY_SMOKE='\"${deploy_smoke}\"'" in workflow
+    assert "printf 'RUN_DEPLOY_SMOKE=%s\\n'" in workflow
+    assert "Deploy flags upload" in workflow
+    assert "sed -n 's/^RUN_DEPLOY_SMOKE=//p' /tmp/poma.deploy.flags" in workflow
+    assert 'env "RUN_DEPLOY_SMOKE=${deploy_smoke}"' in workflow
     assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" not in workflow
+    assert "RUN_DEPLOY_SMOKE='" not in workflow
 
 
 def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:

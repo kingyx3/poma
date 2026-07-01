@@ -430,6 +430,7 @@ jobs:
               exit 1
               ;;
           esac
+          printf 'RUN_DEPLOY_SMOKE=%s\n' "${deploy_smoke}" > /tmp/poma.deploy.flags
 
           timed "VM readiness" ensure_vm_ready
 
@@ -437,6 +438,8 @@ jobs:
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
           timed "Environment upload" retry_with_backoff 2m "Environment upload" 3 \
             gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
+          timed "Deploy flags upload" retry_with_backoff 2m "Deploy flags upload" 3 \
+            gcloud compute scp /tmp/poma.deploy.flags "${instance_name}:/tmp/poma.deploy.flags" "${ssh_common[@]}"
 
           timed "Remote install, Docker pull, smoke, cron" run_with_timeout 25m \
             gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
@@ -534,8 +537,16 @@ jobs:
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + smoke + cron).
+            deploy_smoke="$(sed -n 's/^RUN_DEPLOY_SMOKE=//p' /tmp/poma.deploy.flags | tail -n 1)"
+            case "${deploy_smoke}" in
+              true|false) ;;
+              *)
+                echo "Invalid remote RUN_DEPLOY_SMOKE flag: ${deploy_smoke}" >&2
+                exit 1
+                ;;
+            esac
             remote_retry_with_backoff "Docker pull and smoke test" 2 \
-              remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE='"${deploy_smoke}"' bash ops/scripts/deploy.sh
+              remote_timed "Docker pull and smoke test" sudo -u poma env "RUN_DEPLOY_SMOKE=${deploy_smoke}" bash ops/scripts/deploy.sh
             remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
             echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
