@@ -153,9 +153,18 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
             {
                 "run_id": plan.run_id,
                 "session_date": plan.session_date,
+                "broker_account_snapshot": {
+                    "cash_usd": plan.portfolio_cash_usd,
+                    "positions_market_value_usd": plan.portfolio_positions_value_usd,
+                    "net_liquidation_usd": plan.portfolio_net_liquidation_usd,
+                    "total_value_usd": plan.broker_total_value_usd,
+                },
                 "portfolio_value_usd": plan.portfolio_value_usd,
+                "cash_sleeve_usd": plan.cash_sleeve_usd,
                 "total_allocated_pct": plan.total_allocated_pct,
                 "total_allocated_usd": plan.total_allocated_usd,
+                "unallocated_capital_usd": plan.unallocated_capital_usd,
+                "target_exposure_usd": plan.target_exposure_usd,
                 "strategy_books": [_strategy_book_to_json(book) for book in plan.strategy_books],
                 "combined_targets": [
                     _combined_target_to_json(position) for position in plan.combined_targets

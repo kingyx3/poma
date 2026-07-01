@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from conftest import FakeBroker, make_settings
 from typer.testing import CliRunner
 
@@ -132,6 +134,35 @@ def test_run_rebalance_writes_execution_journal_before_and_after_a_run(monkeypat
     assert order_journal_path.exists()
     # dry_run never submits orders, so no reconciliation file is written.
     assert not (tmp_path / "state" / "reconciliations" / "run-journal-1.json").exists()
+
+
+def test_run_rebalance_report_includes_broker_snapshot_and_capital_breakdown(
+    monkeypatch, tmp_path
+) -> None:
+    settings = make_settings(
+        STATE_DIR=str(tmp_path / "state"),
+        REPORT_DIR=str(tmp_path / "reports"),
+        DATA_DIR=str(tmp_path / "data"),
+    )
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("poma.cli.send_alert", lambda *_args, **_kwargs: None)
+
+    _, report_path = _run_rebalance(
+        session_date="2026-07-01",
+        run_id="run-journal-2",
+        force_dry_run=False,
+    )
+
+    report = json.loads(report_path.read_text())
+    assert set(report["broker_account_snapshot"]) == {
+        "cash_usd",
+        "positions_market_value_usd",
+        "net_liquidation_usd",
+        "total_value_usd",
+    }
+    assert report["cash_sleeve_usd"] == 0.02 * settings.dry_run_portfolio_value_usd
+    assert report["unallocated_capital_usd"] >= 0
+    assert report["target_exposure_usd"] > 0
 
 
 def test_reconcile_orders_reports_no_open_orders(monkeypatch, tmp_path) -> None:

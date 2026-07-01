@@ -134,12 +134,28 @@ ExecutionManager (src/poma/execution_manager.py)
 
 `poma reconcile-orders` polls the broker for every open POMA-tagged order (matched by `orderRef`, which survives an API reconnect) and applies the timeout policy: replace once after `REPLACE_AFTER_SECONDS`, then cancel after `CANCEL_AFTER_SECONDS` if still unfilled. The replacement price is computed from a *fresh* IBKR quote fetched at reconcile time (not a blind improvement on the order's old, possibly stale, limit price), with `REPLACE_PRICE_IMPROVEMENT_BPS` applied on top of that fresh side-of-market price; if no valid fresh quote is available, the replace is skipped for that reconcile pass rather than repricing off stale data. It is scheduled on its own cron entry (`ops/cron/poma.cron`, every 1-2 minutes) so working orders are followed up even after the rebalance process has exited; it also sends a Telegram alert on every lifecycle change. The next scheduled rebalance itself checks for orders left open from a *prior* session, or from a *different run* within the same session, before planning (see `STALE_ORDER_POLICY` in `docs/configuration.md`) so a forgotten open order cannot silently double up with a fresh plan.
 
+## Reports and auditability
+
+Both `reports/<run_id>.json` (the CLI report) and `state/orders/<run_id>.json` (the execution journal, written before submission) carry the full capital picture for the run, not just the trades:
+
+- `broker_account_snapshot` — the raw broker read (`cash_usd`, `positions_market_value_usd`, `net_liquidation_usd`, `total_value_usd`) before `MANAGED_CAP_MODE` is applied.
+- `portfolio_value_usd` — the managed value the rebalance actually sized against (equal to the broker total unless `MANAGED_CAP_MODE=min_of_broker_total_and_cap` capped it below that).
+- `cash_sleeve_usd` — capital assigned to the passive `cash` strategy sleeve, if `STRATEGY_ALLOCATIONS` configures one; `0` if it does not.
+- `total_allocated_usd` / `total_allocated_pct` — capital assigned to every sleeve (active strategies plus cash).
+- `unallocated_capital_usd` — managed value assigned to no sleeve at all (`STRATEGY_ALLOCATIONS` summing to less than 100%); distinct from the cash sleeve, which is an explicit, intentional allocation.
+- `target_exposure_usd` — total planned notional across every combined portfolio-level target.
+- `strategy_books` / `combined_targets` — per-strategy target attribution and the netted portfolio-level target per ticker, so overlapping tickers across strategies show which sleeves contributed to the final target.
+- each entry in `trades`/`planned_trades` carries both the planning reference price (Yahoo snapshot) and, once repriced for execution, the execution-time quote's source/basis/timestamp/age/spread (see "Strategy pricing vs. execution pricing" in `docs/configuration.md`).
+
+`state/reconciliations/<run_id>.json` adds the post-trade order results and a best-effort post-trade account snapshot, for diffing what was intended against what the broker actually reports afterward.
+
 ## Runtime files
 
 ```text
 state/rebalance_state.json       # last completed trading session
                                      # includes completed_with_order_issues as terminal
 state/orders/<run_id>.json       # planned trades, strategy attribution, target book hash,
+                                     # capital breakdown (broker/managed/cash sleeve/unallocated),
                                      # and the expected account snapshot; written before submission
 state/orders/open_orders.jsonl   # durable order lifecycle ledger snapshot; one line per order
                                      # not yet in a terminal state, keyed by orderRef

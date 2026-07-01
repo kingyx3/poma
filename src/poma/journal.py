@@ -74,7 +74,16 @@ class ExecutionJournal:
                 }
                 for book in plan.strategy_books
             ],
+            "cash_sleeve_usd": plan.cash_sleeve_usd,
+            "unallocated_capital_usd": plan.unallocated_capital_usd,
+            "target_exposure_usd": plan.target_exposure_usd,
             "planned_trades": [_trade_to_json(trade) for trade in plan.trades],
+            "broker_account_snapshot": {
+                "cash_usd": plan.portfolio_cash_usd,
+                "positions_market_value_usd": plan.portfolio_positions_value_usd,
+                "net_liquidation_usd": plan.portfolio_net_liquidation_usd,
+                "total_value_usd": plan.broker_total_value_usd,
+            },
             "expected_account_snapshot": {
                 "cash_usd": plan.portfolio_cash_usd,
                 "positions_market_value_usd": plan.portfolio_positions_value_usd,

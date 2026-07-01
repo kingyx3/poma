@@ -17,7 +17,7 @@ from poma.execution_policy import apply_execution_policy
 from poma.history import CapSnapshotHistory
 from poma.models import AccountSnapshot, OrderResult, RebalancePlan, StrategyTargetBook
 from poma.order_store import OrderStore
-from poma.portfolio import build_strategy_capital_plan
+from poma.portfolio import CASH_STRATEGY_NAME, build_strategy_capital_plan
 from poma.portfolio_constructor import combine_strategy_target_books
 from poma.risk import (
     enforce_buying_power,
@@ -82,6 +82,14 @@ class RebalanceEngine:
                 f"{capital_plan.unallocated_pct:.2%} of portfolio value is not allocated "
                 "to any strategy sleeve"
             )
+        cash_sleeve_usd = next(
+            (
+                allocation.capital_usd
+                for allocation in capital_plan.allocations
+                if allocation.name == CASH_STRATEGY_NAME
+            ),
+            0.0,
+        )
 
         current = self.data_client.current_universe_snapshot()
         historical = None
@@ -162,6 +170,7 @@ class RebalanceEngine:
             portfolio_net_liquidation_usd=account_snapshot.net_liquidation_usd,
             strategy_books=tuple(strategy_books),
             combined_targets=tuple(combined_targets),
+            cash_sleeve_usd=cash_sleeve_usd,
             total_allocated_pct=capital_plan.total_allocated_pct,
             total_allocated_usd=capital_plan.total_allocated_usd,
         )

@@ -190,3 +190,24 @@ class RebalancePlan:
     combined_targets: tuple[CombinedTargetPosition, ...] = ()
     total_allocated_pct: float = 1.0
     total_allocated_usd: float = 0.0
+    cash_sleeve_usd: float = 0.0
+
+    @property
+    def broker_total_value_usd(self) -> float:
+        """Raw broker equity this plan sized against, before any MANAGED_CAP_MODE cap."""
+        cash_and_positions = self.portfolio_cash_usd + self.portfolio_positions_value_usd
+        if cash_and_positions > 0:
+            return cash_and_positions
+        if self.portfolio_net_liquidation_usd is not None:
+            return self.portfolio_net_liquidation_usd
+        return cash_and_positions
+
+    @property
+    def unallocated_capital_usd(self) -> float:
+        """Managed value not assigned to any strategy sleeve, including the cash sleeve."""
+        return max(0.0, self.portfolio_value_usd - self.total_allocated_usd)
+
+    @property
+    def target_exposure_usd(self) -> float:
+        """Total planned notional across every combined portfolio-level target."""
+        return sum(position.target_notional for position in self.combined_targets)

@@ -486,3 +486,26 @@ def test_validate_runtime_config_accepts_safe_default_execution_pricing(
     settings = _settings(monkeypatch, DATA_PROVIDER="yahoo")
     errors = _load_validate_runtime_config().validate(settings)
     assert not any("EXECUTION_" in error for error in errors)
+
+
+def test_validate_runtime_config_warns_on_full_turnover_for_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        monkeypatch,
+        DATA_PROVIDER="yahoo",
+        TRADING_MODE="live",
+        ALLOW_LIVE_TRADING="true",
+        MAX_TURNOVER_PCT="1.0",
+    )
+    module = _load_validate_runtime_config()
+    assert not module.validate(settings)
+    assert any("MAX_TURNOVER_PCT=100%" in warning for warning in module.warn(settings))
+
+
+def test_validate_runtime_config_does_not_warn_on_turnover_for_paper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch, DATA_PROVIDER="yahoo", MAX_TURNOVER_PCT="1.0")
+    module = _load_validate_runtime_config()
+    assert module.warn(settings) == []

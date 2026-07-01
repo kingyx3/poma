@@ -85,6 +85,26 @@ def test_build_plan_sizes_current_strategy_from_broker_cash_and_positions() -> N
     assert plan.total_allocated_usd == 10_000
     assert math.isclose(sum(target.target_notional for target in plan.targets), 10_000)
     assert any("not allocated" in warning for warning in plan.warnings)
+    assert plan.broker_total_value_usd == 20_000
+    assert plan.cash_sleeve_usd == 0.0
+    assert plan.unallocated_capital_usd == 10_000
+    assert math.isclose(plan.target_exposure_usd, 10_000)
+
+
+def test_build_plan_reports_the_cash_sleeve_separately_from_unallocated_capital() -> None:
+    broker = FakeBroker(cash_usd=10_000.0)
+    plan = _engine(
+        broker=broker,
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
+        STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.5,cash=0.3",
+        MAX_POSITION_PCT=1.0,
+        MAX_ORDER_NOTIONAL_USD=100_000.0,
+    ).build_plan("session", "rebalance-x")
+
+    assert plan.cash_sleeve_usd == 3_000.0
+    assert plan.unallocated_capital_usd == 2_000.0
+    assert any("not allocated" in warning for warning in plan.warnings)
 
 
 def test_dry_run_keeps_configured_portfolio_value_for_offline_plans() -> None:

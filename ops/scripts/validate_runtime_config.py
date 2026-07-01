@@ -47,6 +47,18 @@ def validate(settings: Settings) -> list[str]:
     return errors
 
 
+def warn(settings: Settings) -> list[str]:
+    """Non-fatal production-readiness nudges: safe to deploy with, but worth a human look."""
+    warnings: list[str] = []
+    if settings.trading_mode == TradingMode.LIVE and settings.max_turnover_pct >= 1.0:
+        warnings.append(
+            "LIVE trading with MAX_TURNOVER_PCT=100% allows unlimited daily turnover; this is "
+            "expected for an initial bootstrap rebalance but should be lowered afterward for "
+            "ongoing churn control"
+        )
+    return warnings
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate a rendered POMA runtime .env file.")
     parser.add_argument("--env-file", default=".env.deploy", type=Path)
@@ -56,6 +68,8 @@ def main() -> None:
     errors = validate(settings)
     if errors:
         raise SystemExit("; ".join(errors))
+    for warning in warn(settings):
+        print(f"WARNING: {warning}")
 
     allocations = settings.strategy_allocation_map()
     capital_plan = build_strategy_capital_plan(settings.dry_run_portfolio_value_usd, allocations)
