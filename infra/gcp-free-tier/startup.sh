@@ -82,6 +82,15 @@ fi
 rm -rf /var/lib/apt/lists/*
 
 usermod -aG docker "$${APP_USER}"
+# $${APP_USER} is intentionally created non-unique on the same uid/gid as the cloud image's
+# default "ubuntu" account (see the useradd block above). Tools that resolve a uid back to a
+# username via getpwuid -- notably cron, for both "crontab -u $${APP_USER}" installation and the
+# executing job's session/privilege-dropping -- land on "ubuntu" for that shared uid, not
+# $${APP_USER}, so cron jobs installed for $${APP_USER} actually run as ubuntu. Add ubuntu to the
+# same groups so behavior doesn't depend on which name a given tool resolves the shared uid to.
+if id -u ubuntu >/dev/null 2>&1 && [ "$${APP_USER}" != "ubuntu" ]; then
+  usermod -aG docker ubuntu
+fi
 
 systemctl enable --now docker
 # Use enable+restart (not enable --now) for cron: cron may already be running from an earlier
