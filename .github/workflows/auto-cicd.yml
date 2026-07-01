@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 concurrency:
   group: poma-auto-cicd-${{ github.event.pull_request.number || github.ref }}
@@ -66,9 +67,12 @@ jobs:
             case "$1" in
               .github/workflows/auto-cicd.yml|\
               .github/workflows/deploy-gcp-vm.yml|\
+              .github/workflows/build-app-image.yml|\
               Dockerfile|\
               docker-compose.yml|\
+              docker-compose.vm.yml|\
               .dockerignore|\
+              constraints.txt|\
               pyproject.toml|\
               ops/scripts/deploy.sh|\
               ops/scripts/render_env.py|\
@@ -179,11 +183,28 @@ jobs:
 
           echo "${reason}"
 
-  dev-deploy:
+  # Build the PR's own image (immutable commit-SHA tag) so the deploy smoke test validates the
+  # code under review instead of the last :main build. Same gate as dev-deploy so we only build
+  # when a deploy will follow, and only for same-repo PRs (forks can't push to GHCR).
+  dev-build-image:
     needs: changes
     if: >-
       ${{ always() && github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
+          (needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-app-image.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+
+  dev-deploy:
+    needs: [changes, dev-build-image]
+    if: >-
+      ${{ always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          needs.dev-build-image.result == 'success' &&
           (needs.changes.result != 'success' || needs.changes.outputs.deploy_required == 'true') }}
     uses: ./.github/workflows/deploy-gcp-vm.yml
     with:
@@ -194,6 +215,7 @@ jobs:
       data_provider: yahoo
       allow_live_trading: false
       deploy_smoke: true
+      image: ${{ needs.dev-build-image.outputs.image }}
     secrets: inherit
 
   dev-configure-gateway:
@@ -214,7 +236,19 @@ jobs:
   # they can be used for staging/testing without touching real money. prd GitHub Environment
   # protection rules (e.g. required reviewers) gate this deploy before it runs. Release deploys are
   # intentionally unconditional because publishing a release is an explicit production promotion.
+  # Build the released commit's image so prd deploys a byte-for-byte artifact of the release ref
+  # rather than trusting the mutable :main tag to still match.
+  prd-build-image:
+    if: ${{ github.event_name == 'release' && github.event.release.prerelease == false }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-app-image.yml
+    with:
+      ref: ${{ github.sha }}
+
   prd-deploy:
+    needs: prd-build-image
     if: ${{ github.event_name == 'release' && github.event.release.prerelease == false }}
     uses: ./.github/workflows/deploy-gcp-vm.yml
     with:
@@ -225,6 +259,7 @@ jobs:
       data_provider: yahoo
       allow_live_trading: true
       deploy_smoke: true
+      image: ${{ needs.prd-build-image.outputs.image }}
     secrets: inherit
 
   prd-configure-gateway:

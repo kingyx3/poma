@@ -53,12 +53,15 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         assert snippet in workflow
 
 
-def test_prebuilt_image_workflow_pushes_main_and_sha_tags_with_cache() -> None:
+def test_prebuilt_image_workflow_pushes_sha_and_optional_main_tag_with_cache() -> None:
     workflow = IMAGE_WORKFLOW.read_text(encoding="utf-8")
 
     expected_snippets = (
+        # Still builds on pushes to main, but is now reusable so PR/release deploys can build
+        # the exact ref under test and pull it by immutable SHA tag.
         "branches:",
         "- main",
+        "workflow_call:",
         "permissions:",
         "packages: write",
         "docker/setup-buildx-action@v3",
@@ -67,10 +70,14 @@ def test_prebuilt_image_workflow_pushes_main_and_sha_tags_with_cache() -> None:
         '--build-arg "APP_UID=1000"',
         '--build-arg "APP_GID=1000"',
         "--push",
-        "--tag \"${image}:main\"",
-        "--tag \"${image}:${GITHUB_SHA}\"",
+        # Immutable per-commit tag always pushed; :main only moved when requested.
+        'tags=(--tag "${IMAGE}:${BUILD_SHA}")',
+        'tags+=(--tag "${IMAGE}:main")',
         "--cache-from type=gha",
         "--cache-to type=gha,mode=max",
+        # Exposes the pulled ref to callers and lets them target an arbitrary ref.
+        "value: ${{ jobs.build.outputs.image }}",
+        "ref: ${{ inputs.ref || github.sha }}",
     )
     for snippet in expected_snippets:
         assert snippet in workflow

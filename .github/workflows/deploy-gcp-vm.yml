@@ -52,6 +52,11 @@ on:
         required: false
         type: boolean
         default: true
+      image:
+        description: Full image ref to pull on the VM (blank = ghcr.io/kingyx3/poma:main).
+        required: false
+        type: string
+        default: ''
   workflow_call:
     inputs:
       deploy_environment:
@@ -81,6 +86,10 @@ on:
         required: false
         type: boolean
         default: true
+      image:
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -104,6 +113,7 @@ jobs:
       INPUT_TRADING_MODE: ${{ inputs.trading_mode }}
       INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
       INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
+      INPUT_IMAGE: ${{ inputs.image }}
 
       # Minimal runtime secrets. Telegram is mandatory; IBKR is required by selected modes.
       IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
@@ -321,6 +331,16 @@ jobs:
           ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
           step_start="${SECONDS}"
 
+          # Validate the requested image ref before it is interpolated into the remote shell
+          # command. An empty value is allowed and makes the VM fall back to deploy.sh's
+          # default (ghcr.io/kingyx3/poma:main); a non-empty value must be a plain registry
+          # reference so it cannot smuggle shell metacharacters onto the VM.
+          if [ -n "${INPUT_IMAGE}" ] && ! printf '%s' "${INPUT_IMAGE}" | grep -Eq '^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$'; then
+            echo "::error::Refusing to deploy malformed image ref: ${INPUT_IMAGE}"
+            exit 1
+          fi
+          echo "Deploying image: ${INPUT_IMAGE:-ghcr.io/kingyx3/poma:main (default)}"
+
           timed() {
             local label="$1" start status
             shift
@@ -525,7 +545,7 @@ jobs:
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + smoke + cron).
             remote_retry_with_backoff "Docker pull and smoke test" 2 \
-              remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} bash ops/scripts/deploy.sh
+              remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh
             remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
             echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
