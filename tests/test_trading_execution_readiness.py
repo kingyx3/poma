@@ -167,6 +167,9 @@ def test_ibkr_broker_reads_cash_and_position_balances_before_rebalance(
         def isConnected(self) -> bool:  # noqa: N802 - mirrors ib_insync API
             return self.connected
 
+        def reqMarketDataType(self, _data_type: int) -> None:  # noqa: N802 - mirrors ib_insync API
+            return None
+
         def portfolio(self) -> list[FakePortfolioItem]:
             return [FakePortfolioItem()]
 
@@ -214,6 +217,9 @@ def test_ibkr_broker_reads_balances_from_authenticated_account_values_when_summa
 
         def isConnected(self) -> bool:  # noqa: N802 - mirrors ib_insync API
             return self.connected
+
+        def reqMarketDataType(self, _data_type: int) -> None:  # noqa: N802 - mirrors ib_insync API
+            return None
 
         def portfolio(self) -> list[FakePortfolioItem]:
             return [FakePortfolioItem()]
@@ -333,6 +339,9 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
 
         def reqCurrentTime(self) -> str:  # noqa: N802 - mirrors ib_insync API
             return "2026-06-29T13:40:00Z"
+
+        def reqMarketDataType(self, _data_type: int) -> None:  # noqa: N802 - mirrors ib_insync API
+            return None
 
         def whatIfOrder(self, *_args, **_kwargs):  # noqa: N802, ANN202 - ib_insync shape
             return object()

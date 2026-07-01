@@ -28,6 +28,9 @@ def test_ibkr_broker_blocks_orders_when_session_is_not_trade_enabled(
         def reqCurrentTime(self) -> str:  # noqa: N802 - mirrors ib_insync API
             return "2026-06-29T13:40:00Z"
 
+        def reqMarketDataType(self, _data_type: int) -> None:  # noqa: N802 - mirrors ib_insync API
+            return None
+
         def whatIfOrder(self, *_args, **_kwargs):  # noqa: N802, ANN202 - ib_insync shape
             raise RuntimeError("You are logged in without Trading/Market Data permissions")
 
