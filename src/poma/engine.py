@@ -12,6 +12,7 @@ from poma.broker import (
 )
 from poma.config import ManagedCapMode, Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
+from poma.execution_policy import apply_execution_policy
 from poma.history import CapSnapshotHistory
 from poma.models import AccountSnapshot, OrderResult, RebalancePlan, StrategyTargetBook
 from poma.portfolio import build_strategy_capital_plan
@@ -117,9 +118,11 @@ class RebalanceEngine:
             min_weight_delta_pct=settings.min_weight_delta_pct,
             limit_offset_bps=settings.limit_offset_bps,
         )
+        trades, execution_policy_warnings = apply_execution_policy(trades, settings.execution_rules())
 
         warnings.extend(validate_targets(targets, settings.max_position_pct))
         warnings.extend(trade_warnings)
+        warnings.extend(execution_policy_warnings)
         warnings.extend(
             enforce_turnover_limit(
                 trades,

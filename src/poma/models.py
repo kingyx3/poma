@@ -100,6 +100,20 @@ class ProposedTrade:
 
 
 @dataclass(frozen=True)
+class InstrumentExecutionRule:
+    """What quantity shape a broker will actually accept for one ticker.
+
+    Defaults assume IBKR's standard fractional-share support for US-listed stocks/ETFs;
+    override per-ticker only for instruments confirmed to reject fractional orders.
+    """
+
+    ticker: str
+    allows_fractional: bool = True
+    min_quantity: float = 0.0
+    quantity_increment: float = 0.0
+
+
+@dataclass(frozen=True)
 class OrderResult:
     ticker: str
     side: OrderSide

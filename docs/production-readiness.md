@@ -28,7 +28,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Run at least one full week in `paper`.
 - [ ] Review IBKR orders/fills against POMA reports.
 - [ ] Confirm no unresolved `completed_with_order_issues`, `blocked`, `failed`, cancelled, timed-out, or partial-fill runs remain unexplained.
-- [ ] Confirm order type policy and fractional-share behavior in the IBKR account.
+- [ ] Confirm order type policy and fractional-share behavior in the IBKR account. POMA sizes and submits fractional quantities by default; list any ticker IBKR rejects fractional orders for in `NON_FRACTIONAL_TICKERS`.
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
 - [ ] Add live Gateway login settings before running live Gateway configuration.
 - [ ] Add the live account id before switching to `TRADING_MODE=live`.

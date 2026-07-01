@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic import Field, PositiveFloat, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from poma.execution_policy import build_execution_rules
+from poma.models import InstrumentExecutionRule
 from poma.portfolio import CASH_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, parse_strategy_allocations
 from poma.strategies import default_registry
 
@@ -82,6 +84,7 @@ class Settings(BaseSettings):
         alias="MAX_ORDER_NOTIONAL_USD",
     )
     max_daily_trades: PositiveInt = Field(default=100, alias="MAX_DAILY_TRADES")
+    non_fractional_tickers: str = Field(default="", alias="NON_FRACTIONAL_TICKERS")
     order_status_timeout_seconds: PositiveInt = Field(
         default=60,
         alias="ORDER_STATUS_TIMEOUT_SECONDS",
@@ -159,6 +162,9 @@ class Settings(BaseSettings):
 
     def strategy_allocation_map(self) -> dict[str, float]:
         return parse_strategy_allocations(self.strategy_allocations)
+
+    def execution_rules(self) -> dict[str, InstrumentExecutionRule]:
+        return build_execution_rules(self.non_fractional_tickers)
 
     def assert_safe_for_execution(self) -> None:
         if self.trading_mode in {TradingMode.PAPER, TradingMode.LIVE} and not self.ibkr_account:
