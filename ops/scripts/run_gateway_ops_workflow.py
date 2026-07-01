@@ -250,10 +250,17 @@ def main() -> int:
         )
     if action == "fix-app-docker-perms":
         return remote(
+            # poma is intentionally created non-unique on uid/gid 1000, shared with the cloud
+            # image's default "ubuntu" account (see infra/gcp-free-tier/startup.sh). crontab -u
+            # poma and the cron daemon itself both resolve that shared uid back to "ubuntu" for
+            # ownership/session purposes, so the crontab actually runs as ubuntu, not poma -- add
+            # both names to the docker group so the fix holds regardless of which one a given tool
+            # resolves the shared uid to.
             "sudo usermod -aG docker poma && "
+            "sudo usermod -aG docker ubuntu && "
             "sudo systemctl restart cron && "
-            "id poma && "
-            "echo 'poma added to the docker group and cron restarted; "
+            "getent group docker && "
+            "echo 'poma and ubuntu added to the docker group and cron restarted; "
             "the next monitor/reconcile-orders tick should reach the Docker API.'",
             timeout=180,
         )

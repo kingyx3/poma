@@ -26,6 +26,11 @@ REQUIRED_STARTUP_SNIPPETS = (
     'useradd --uid "$${APP_UID}" --gid "$${APP_GID}" --create-home --shell /bin/bash "$${APP_USER}"',
     'must use uid=$${APP_UID} gid=$${APP_GID}',
     'usermod -aG docker "$${APP_USER}"',
+    # $${APP_USER} shares uid/gid 1000 with the cloud image's "ubuntu" account; cron resolves that
+    # shared uid back to "ubuntu" for crontab ownership and job execution, so ubuntu needs the same
+    # docker group membership regardless of which name a given tool resolves the uid to.
+    'if id -u ubuntu >/dev/null 2>&1 && [ "$${APP_USER}" != "ubuntu" ]; then',
+    "usermod -aG docker ubuntu",
     'mkdir -p \\',
     '"$${APP_DIR}/data"',
     "systemctl enable --now docker",
