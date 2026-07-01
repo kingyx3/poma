@@ -12,8 +12,16 @@ on:
           - stg
           - prd
         default: dev
+      deployment_action:
+        description: Deploy/update the VM, or undeploy and remove selected environment resources from Terraform state.
+        required: true
+        type: choice
+        options:
+          - deploy
+          - undeploy
+        default: deploy
       terraform_action:
-        description: Run Terraform plan only, or apply and deploy.
+        description: Run Terraform plan only, or apply the selected deployment action.
         required: true
         type: choice
         options:
@@ -62,6 +70,10 @@ on:
       deploy_environment:
         required: true
         type: string
+      deployment_action:
+        required: false
+        type: string
+        default: deploy
       terraform_action:
         required: false
         type: string
@@ -101,7 +113,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Terraform and deploy (${{ inputs.deploy_environment }})
+    name: Terraform ${{ inputs.deployment_action }} (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: ${{ inputs.deploy_environment }}
@@ -109,23 +121,49 @@ jobs:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      INPUT_DEPLOYMENT_ACTION: ${{ inputs.deployment_action }}
       INPUT_TERRAFORM_ACTION: ${{ inputs.terraform_action }}
       INPUT_TRADING_MODE: ${{ inputs.trading_mode }}
       INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
       INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
       INPUT_IMAGE: ${{ inputs.image }}
 
-      # Minimal runtime secrets. Telegram is mandatory; IBKR is required by selected modes.
-      IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
-      IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Resolve generated deployment config and CI defaults
+      - name: Resolve generated deployment config and selected action
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source ops/scripts/resolve_gcp_deploy_env.sh
+
+          case "${INPUT_DEPLOYMENT_ACTION}" in
+            deploy|undeploy)
+              ;;
+            *)
+              echo "::error::unsupported deployment_action=${INPUT_DEPLOYMENT_ACTION}; use deploy or undeploy"
+              exit 1
+              ;;
+          esac
+          case "${INPUT_TERRAFORM_ACTION}" in
+            plan|apply)
+              ;;
+            *)
+              echo "::error::unsupported terraform_action=${INPUT_TERRAFORM_ACTION}; use plan or apply"
+              exit 1
+              ;;
+          esac
+
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, deployment_action=${INPUT_DEPLOYMENT_ACTION}, terraform_action=${INPUT_TERRAFORM_ACTION}"
+
+      - name: Resolve CI runtime defaults
+        if: ${{ inputs.deployment_action == 'deploy' }}
+        env:
+          IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
+          IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -euo pipefail
           # shellcheck source=/dev/null
@@ -192,6 +230,8 @@ jobs:
             echo "::error::TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID GitHub Environment secrets are required"
             exit 1
           fi
+          set_env TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN}"
+          set_env TELEGRAM_CHAT_ID "${TELEGRAM_CHAT_ID}"
           case "${TRADING_MODE}" in
             paper)
               if [ -z "${IBKR_ACCOUNT_PAPER:-}" ]; then
@@ -205,6 +245,7 @@ jobs:
                 echo "::error::IBKR_ACCOUNT GitHub Environment secret is required when TRADING_MODE=live"
                 exit 1
               fi
+              set_env IBKR_ACCOUNT "${IBKR_ACCOUNT}"
               ;;
             dry_run)
               if [ -n "${IBKR_ACCOUNT_PAPER:-}" ]; then
@@ -212,6 +253,8 @@ jobs:
               elif [ -z "${IBKR_ACCOUNT:-}" ]; then
                 echo "::error::IBKR_ACCOUNT_PAPER or IBKR_ACCOUNT GitHub Environment secret is required for deploy .env rendering"
                 exit 1
+              else
+                set_env IBKR_ACCOUNT "${IBKR_ACCOUNT}"
               fi
               ;;
           esac
@@ -223,6 +266,7 @@ jobs:
           echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, region=${GCP_REGION}, zone=${GCP_ZONE}, state_bucket=${TF_STATE_BUCKET}, trading_mode=${TRADING_MODE}, data_provider=${DATA_PROVIDER}"
 
       - name: Render .env from CI defaults and GitHub secrets
+        if: ${{ inputs.deployment_action == 'deploy' }}
         run: |
           timeout --kill-after=30s 2m python ops/scripts/render_env.py --strict-env --output .env.deploy || {
             echo "::error::render_env.py timed out or failed while rendering deployment .env"
@@ -230,6 +274,7 @@ jobs:
           }
 
       - name: Validate rendered runtime config
+        if: ${{ inputs.deployment_action == 'deploy' }}
         run: |
           set -euo pipefail
           timeout --kill-after=30s 2m pip install -e . || {
@@ -242,6 +287,7 @@ jobs:
           }
 
       - name: Validate market data provider output
+        if: ${{ inputs.deployment_action == 'deploy' }}
         run: |
           set -euo pipefail
           if [ "${DATA_PROVIDER}" = "fixture" ]; then
@@ -287,29 +333,54 @@ jobs:
 
       # terraform fmt -check and validate run in ci.yml on every PR (covering both modules), so
       # they are not repeated here; `terraform plan` below still surfaces any config errors.
-      - name: Terraform plan
+      - name: Terraform plan selected action
         run: |
           set -euo pipefail
-          timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan -out=tfplan \
-            -var="project_id=${GCP_PROJECT_ID}" \
-            -var="region=${GCP_REGION}" \
-            -var="zone=${GCP_ZONE}" \
-            -var="instance_name=${GCP_VM_NAME}" || {
-              echo "::error::Terraform plan timed out or failed"
-              exit 1
-            }
+          plan_args=(
+            -var="project_id=${GCP_PROJECT_ID}"
+            -var="region=${GCP_REGION}"
+            -var="zone=${GCP_ZONE}"
+            -var="instance_name=${GCP_VM_NAME}"
+          )
+          if [ "${INPUT_DEPLOYMENT_ACTION}" = "undeploy" ]; then
+            plan_args=(-destroy "${plan_args[@]}")
+          fi
+          timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan -out=tfplan "${plan_args[@]}" || {
+            echo "::error::Terraform ${INPUT_DEPLOYMENT_ACTION} plan timed out or failed"
+            exit 1
+          }
 
-      - name: Terraform apply
+      - name: Terraform apply selected plan
         if: ${{ inputs.terraform_action == 'apply' }}
         run: |
           set -euo pipefail
           timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply -auto-approve tfplan || {
-            echo "::error::Terraform apply timed out or failed"
+            echo "::error::Terraform ${INPUT_DEPLOYMENT_ACTION} apply timed out or failed"
             exit 1
           }
 
+      - name: Verify Terraform state is clean after undeploy
+        if: ${{ inputs.deployment_action == 'undeploy' && inputs.terraform_action == 'apply' }}
+        run: |
+          set -euo pipefail
+          state_output="$(terraform -chdir=infra/gcp-free-tier state list 2>&1)" || {
+            if printf '%s\n' "${state_output}" | grep -q "No state file was found"; then
+              echo "No Terraform state file remains for ${DEPLOY_ENVIRONMENT}; undeploy is clean."
+              exit 0
+            fi
+            echo "::error::Unable to inspect Terraform state after undeploy"
+            printf '%s\n' "${state_output}"
+            exit 1
+          }
+          if [ -n "${state_output}" ]; then
+            echo "::error::Terraform state still contains managed resources after undeploy"
+            printf '%s\n' "${state_output}"
+            exit 1
+          fi
+          echo "Terraform state is empty for ${DEPLOY_ENVIRONMENT}; undeploy is clean."
+
       - name: Package application
-        if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
+        if: ${{ inputs.deployment_action == 'deploy' && inputs.terraform_action == 'apply' && inputs.deploy_app }}
         run: |
           set -euo pipefail
           # Ship only the runtime files required on the VM. Avoid uploading CI/test/docs/git
@@ -333,7 +404,7 @@ jobs:
           echo "Packaged runtime archive: $(du -h /tmp/poma.tar.gz | awk '{print $1}')"
 
       - name: Upload and install on VM
-        if: ${{ inputs.terraform_action == 'apply' && inputs.deploy_app }}
+        if: ${{ inputs.deployment_action == 'deploy' && inputs.terraform_action == 'apply' && inputs.deploy_app }}
         timeout-minutes: 55
         run: |
           set -euo pipefail
@@ -572,7 +643,7 @@ jobs:
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
-            POMA[${{ inputs.deploy_environment }}] deploy ${{ job.status }} —
+            POMA[${{ inputs.deploy_environment }}] ${{ inputs.deployment_action }} ${{ job.status }} —
             terraform=${{ inputs.terraform_action }}, app=${{ inputs.deploy_app }},
             mode=${{ inputs.trading_mode }}, provider=${{ inputs.data_provider }}
             (${{ github.sha }})

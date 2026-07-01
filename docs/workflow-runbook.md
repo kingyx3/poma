@@ -39,6 +39,7 @@ flowchart TD
 | 7 | IB Gateway Ops: configure-paper | VM is healthy and broker login secrets are set | Configures Gateway paper session |
 | 8 | Deploy GCP e2-micro VM: paper | Gateway socket is reachable | Runs app against paper account |
 | 9 | IB Gateway Ops: logs/status/restart/verify-socket | Maintenance or troubleshooting | Diagnoses or restarts Gateway |
+| 10 | Deploy GCP e2-micro VM: undeploy plan, then undeploy apply | Retiring one selected environment's VM foundation | Destroys the selected `gcp-free-tier` resources and verifies Terraform state is empty |
 
 ## Recovery map
 
@@ -48,13 +49,15 @@ flowchart TD
 | IBC template missing | IB Gateway Ops restart |
 | Gateway service unit missing | IB Gateway Ops restart |
 | Socket not reachable | IB Gateway Ops logs, status, restart, verify-socket |
+| Selected environment VM should be removed | Deploy GCP e2-micro VM with `deployment_action=undeploy`, first `terraform_action=plan`, then `apply` |
 
 ## Environment secrets summary
 
 | Workflow | Secrets needed |
 |---|---|
 | Bootstrap | Temporary bootstrap service account key |
-| Deploy | Telegram token, Telegram chat id, data provider key, account selector for selected mode |
+| Deploy with `deployment_action=deploy` | Telegram token, Telegram chat id, data provider key, account selector for selected mode |
+| Deploy with `deployment_action=undeploy` | No runtime secrets; uses generated WIF config for the selected environment |
 | IB Gateway Ops `configure-paper` / `configure-live` | Broker login id and broker login secret |
 
 ## Safe dev path
