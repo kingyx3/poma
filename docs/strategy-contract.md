@@ -1,6 +1,8 @@
 # Strategy contract
 
-Production behavior:
+Every strategy sleeve named in `STRATEGY_ALLOCATIONS` (other than `cash`) must be registered in `src/poma/strategies/registry.py`; an unregistered name fails config validation at startup. The engine builds one `StrategyTargetBook` per registered, allocated sleeve and combines them into a single portfolio-level target per ticker (`src/poma/portfolio_constructor.py`). Adding a new strategy means implementing the `Strategy` protocol in `src/poma/strategies/` (see `rank_velocity_size_equal_weight.py`) and registering it — no engine changes required.
+
+Production behavior of the current `rank_velocity_size_equal_weight` strategy:
 
 - Use the largest 500 US-listed companies by current market cap from the configured provider.
 - Normalize provider rows into the internal snapshot contract.

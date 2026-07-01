@@ -10,22 +10,20 @@ from poma.broker import (
     order_results_have_issues,
     order_results_have_no_accepted_orders,
 )
-from poma.config import Settings, TradingMode
+from poma.config import ManagedCapMode, Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
 from poma.history import CapSnapshotHistory
-from poma.models import OrderResult, PortfolioBalances, RebalancePlan
+from poma.models import AccountSnapshot, OrderResult, RebalancePlan, StrategyTargetBook
 from poma.portfolio import build_strategy_capital_plan
+from poma.portfolio_constructor import combine_strategy_target_books
 from poma.risk import (
+    enforce_buying_power,
     enforce_order_limits,
     enforce_turnover_limit,
     generate_trades,
     validate_targets,
 )
-from poma.strategy import (
-    build_equal_weight_targets,
-    select_by_combined_factor,
-    select_top_market_cap,
-)
+from poma.strategies import StrategyContext, StrategyRegistry, default_registry
 
 BLOCK_MARKER = "block execution"
 COMPLETED_STATUS = "completed"
@@ -42,7 +40,7 @@ class RebalanceOutcome:
 
 
 class RebalanceEngine:
-    """Pure orchestration for a single rebalance."""
+    """Pure orchestration for a single rebalance across every allocated strategy sleeve."""
 
     def __init__(
         self,
@@ -51,28 +49,30 @@ class RebalanceEngine:
         data_client: MarketDataClient | None = None,
         broker: Broker | None = None,
         history: CapSnapshotHistory | None = None,
+        strategy_registry: StrategyRegistry | None = None,
     ) -> None:
         self.settings = settings
         self.data_client = data_client or build_data_client(settings)
         self.broker = broker or build_broker(settings)
         self.history = history
+        self.strategy_registry = strategy_registry or default_registry()
 
     def build_plan(self, session_date: str, run_id: str) -> RebalancePlan:
         settings = self.settings
         warnings: list[str] = []
-        balances = self._rebalance_balances(warnings)
-        portfolio_value_usd = balances.total_value_usd
+        account_snapshot = self._account_snapshot(warnings)
+        portfolio_value_usd = self._resolve_portfolio_value_usd(account_snapshot)
         capital_plan = build_strategy_capital_plan(
             portfolio_value_usd,
             settings.strategy_allocations,
         )
-        strategy_capital = capital_plan.capital_for(settings.active_strategy)
-        current = self.data_client.current_universe_snapshot()
         if capital_plan.unallocated_pct > 1e-9:
             warnings.append(
                 f"{capital_plan.unallocated_pct:.2%} of portfolio value is not allocated "
-                "to active strategies"
+                "to any strategy sleeve"
             )
+
+        current = self.data_client.current_universe_snapshot()
         historical = None
         today = datetime.now(UTC).date()
         if self.history is not None:
@@ -80,32 +80,39 @@ class RebalanceEngine:
             historical = self.history.load_asof(target_date)
             self.history.save(current, today)
 
-        if historical is None:
-            selected = select_top_market_cap(current, settings.max_holdings)
-            if self.history is not None:
-                warnings.append(
-                    "no historical market-cap snapshot found for lookback window; "
-                    "falling back to current market-cap selection"
-                )
-        else:
-            selected = select_by_combined_factor(current, historical, settings.max_holdings)
-        targets = build_equal_weight_targets(
-            selected=selected,
-            portfolio_value_usd=strategy_capital.capital_usd,
-            max_position_pct=settings.max_position_pct,
+        strategy_books: list[StrategyTargetBook] = []
+        for sleeve in capital_plan.tradeable_sleeves():
+            strategy = self.strategy_registry.get(sleeve.name)
+            context = StrategyContext(
+                strategy_name=sleeve.name,
+                allocation_pct=sleeve.allocation_pct,
+                capital_usd=sleeve.capital_usd,
+                current_universe=current,
+                historical_universe=historical,
+                settings=settings,
+            )
+            book = strategy.build_targets(context)
+            strategy_books.append(book)
+            warnings.extend(book.warnings)
+
+        combined_targets, combine_warnings = combine_strategy_target_books(
+            strategy_books,
+            portfolio_value_usd,
         )
+        warnings.extend(combine_warnings)
+        targets = [position.to_target_position() for position in combined_targets]
 
         prices = {
             str(row.ticker): float(row.price)
             for row in current.itertuples()
             if getattr(row, "price", None) is not None
         }
-        positions = [] if any(BLOCK_MARKER in warning for warning in warnings) else self.broker.positions()
+        positions = list(account_snapshot.positions)
         trades, trade_warnings = generate_trades(
             targets=targets,
             current_positions=positions,
             latest_prices=prices,
-            portfolio_value_usd=strategy_capital.capital_usd,
+            portfolio_value_usd=portfolio_value_usd,
             min_trade_notional_usd=settings.min_trade_notional_usd,
             min_weight_delta_pct=settings.min_weight_delta_pct,
             limit_offset_bps=settings.limit_offset_bps,
@@ -116,7 +123,7 @@ class RebalanceEngine:
         warnings.extend(
             enforce_turnover_limit(
                 trades,
-                strategy_capital.capital_usd,
+                portfolio_value_usd,
                 settings.max_turnover_pct,
             )
         )
@@ -127,6 +134,7 @@ class RebalanceEngine:
                 settings.max_daily_trades,
             )
         )
+        warnings.extend(enforce_buying_power(trades, account_snapshot.cash_usd))
 
         return RebalancePlan(
             run_id=run_id,
@@ -136,49 +144,55 @@ class RebalanceEngine:
             execution_results=[],
             warnings=warnings,
             portfolio_value_usd=portfolio_value_usd,
-            portfolio_cash_usd=balances.cash_usd,
-            portfolio_positions_value_usd=balances.positions_market_value_usd,
-            portfolio_net_liquidation_usd=balances.net_liquidation_usd,
-            strategy_name=strategy_capital.name,
-            strategy_allocation_pct=strategy_capital.allocation_pct,
-            strategy_capital_usd=strategy_capital.capital_usd,
+            portfolio_cash_usd=account_snapshot.cash_usd,
+            portfolio_positions_value_usd=account_snapshot.positions_market_value_usd,
+            portfolio_net_liquidation_usd=account_snapshot.net_liquidation_usd,
+            strategy_books=tuple(strategy_books),
+            combined_targets=tuple(combined_targets),
             total_allocated_pct=capital_plan.total_allocated_pct,
             total_allocated_usd=capital_plan.total_allocated_usd,
         )
 
-    def _rebalance_balances(self, warnings: list[str]) -> PortfolioBalances:
+    def _account_snapshot(self, warnings: list[str]) -> AccountSnapshot:
+        """Read broker cash/positions once per rebalance; block on any unsafe read.
+
+        A single snapshot backs both target sizing and trade generation so every strategy
+        sleeve and the risk engine see the same cash and holdings for this run.
+        """
         settings = self.settings
+        fallback = AccountSnapshot(
+            cash_usd=settings.dry_run_portfolio_value_usd,
+            positions=(),
+            positions_market_value_usd=0.0,
+            net_liquidation_usd=settings.dry_run_portfolio_value_usd,
+        )
         if settings.trading_mode == TradingMode.DRY_RUN:
-            return PortfolioBalances(
-                cash_usd=settings.portfolio_value_usd,
-                positions_market_value_usd=0.0,
-                net_liquidation_usd=settings.portfolio_value_usd,
-            )
+            return fallback
 
         try:
-            balances = self.broker.account_balances()
+            snapshot = self.broker.account_snapshot()
         except Exception as exc:  # noqa: BLE001 - broker detail is safer as a blocking warning
             warnings.append(
                 "unable to read broker cash and portfolio balances before rebalancing; "
                 f"{BLOCK_MARKER}: {exc}"
             )
-            return PortfolioBalances(
-                cash_usd=settings.portfolio_value_usd,
-                positions_market_value_usd=0.0,
-                net_liquidation_usd=settings.portfolio_value_usd,
-            )
+            return fallback
 
-        if balances.total_value_usd <= 0:
+        if snapshot.total_value_usd <= 0:
             warnings.append(
                 "broker cash and portfolio balances produced a non-positive portfolio value; "
                 f"{BLOCK_MARKER}"
             )
-            return PortfolioBalances(
-                cash_usd=settings.portfolio_value_usd,
-                positions_market_value_usd=0.0,
-                net_liquidation_usd=settings.portfolio_value_usd,
-            )
-        return balances
+            return fallback
+        return snapshot
+
+    def _resolve_portfolio_value_usd(self, account_snapshot: AccountSnapshot) -> float:
+        settings = self.settings
+        if settings.trading_mode == TradingMode.DRY_RUN:
+            return account_snapshot.total_value_usd
+        if settings.managed_cap_mode == ManagedCapMode.BROKER_TOTAL:
+            return account_snapshot.total_value_usd
+        return min(account_snapshot.total_value_usd, settings.managed_cap_usd)
 
     def is_blocked(self, plan: RebalancePlan) -> bool:
         return any(BLOCK_MARKER in warning for warning in plan.warnings)

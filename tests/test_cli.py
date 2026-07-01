@@ -4,7 +4,7 @@ from conftest import FakeBroker, make_settings
 from typer.testing import CliRunner
 
 from poma.broker import BROKER_UNAVAILABLE_STATUS
-from poma.cli import _broker_unavailable_alert, _portfolio_summary, app
+from poma.cli import _broker_unavailable_alert, _portfolio_summary, _run_rebalance, app
 from poma.health import Check
 from poma.models import CurrentPosition, OrderResult, OrderSide, ProposedTrade, RebalancePlan
 
@@ -90,6 +90,29 @@ def test_doctor_exits_zero_when_all_checks_pass(monkeypatch) -> None:
     monkeypatch.setattr("poma.cli.run_checks", lambda settings: ok_checks)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
+
+
+def test_run_rebalance_writes_execution_journal_before_and_after_a_run(monkeypatch, tmp_path) -> None:
+    settings = make_settings(
+        STATE_DIR=str(tmp_path / "state"),
+        REPORT_DIR=str(tmp_path / "reports"),
+        DATA_DIR=str(tmp_path / "data"),
+    )
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("poma.cli.send_alert", lambda *_args, **_kwargs: None)
+
+    outcome, report_path = _run_rebalance(
+        session_date="2026-07-01",
+        run_id="run-journal-1",
+        force_dry_run=False,
+    )
+
+    assert outcome.status == "dry_run"
+    assert report_path.exists()
+    order_journal_path = tmp_path / "state" / "orders" / "run-journal-1.json"
+    assert order_journal_path.exists()
+    # dry_run never submits orders, so no reconciliation file is written.
+    assert not (tmp_path / "state" / "reconciliations" / "run-journal-1.json").exists()
 
 
 def test_positions_renders_portfolio(monkeypatch) -> None:

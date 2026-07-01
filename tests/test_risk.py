@@ -1,5 +1,6 @@
-from poma.models import CurrentPosition, OrderSide, TargetPosition
+from poma.models import CurrentPosition, OrderSide, ProposedTrade, TargetPosition
 from poma.risk import (
+    enforce_buying_power,
     enforce_order_limits,
     enforce_turnover_limit,
     generate_trades,
@@ -85,3 +86,32 @@ def test_generate_trades_skips_nan_reference_price() -> None:
 
 def test_validate_targets_warns_empty() -> None:
     assert validate_targets([], max_position_pct=0.1) == ["no target positions generated"]
+
+
+def _trade(ticker: str, side: OrderSide, notional: float) -> ProposedTrade:
+    return ProposedTrade(
+        ticker=ticker,
+        side=side,
+        quantity=notional / 100,
+        notional=notional,
+        reference_price=100.0,
+        limit_price=100.1,
+        reason="rebalance_to_target_weight",
+    )
+
+
+def test_enforce_buying_power_allows_net_buys_within_cash() -> None:
+    trades = [_trade("A", OrderSide.BUY, 500), _trade("B", OrderSide.SELL, 200)]
+    assert enforce_buying_power(trades, available_cash_usd=300) == []
+
+
+def test_enforce_buying_power_blocks_net_buys_exceeding_cash() -> None:
+    trades = [_trade("A", OrderSide.BUY, 500), _trade("B", OrderSide.SELL, 100)]
+    warnings = enforce_buying_power(trades, available_cash_usd=300)
+    assert warnings
+    assert "block execution" in warnings[0]
+
+
+def test_enforce_buying_power_ignores_pure_sells() -> None:
+    trades = [_trade("A", OrderSide.SELL, 500)]
+    assert enforce_buying_power(trades, available_cash_usd=0) == []

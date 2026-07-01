@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from poma.config import Settings
-from poma.models import OrderResult, PortfolioBalances, ProposedTrade
+from poma.models import AccountSnapshot, OrderResult, ProposedTrade
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -25,21 +25,19 @@ class FakeBroker:
         cash_usd: float = 10_000.0,
         net_liquidation_usd: float | None = None,
     ) -> None:
-        self._positions = positions or []
+        self._positions = tuple(positions or [])
         self.cash_usd = cash_usd
         self.net_liquidation_usd = net_liquidation_usd
         self.submitted: list[ProposedTrade] | None = None
 
-    def account_balances(self) -> PortfolioBalances:
+    def account_snapshot(self) -> AccountSnapshot:
         positions_value = sum(position.market_value for position in self._positions)
-        return PortfolioBalances(
+        return AccountSnapshot(
             cash_usd=self.cash_usd,
+            positions=self._positions,
             positions_market_value_usd=positions_value,
             net_liquidation_usd=self.net_liquidation_usd,
         )
-
-    def positions(self) -> list:
-        return list(self._positions)
 
     def submit_trades(self, trades: list[ProposedTrade], status_callback=None) -> list[OrderResult]:
         self.submitted = list(trades)

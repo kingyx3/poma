@@ -4,18 +4,18 @@ This runbook is the day-to-day checklist for operating POMA safely in `dry_run`,
 
 ## Strategy and capital model
 
-POMA is a strategy-allocated portfolio runner. In `paper` and `live`, the rebalance plan uses the configured IBKR account's current USD cash balance plus current portfolio value. `STRATEGY_ALLOCATIONS` splits that broker-derived value across named sleeves, and the total allocation must stay at or below 100%.
+POMA is a multi-strategy, strategy-allocated portfolio runner. In `paper` and `live`, the rebalance plan uses a single `AccountSnapshot` read of the configured IBKR account's current USD cash, positions, and net liquidation. `MANAGED_CAP_MODE` (`broker_total` by default) decides whether the full broker equity or `min(broker equity, MANAGED_CAP_USD)` is used. `STRATEGY_ALLOCATIONS` splits that resolved value across named sleeves, and the total allocation must stay at or below 100%. Every allocated non-`cash` sleeve is executed, not just one; sleeves with overlapping tickers are combined into single portfolio-level orders.
 
 Default production allocation:
 
 ```text
 STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.98,cash=0.02
-ACTIVE_STRATEGY=rank_velocity_size_equal_weight
+MANAGED_CAP_MODE=broker_total
 ```
 
-This means the active strategy can trade up to 98% of the broker-derived account value. The remaining 2% is a passive `cash` sleeve. There is no hidden `CASH_BUFFER_PCT` inside the active strategy; reserve cash by changing the `cash` sleeve allocation.
+This means `rank_velocity_size_equal_weight` can trade up to 98% of the resolved account value. The remaining 2% is a passive `cash` sleeve. There is no hidden `CASH_BUFFER_PCT` inside any strategy; reserve cash by changing the `cash` sleeve allocation. Every non-`cash` name in `STRATEGY_ALLOCATIONS` must be a registered strategy (see `docs/strategy-contract.md`); an unregistered name fails config validation at startup.
 
-`PORTFOLIO_VALUE_USD` remains only a dry-run/offline fallback for report generation when no broker balance is available. Paper/live execution blocks if POMA cannot read a positive broker cash + portfolio balance before sizing targets. Balance reads query both account-filtered and session-wide IBKR account summary rows and authenticated-session account value rows, so a Gateway session that has account data in either cache can provide the cash, net liquidation, and portfolio-value inputs needed for rebalancing.
+`DRY_RUN_PORTFOLIO_VALUE_USD` remains only a dry-run/offline fallback for report generation when no broker balance is available. Paper/live execution blocks if POMA cannot read a positive broker account snapshot before sizing targets. Balance reads query both account-filtered and session-wide IBKR account summary rows and authenticated-session account value rows, so a Gateway session that has account data in either cache can provide the cash, net liquidation, and portfolio-value inputs needed for rebalancing.
 
 ## Required GitHub Environment secrets
 
