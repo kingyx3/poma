@@ -193,6 +193,10 @@ def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
     assert ".github/workflows/auto-cicd.yml" not in shared_paths
     assert "infra/gcp-free-tier/*" in shared_paths
     assert "ops/deploy/environments/*" in shared_paths
+    # broker.py/health.py own the credentialed Gateway handshake and market-data readiness
+    # probe, so changing them must also re-validate Gateway configure, not just redeploy the app.
+    assert "src/poma/broker.py" in shared_paths
+    assert "src/poma/health.py" in shared_paths
     assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
     assert "ops/scripts/repair_ib_gateway_runtime.py" in gateway_paths
     assert "ops/scripts/wait_ib_gateway_2fa.py" in gateway_paths
@@ -220,3 +224,13 @@ def test_adr_0002_dev_gateway_pr_checks_records_configure_paper_decision() -> No
     assert "action: configure-paper" in text
     assert "restart-only" in text
     assert "2FA" in text or "2fa" in text.lower()
+
+
+def test_adr_0003_market_data_readiness_check_records_the_decision() -> None:
+    adr = REPO_ROOT / "docs/adr/0003-ibkr-market-data-readiness-check.md"
+    text = adr.read_text(encoding="utf-8")
+    assert "Status: Accepted" in text
+    assert "market_data_ok" in text
+    assert "errorEvent" in text
+    assert "src/poma/broker.py" in text
+    assert "src/poma/health.py" in text

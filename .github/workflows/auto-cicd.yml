@@ -54,7 +54,9 @@ jobs:
           is_shared_vm_gateway_path() {
             case "$1" in
               infra/gcp-free-tier/*|\
-              ops/deploy/environments/*)
+              ops/deploy/environments/*|\
+              src/poma/broker.py|\
+              src/poma/health.py)
                 return 0
                 ;;
               *)

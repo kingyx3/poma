@@ -117,6 +117,18 @@ def test_missing_quote_timestamp_blocks() -> None:
     assert "block execution" in warnings[0]
 
 
+def test_missing_quote_timestamp_includes_broker_error_when_available() -> None:
+    settings = make_settings()
+    price, warnings = select_execution_price(
+        _quote(age_seconds=None, broker_error="354: Requested market data is not subscribed."),
+        OrderSide.BUY,
+        settings,
+    )
+    assert price is None
+    assert "354: Requested market data is not subscribed." in warnings[0]
+    assert "block execution" in warnings[0]
+
+
 def test_wide_spread_blocks() -> None:
     settings = make_settings(EXECUTION_MAX_SPREAD_BPS=50.0)
     price, warnings = select_execution_price(
