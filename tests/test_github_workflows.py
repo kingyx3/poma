@@ -147,6 +147,38 @@ def test_auto_cicd_deploys_dev_and_prd_only() -> None:
         assert snippet not in workflow
 
 
+def test_auto_cicd_builds_and_deploys_the_ref_under_test() -> None:
+    # Deploys must pull an image built from the exact ref under test, never a stale mutable
+    # :main tag. Each deploy job depends on a build job and forwards its SHA-tagged image.
+    workflow = _text(AUTO_CICD_WORKFLOW)
+    deploy_workflow = _text(DEPLOY_WORKFLOW)
+
+    for snippet in (
+        "  dev-build-image:",
+        "  prd-build-image:",
+        "uses: ./.github/workflows/build-app-image.yml",
+        "ref: ${{ github.event.pull_request.head.sha }}",
+        "image: ${{ needs.dev-build-image.outputs.image }}",
+        "image: ${{ needs.prd-build-image.outputs.image }}",
+        "needs: [changes, dev-build-image]",
+        "needs.dev-build-image.result == 'success'",
+        "needs: prd-build-image",
+    ):
+        assert snippet in workflow
+
+    # Image-affecting changes must trigger the build+deploy path so a PR validates its own image.
+    deploy_paths = workflow.split("is_deploy_path()", 1)[1].split("is_gateway_path()", 1)[0]
+    assert "constraints.txt" in deploy_paths
+    assert "docker-compose.vm.yml" in deploy_paths
+    assert ".github/workflows/build-app-image.yml" in deploy_paths
+
+    # The deploy workflow accepts the image ref, validates it, and pulls it on the VM.
+    assert "image:" in deploy_workflow
+    assert "INPUT_IMAGE: ${{ inputs.image }}" in deploy_workflow
+    assert "Refusing to deploy malformed image ref" in deploy_workflow
+    assert "POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh" in deploy_workflow
+
+
 def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
     workflow = _text(AUTO_CICD_WORKFLOW)
     dev_gateway = workflow.split("  dev-configure-gateway:", 1)[1].split("  prd-deploy:", 1)[0]

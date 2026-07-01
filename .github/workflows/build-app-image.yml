@@ -1,10 +1,31 @@
 name: Build app image
 
+# Builds and pushes the runtime image to GHCR. Every build publishes an immutable
+# commit-SHA tag (ghcr.io/kingyx3/poma:<sha>) so deploys can pull the exact code under
+# test instead of a mutable, possibly-stale :main. Pushes to main additionally move the
+# :main convenience tag. Auto CI/CD calls this via workflow_call to build a PR's own
+# image before deploying it.
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref or SHA to build. Defaults to the triggering commit.
+        required: false
+        type: string
+        default: ''
+      tag_main:
+        description: Also move the mutable :main tag to this build.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      image:
+        description: Immutable commit-SHA image reference that was pushed.
+        value: ${{ jobs.build.outputs.image }}
 
 permissions:
   contents: read
@@ -13,25 +34,51 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: |
-          image_registry="ghcr.io"
-          image_owner="kingyx3"
-          image_name="poma"
-          image="${image_registry}/${image_owner}/${image_name}"
+      - name: Resolve image tags
+        id: meta
+        env:
+          # Move :main on direct pushes to main, or when a caller explicitly asks for it.
+          TAG_MAIN: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.tag_main }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/kingyx3/poma"
+          # Tag the SHA actually checked out (immutable, unique per commit) so a deploy can
+          # pull precisely the code that produced this image.
+          sha="$(git rev-parse HEAD)"
+          {
+            echo "image=${image}:${sha}"
+            echo "sha=${sha}"
+            echo "tag_main=${TAG_MAIN}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Building ${image}:${sha} (tag_main=${TAG_MAIN})"
+      - name: Build and push image
+        env:
+          IMAGE: ghcr.io/kingyx3/poma
+          BUILD_SHA: ${{ steps.meta.outputs.sha }}
+          TAG_MAIN: ${{ steps.meta.outputs.tag_main }}
+        run: |
+          set -euo pipefail
+          tags=(--tag "${IMAGE}:${BUILD_SHA}")
+          if [ "${TAG_MAIN}" = "true" ]; then
+            tags+=(--tag "${IMAGE}:main")
+          fi
           docker buildx build \
             --build-arg "APP_UID=1000" \
             --build-arg "APP_GID=1000" \
             --push \
-            --tag "${image}:main" \
-            --tag "${image}:${GITHUB_SHA}" \
+            "${tags[@]}" \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             .

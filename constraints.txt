@@ -1,4 +1,8 @@
 ib-insync==0.9.86
+# Pin click alongside typer: typer 0.12.3 emits boolean options in a form that click >=8.2
+# rejects at command-build time ("Secondary flag is not valid for non-boolean flag"), which
+# crashed every `poma` invocation in the deployed image. click 8.1.x is the compatible line.
+click==8.1.8
 pandas==2.2.2
 pandas-market-calendars==4.4.1
 pydantic==2.8.2
