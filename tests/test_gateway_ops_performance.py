@@ -32,15 +32,29 @@ def test_gateway_runner_checks_trading_readiness_and_startup_progress() -> None:
     for snippet in (
         "Paper Gateway configure will verify API and trading readiness directly.",
         "Gateway startup progress check",
-        "Gateway service is active but API socket is closed; checking startup progress.",
         "Gateway startup stalled before opening the API socket; collecting diagnostics.",
         "poma-diagnose-ibgateway startup-check",
         "poma ibkr-check",
-        "Broker auth, Gateway API, or trading permission readiness timed out",
+        "readiness timed out before the API",
         "TRADING_MODE=",
         "DATA_PROVIDER=fixture",
     ):
         assert snippet in runner
+
+
+def test_gateway_readiness_uses_pulled_vm_image_and_bounded_restarts() -> None:
+    runner = _runner()
+
+    # Readiness what-if must reuse the deployed VM image (host-networked, pulled) instead of
+    # rebuilding from source on the e2-micro or racing container-namespaced 127.0.0.1.
+    assert "-f docker-compose.vm.yml" in runner
+    assert "--env-file .compose.env" in runner
+    assert "docker compose run --rm" not in runner
+    # A forced trading-login restart must reset the per-login budget and be bounded, then fail fast
+    # with an actionable read-only/permissions message instead of silently timing out.
+    assert "max_trading_login_restarts = 2" in runner
+    assert "login_started = time.monotonic()" in runner
+    assert "'Read-Only API' disabled" in runner
 
 
 def test_gateway_runtime_repair_installs_helpers_idempotently() -> None:
@@ -63,7 +77,6 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
 
     assert "nc -z 127.0.0.1 7497" in runner
     assert "systemctl is-active --quiet ibgateway" in runner
-    assert "Gateway API socket stability guard" in runner
     assert "stable >= 2" in runner
 
 

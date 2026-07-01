@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +33,54 @@ def classify(**overrides):
     }
     state.update(overrides)
     return module.classify_startup_state(**state)
+
+
+def _run_validate_owner_check(tmp_path, monkeypatch, *, file_uid, poma_uid, owner_name):
+    """Run validate_config against a temp config and return the owner-related error, if any."""
+    module = load_diagnostics_module()
+    config = tmp_path / "config.ini"
+    config.write_text(
+        "IbLoginId=abc\nIbPassword=secret\nTradingMode=paper\nOverrideTwsApiPort=7497\n"
+        "AcceptIncomingConnectionAction=accept\nAllowBlindTrading=yes\n"
+        "ReloginAfterSecondFactorAuthenticationTimeout=yes\n",
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    monkeypatch.setattr(module, "IBC_CONFIG", config)
+
+    real_stat = type(config).stat
+
+    def fake_stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if self == config:
+            return type("S", (), {"st_uid": file_uid, "st_mode": result.st_mode})()
+        return result
+
+    monkeypatch.setattr(type(config), "stat", fake_stat)
+    monkeypatch.setattr(module.pwd, "getpwuid", lambda uid: type("P", (), {"pw_name": owner_name})())
+    monkeypatch.setattr(module.pwd, "getpwnam", lambda name: type("P", (), {"pw_uid": poma_uid})())
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        module.validate_config("paper")
+    return [line for line in buffer.getvalue().splitlines() if "owner" in line and "ERROR" in line]
+
+
+def test_validate_accepts_config_owned_by_poma_uid_shared_with_ubuntu(tmp_path, monkeypatch) -> None:
+    # startup.sh creates poma as a non-unique uid 1000 shared with the cloud image's ubuntu
+    # user, so the file's uid resolves to name "ubuntu". Ownership must validate by uid, not
+    # name, or configure-paper fails with a spurious "owner is ubuntu, expected poma".
+    owner_errors = _run_validate_owner_check(
+        tmp_path, monkeypatch, file_uid=1000, poma_uid=1000, owner_name="ubuntu"
+    )
+    assert owner_errors == []
+
+
+def test_validate_rejects_config_owned_by_a_different_uid(tmp_path, monkeypatch) -> None:
+    owner_errors = _run_validate_owner_check(
+        tmp_path, monkeypatch, file_uid=0, poma_uid=1000, owner_name="root"
+    )
+    assert owner_errors and "expected 1000" in owner_errors[0]
 
 
 def test_classifies_service_active_without_headless_display_as_prelogin_failure() -> None:

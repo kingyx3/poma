@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
+APP_USER = "poma"
 IBC_CONFIG = Path("/home/poma/ibc/config.ini")
 GATEWAYSTART = Path("/opt/ibc/gatewaystart.sh")
 RUNNER = Path("/usr/local/bin/poma-run-ib-gateway")
@@ -252,9 +253,19 @@ def validate_config(mode: str) -> int:
         values = read_key_values(IBC_CONFIG)
         for key in sorted(values):
             print(f"{key}={'***' if key in SENSITIVE_KEYS else values[key]}")
-        expected = {"TradingMode": mode, "OverrideTwsApiPort": "7497", "AcceptIncomingConnectionAction": "accept", "AllowBlindTrading": "yes", "ReloginAfterSecondFactorAuthenticationTimeout": "yes"}
-        if owner != "poma":
-            errors.append(f"{IBC_CONFIG} owner is {owner}, expected poma")
+        expected = {"TradingMode": mode, "OverrideTwsApiPort": "7497", "AcceptIncomingConnectionAction": "accept", "AllowBlindTrading": "yes", "ReloginAfterSecondFactorAuthenticationTimeout": "yes", "ReadOnlyLogin": "no", "ReadOnlyApi": "no"}
+        # Compare ownership by uid, not name. startup.sh may create the poma app user with a
+        # non-unique uid shared with the cloud image's default user (uid 1000 = ubuntu), so
+        # name lookup for the file's uid can resolve to "ubuntu" even though the file is owned
+        # by poma's uid. An owner-name check would then fail spuriously.
+        try:
+            expected_uid: int | None = pwd.getpwnam(APP_USER).pw_uid
+        except KeyError:
+            expected_uid = None
+        if expected_uid is None:
+            errors.append(f"expected app user {APP_USER!r} does not exist on the VM")
+        elif st.st_uid != expected_uid:
+            errors.append(f"{IBC_CONFIG} owner uid is {st.st_uid} ({owner}), expected {expected_uid} ({APP_USER})")
         if mode_bits != 0o600:
             errors.append(f"{IBC_CONFIG} mode is {mode_bits:o}, expected 600")
         for key in ("IbLoginId", "IbPassword"):
