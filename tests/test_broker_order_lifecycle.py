@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import pytest
 from conftest import make_settings
@@ -39,6 +40,17 @@ class FakeTrade:
 
 
 @dataclass
+class FakeMarketData:
+    contract: object
+    bid: float = float("nan")
+    ask: float = float("nan")
+    last: float = float("nan")
+    close: float = float("nan")
+    time: object = None
+    marketDataType: int = 1
+
+
+@dataclass
 class FakeIB:
     open_trades: list[FakeTrade] = field(default_factory=list)
     connected: bool = False
@@ -46,6 +58,8 @@ class FakeIB:
     cancelled_orders: list[int] = field(default_factory=list)
     placed_orders: list[tuple[object, object]] = field(default_factory=list)
     next_order_id: int = 100
+    market_data_by_symbol: dict[str, FakeMarketData] = field(default_factory=dict)
+    cancelled_market_data_symbols: list[str] = field(default_factory=list)
 
     def connect(self, *_args, **_kwargs) -> None:
         self.connected = True
@@ -82,6 +96,12 @@ class FakeIB:
 
     def sleep(self, _seconds: float) -> None:
         return None
+
+    def reqMktData(self, contract, *_args, **_kwargs):  # noqa: N802, ANN201 - mirrors ib_insync API
+        return self.market_data_by_symbol[contract.symbol]
+
+    def cancelMktData(self, contract) -> None:  # noqa: N802
+        self.cancelled_market_data_symbols.append(contract.symbol)
 
     def disconnect(self) -> None:
         self.connected = False
@@ -189,3 +209,65 @@ def test_replace_order_cancels_old_order_and_places_a_new_one(monkeypatch: pytes
     assert snapshot.order_ref == "poma:run-1:0:AAPL:BUY:r1"
     assert snapshot.ticker == "AAPL"
     assert len(fake_ib.placed_orders) == 1
+
+
+def test_execution_quotes_reads_bid_ask_and_marks_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
+    tick_time = datetime.now(UTC)
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "AAPL": FakeMarketData(
+                contract=FakeContract(symbol="AAPL"), bid=199.90, ask=200.10, last=200.00, time=tick_time
+            ),
+        }
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    quotes = broker.execution_quotes(["AAPL"])
+
+    assert set(quotes) == {"AAPL"}
+    quote = quotes["AAPL"]
+    assert quote.bid == 199.90
+    assert quote.ask == 200.10
+    assert quote.last == 200.00
+    assert quote.source == "ibkr"
+    assert quote.is_delayed is False
+    assert quote.age_seconds is not None
+    assert quote.age_seconds < 5.0
+    assert fake_ib.cancelled_market_data_symbols == ["AAPL"]
+
+
+def test_execution_quotes_marks_delayed_market_data_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "MSFT": FakeMarketData(
+                contract=FakeContract(symbol="MSFT"),
+                bid=400.0,
+                ask=400.20,
+                time=datetime.now(UTC),
+                marketDataType=3,
+            ),
+        }
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    quotes = broker.execution_quotes(["MSFT"])
+
+    assert quotes["MSFT"].is_delayed is True
+    assert quotes["MSFT"].raw_market_data_type == "delayed"
+
+
+def test_execution_quotes_treats_missing_tick_time_as_unknown_age(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "NVDA": FakeMarketData(contract=FakeContract(symbol="NVDA"), bid=100.0, ask=100.20, time=None),
+        }
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    quotes = broker.execution_quotes(["NVDA"])
+
+    assert quotes["NVDA"].age_seconds is None
+    assert quotes["NVDA"].selected_price_as_of_utc is None

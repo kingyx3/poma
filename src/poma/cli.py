@@ -254,7 +254,7 @@ def _run_rebalance(
 
     broker_unavailable_alert_sent = False
 
-    def alert_order_status(_: ProposedTrade, result: OrderResult) -> None:
+    def alert_order_status(trade: ProposedTrade, result: OrderResult) -> None:
         nonlocal broker_unavailable_alert_sent
         if result.status == BROKER_UNAVAILABLE_STATUS:
             if broker_unavailable_alert_sent:
@@ -262,7 +262,7 @@ def _run_rebalance(
             broker_unavailable_alert_sent = True
             send_alert(settings, _broker_unavailable_alert(session_date, result))
             return
-        send_alert(settings, order_status_alert(session_date, result))
+        send_alert(settings, order_status_alert(session_date, result, trade))
 
     plan = engine.execute(plan, order_status_callback=alert_order_status)
     status = engine.execution_status(plan.execution_results)

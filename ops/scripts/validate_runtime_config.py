@@ -4,8 +4,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from poma.config import Settings, TradingMode
+from poma.config import ExecutionPriceSource, Settings, TradingMode
 from poma.portfolio import build_strategy_capital_plan
+
+# Deploy-time ceiling on EXECUTION_QUOTE_MAX_AGE_SECONDS for paper/live: a rendered .env asking
+# for a much staler execution quote than this is very likely a misconfiguration, not intent.
+MAX_SAFE_EXECUTION_QUOTE_AGE_SECONDS = 120
 
 
 def validate(settings: Settings) -> list[str]:
@@ -26,6 +30,20 @@ def validate(settings: Settings) -> list[str]:
         errors.append("total allocated capital exceeds DRY_RUN_PORTFOLIO_VALUE_USD")
     if not capital_plan.tradeable_sleeves():
         errors.append("STRATEGY_ALLOCATIONS must allocate at least one non-cash strategy sleeve")
+
+    if settings.trading_mode in {TradingMode.PAPER, TradingMode.LIVE}:
+        if settings.execution_price_source != ExecutionPriceSource.IBKR:
+            errors.append(
+                "paper/live trading requires EXECUTION_PRICE_SOURCE=ibkr "
+                "(the Yahoo snapshot price is not a safe execution reference)"
+            )
+        if settings.execution_quote_max_age_seconds > MAX_SAFE_EXECUTION_QUOTE_AGE_SECONDS:
+            errors.append(
+                "EXECUTION_QUOTE_MAX_AGE_SECONDS must be at most "
+                f"{MAX_SAFE_EXECUTION_QUOTE_AGE_SECONDS} for paper/live trading"
+            )
+    if settings.trading_mode == TradingMode.LIVE and settings.allow_delayed_execution_quotes:
+        errors.append("LIVE trading must not set ALLOW_DELAYED_EXECUTION_QUOTES=true")
     return errors
 
 

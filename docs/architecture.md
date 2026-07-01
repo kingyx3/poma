@@ -93,8 +93,12 @@ plan rebalance
       -> if unavailable: deduplicated broker-unavailable alert + no order-created spam
       -> if ready:
           -> tag every order with an idempotent orderRef (poma:<run_id>:<index>:<ticker>:<side>)
+          -> immediately before each phase: fetch a fresh IBKR execution quote per ticker and
+             reprice off it (poma.execution_pricing); block trades that fail a freshness/spread/
+             delayed-quote check instead of submitting them (see docs/configuration.md)
           -> submit sell orders first, then buy orders, each with explicit ORDER_TIME_IN_FORCE
-          -> record every submission and status change in the order ledger
+          -> record every submission and status change, plus the quote it was priced from, in
+             the order ledger
           -> emit broker-accepted status/final/failure callbacks
       -> write final report + reconciliation (state/reconciliations/<run_id>.json)
       -> Telegram final summary
@@ -116,7 +120,7 @@ ExecutionManager (src/poma/execution_manager.py)
        -> filled | replace_pending -> cancel_pending -> cancelled | rejected | expired
 ```
 
-`poma reconcile-orders` polls the broker for every open POMA-tagged order (matched by `orderRef`, which survives an API reconnect) and applies the timeout policy: replace once with a more aggressive limit after `REPLACE_AFTER_SECONDS`, then cancel after `CANCEL_AFTER_SECONDS` if still unfilled. Run it on a schedule (e.g. every 1-2 minutes) so working orders are followed up even after the rebalance process has exited; it also sends a Telegram alert on every lifecycle change. The next scheduled rebalance itself checks for orders left open from a *prior* session before planning (see `STALE_ORDER_POLICY` in `docs/configuration.md`) so a forgotten open order cannot silently double up with a fresh plan.
+`poma reconcile-orders` polls the broker for every open POMA-tagged order (matched by `orderRef`, which survives an API reconnect) and applies the timeout policy: replace once after `REPLACE_AFTER_SECONDS`, then cancel after `CANCEL_AFTER_SECONDS` if still unfilled. The replacement price is computed from a *fresh* IBKR quote fetched at reconcile time (not a blind improvement on the order's old, possibly stale, limit price), with `REPLACE_PRICE_IMPROVEMENT_BPS` applied on top of that fresh side-of-market price; if no valid fresh quote is available, the replace is skipped for that reconcile pass rather than repricing off stale data. Run it on a schedule (e.g. every 1-2 minutes) so working orders are followed up even after the rebalance process has exited; it also sends a Telegram alert on every lifecycle change. The next scheduled rebalance itself checks for orders left open from a *prior* session before planning (see `STALE_ORDER_POLICY` in `docs/configuration.md`) so a forgotten open order cannot silently double up with a fresh plan.
 
 ## Runtime files
 
