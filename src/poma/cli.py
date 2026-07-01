@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from poma.broker import BROKER_UNAVAILABLE_STATUS, build_broker
-from poma.config import TradingMode, get_settings
+from poma.config import Settings, TradingMode, get_settings
 from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
 from poma.health import check_ibkr, run_checks
@@ -153,14 +153,44 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
     return path
 
 
+def _assert_rebalance_market_window(
+    settings: Settings,
+    *,
+    allow_outside_market_hours: bool,
+) -> None:
+    """Fail closed before paper/live order planning when outside the regular market window."""
+    if allow_outside_market_hours or settings.trading_mode == TradingMode.DRY_RUN:
+        return
+
+    decision = should_rebalance_now(
+        calendar_name=settings.market_calendar,
+        after_open_minutes=settings.rebalance_after_open_minutes,
+        already_ran=False,
+    )
+    if decision.should_run:
+        return
+
+    session_detail = f" for session {decision.session_date}" if decision.session_date else ""
+    raise RuntimeError(
+        "rebalance execution blocked outside regular market hours"
+        f"{session_detail}: {decision.reason}. "
+        "Use --allow-outside-market-hours only after manual review."
+    )
+
+
 def _run_rebalance(
     session_date: str,
     run_id: str,
     force_dry_run: bool,
+    allow_outside_market_hours: bool = False,
 ) -> tuple[RebalanceOutcome, Path]:
     settings = get_settings()
     if force_dry_run:
         settings = settings.model_copy(update={"trading_mode": TradingMode.DRY_RUN})
+    _assert_rebalance_market_window(
+        settings,
+        allow_outside_market_hours=allow_outside_market_hours,
+    )
 
     engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.data_dir))
     plan = engine.build_plan(session_date, run_id)
@@ -256,8 +286,17 @@ def rebalance(
         bool,
         typer.Option(help="Force dry-run mode for this run."),
     ] = False,
+    allow_outside_market_hours: Annotated[
+        bool,
+        typer.Option(help="Allow paper/live execution outside the regular market window after manual review."),
+    ] = False,
 ) -> None:
-    _run_rebalance(session_date=session_date, run_id=utc_run_id(), force_dry_run=dry_run)
+    _run_rebalance(
+        session_date=session_date,
+        run_id=utc_run_id(),
+        force_dry_run=dry_run,
+        allow_outside_market_hours=allow_outside_market_hours,
+    )
 
 
 @app.command()
