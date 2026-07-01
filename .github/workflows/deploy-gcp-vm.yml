@@ -443,14 +443,14 @@ jobs:
               id poma >&2 || true
               sudo -u poma id >&2 || true
               ls -la /opt/poma >&2 || true
-              find /opt/poma -maxdepth 2 -mindepth 1 -printf '%M %u:%g %p\n' 2>/dev/null | sort >&2 || true
+              find /opt/poma -maxdepth 2 -mindepth 1 -printf "%M %u:%g %p\n" 2>/dev/null | sort >&2 || true
               docker --version >&2 || true
               docker compose version >&2 || true
               systemctl is-active docker cron >&2 || true
               df -h / /opt/poma >&2 || true
               docker system df >&2 || true
               if [ -f /opt/poma/.compose.env ]; then
-                sed 's/^POMA_IMAGE=.*/POMA_IMAGE=<redacted>/' /opt/poma/.compose.env >&2 || true
+                sed "s/^POMA_IMAGE=.*/POMA_IMAGE=<redacted>/" /opt/poma/.compose.env >&2 || true
               fi
               exit "${status}"
             }
