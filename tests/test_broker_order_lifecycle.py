@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 import pytest
 from conftest import make_settings
 
-from poma.broker import IbkrBroker
-from poma.models import OrderSide
+from poma.broker import IbkrBroker, order_results_have_issues, order_results_have_no_accepted_orders
+from poma.models import OrderResult, OrderSide
 
 
 @dataclass
@@ -271,3 +271,45 @@ def test_execution_quotes_treats_missing_tick_time_as_unknown_age(monkeypatch: p
 
     assert quotes["NVDA"].age_seconds is None
     assert quotes["NVDA"].selected_price_as_of_utc is None
+
+
+def _result(status: str, *, filled: float = 0.0, message: str | None = None) -> OrderResult:
+    return OrderResult(
+        ticker="AAPL",
+        side=OrderSide.BUY,
+        quantity=5.0,
+        notional=500.0,
+        order_id=1,
+        status=status,
+        filled=filled,
+        average_fill_price=None,
+        message=message,
+    )
+
+
+def test_idempotent_replay_only_results_are_not_treated_as_no_orders_accepted() -> None:
+    """A same-run retry that only replays already-accepted-but-unfilled orders is not a failure.
+
+    Without this, engine.execution_status() would misclassify a benign crash-recovery retry as
+    NO_ORDERS_ACCEPTED_STATUS, which src/poma/state.py treats as terminal and blocks any further
+    automatic retry of that session.
+    """
+    results = [_result("IdempotentReplay", filled=0.0, message="already broker_accepted; not resubmitted")]
+
+    assert order_results_have_no_accepted_orders(results) is False
+
+
+def test_idempotent_replay_only_results_are_not_treated_as_issues() -> None:
+    results = [_result("IdempotentReplay", filled=0.0, message="already broker_accepted; not resubmitted")]
+
+    assert order_results_have_issues(results) is False
+
+
+def test_a_real_failure_alongside_an_idempotent_replay_is_still_flagged_as_an_issue() -> None:
+    results = [
+        _result("IdempotentReplay", filled=0.0, message="already broker_accepted; not resubmitted"),
+        _result("Failed", message="order not accepted by broker"),
+    ]
+
+    assert order_results_have_issues(results) is True
+    assert order_results_have_no_accepted_orders(results) is False

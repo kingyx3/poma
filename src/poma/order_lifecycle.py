@@ -8,6 +8,13 @@ from poma.models import OpenOrderSnapshot, OrderResult, OrderSide
 
 ORDER_REF_PREFIX = "poma"
 EXECUTION_QUOTE_BLOCKED_STATUS = "QuoteBlocked"
+BUYING_POWER_BLOCKED_STATUS = "BuyingPowerBlocked"
+# Deliberately NOT in _RAW_SUBMISSION_FAILURE / classify_lifecycle: an IdempotentReplay result
+# reports on an order an earlier attempt already got to the broker (or resolved). Routing it
+# through with_order_result() would reclassify that order's ledger entry via this constant's raw
+# status instead of its real broker status, silently corrupting the ledger. ExecutionManager's
+# submit_plan() intentionally leaves the existing ledger entry untouched for a replay instead.
+IDEMPOTENT_REPLAY_STATUS = "IdempotentReplay"
 
 
 class OrderLifecycleState(StrEnum):
@@ -48,7 +55,13 @@ WORKING_LIFECYCLE_STATES = frozenset(
 )
 
 _RAW_TERMINAL_CANCELLED = {"Cancelled", "ApiCancelled"}
-_RAW_SUBMISSION_FAILURE = {"Failed", "BrokerUnavailable", "OrderNotAccepted", EXECUTION_QUOTE_BLOCKED_STATUS}
+_RAW_SUBMISSION_FAILURE = {
+    "Failed",
+    "BrokerUnavailable",
+    "OrderNotAccepted",
+    EXECUTION_QUOTE_BLOCKED_STATUS,
+    BUYING_POWER_BLOCKED_STATUS,
+}
 
 
 def build_order_ref(run_id: str, index: int, ticker: str, side: OrderSide) -> str:

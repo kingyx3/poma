@@ -41,6 +41,13 @@ class LocalState:
         status = self.session_status(session_date)
         return status in ACTIVE_STATUSES
 
+    def session_run_id(self, session_date: str) -> str | None:
+        payload = self._read()
+        if payload.get("last_rebalance_session") != session_date:
+            return None
+        run_id = payload.get("last_rebalance_run_id")
+        return str(run_id) if run_id else None
+
     def begin_session(self, session_date: str, run_id: str) -> None:
         payload = self._read()
         payload["last_rebalance_session"] = session_date

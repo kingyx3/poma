@@ -9,6 +9,20 @@ class OrderSide(StrEnum):
     SELL = "SELL"
 
 
+def _resolve_account_total_value(
+    cash_usd: float,
+    positions_market_value_usd: float,
+    net_liquidation_usd: float | None,
+) -> float:
+    """Cash plus positions when available; net liquidation is the fallback when it is not."""
+    cash_and_positions = cash_usd + positions_market_value_usd
+    if cash_and_positions > 0:
+        return cash_and_positions
+    if net_liquidation_usd is not None:
+        return net_liquidation_usd
+    return cash_and_positions
+
+
 @dataclass(frozen=True)
 class TargetPosition:
     ticker: str
@@ -41,12 +55,7 @@ class AccountSnapshot:
 
     @property
     def total_value_usd(self) -> float:
-        cash_and_positions = self.cash_usd + self.positions_market_value_usd
-        if cash_and_positions > 0:
-            return cash_and_positions
-        if self.net_liquidation_usd is not None:
-            return self.net_liquidation_usd
-        return cash_and_positions
+        return _resolve_account_total_value(self.cash_usd, self.positions_market_value_usd, self.net_liquidation_usd)
 
 
 @dataclass(frozen=True)
@@ -190,3 +199,32 @@ class RebalancePlan:
     combined_targets: tuple[CombinedTargetPosition, ...] = ()
     total_allocated_pct: float = 1.0
     total_allocated_usd: float = 0.0
+    cash_sleeve_usd: float = 0.0
+
+    @property
+    def broker_total_value_usd(self) -> float:
+        """Raw broker equity this plan sized against, before any MANAGED_CAP_MODE cap."""
+        return _resolve_account_total_value(
+            self.portfolio_cash_usd,
+            self.portfolio_positions_value_usd,
+            self.portfolio_net_liquidation_usd,
+        )
+
+    @property
+    def unallocated_capital_usd(self) -> float:
+        """Managed value not assigned to any strategy sleeve, including the cash sleeve."""
+        return max(0.0, self.portfolio_value_usd - self.total_allocated_usd)
+
+    @property
+    def target_exposure_usd(self) -> float:
+        """Total planned notional across every combined portfolio-level target."""
+        return sum(position.target_notional for position in self.combined_targets)
+
+    def broker_account_snapshot_json(self) -> dict[str, object]:
+        """The raw broker read this plan sized against, shared by the CLI report and journal."""
+        return {
+            "cash_usd": self.portfolio_cash_usd,
+            "positions_market_value_usd": self.portfolio_positions_value_usd,
+            "net_liquidation_usd": self.portfolio_net_liquidation_usd,
+            "total_value_usd": self.broker_total_value_usd,
+        }

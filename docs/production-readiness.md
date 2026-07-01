@@ -16,6 +16,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm `ibgateway.service` is active after reboot.
 - [ ] Confirm `127.0.0.1:7497` is reachable on the VM.
 - [ ] Confirm `poma ibkr-check` passes and the configured account appears in managed accounts.
+- [ ] Confirm the `poma reconcile-orders` cron entry is installed alongside the rebalance cron entry (`ops/cron/poma.cron`), so accepted-but-unfilled orders are followed up independent of the rebalance process lifetime.
 - [ ] Confirm the paper account cash + portfolio balance is the intended rebalance sizing base.
 - [ ] Confirm `STRATEGY_ALLOCATIONS` splits no more than 100% of the broker-derived account value.
 - [ ] Confirm the default allocation is intentional: `rank_velocity_size_equal_weight=0.98,cash=0.02`.
@@ -65,12 +66,14 @@ The deploy workflow now fails before Terraform/app deployment when:
 
 - [ ] Keep `ORDER_TYPE=limit` by default.
 - [ ] Keep `ALLOW_MARKET_ORDERS=false` unless explicitly intentional.
-- [ ] Keep `MAX_TURNOVER_PCT=1.0` for first paper bootstrap, then lower it if you want stricter ongoing churn control.
+- [ ] Keep `MAX_TURNOVER_PCT=1.0` for first paper bootstrap, then lower it if you want stricter ongoing churn control. Deploy-time validation prints a (non-blocking) warning if `TRADING_MODE=live` still has `MAX_TURNOVER_PCT=1.0` as a nudge to revisit it after the initial bootstrap.
 - [ ] Keep `MAX_ORDER_NOTIONAL_USD`, `MAX_DAILY_TRADES`, `MAX_POSITION_PCT`, and `MAX_TURNOVER_PCT` within your operational tolerance.
 - [ ] Keep cash outside active strategies by using a `cash` sleeve in `STRATEGY_ALLOCATIONS`.
 - [ ] Treat broker balance-read failures as blocking infrastructure issues; do not trade until `poma ibkr-check` and a balance-backed report succeed.
 - [ ] Treat any `BrokerUnavailable` report as an infrastructure issue: confirm IBKR Activity shows no accepted orders, rerun **IB Gateway Ops** configure, and require `poma ibkr-check` to pass before trading again.
 - [ ] Review any `failed`, `blocked`, `completed_with_order_issues`, timed-out, cancelled, or partial execution result manually.
+
+Built in and not configurable: `poma monitor` resumes a session a killed process (crash/OOM/VM restart) left `running`, using the *same* `run_id`, and any orderRef already recorded in the ledger for that run (open or terminal) is not resubmitted (`IdempotentReplay`); a rebalance is blocked if unresolved orders exist from a prior session *or* a different run within the same session; and buys are sized against broker cash refreshed *after* the sell phase, never against unconfirmed sell proceeds (`BuyingPowerBlocked` if that refreshed cash falls short).
 
 ## Alert expectations
 

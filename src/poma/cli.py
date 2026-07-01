@@ -22,7 +22,7 @@ from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
 from poma.order_status_alerts import lifecycle_status_alert, order_status_alert
 from poma.order_store import OrderStore
-from poma.state import LocalState
+from poma.state import TERMINAL_STATUSES, LocalState
 
 app = typer.Typer(no_args_is_help=True, help="POMA market-cap rebalancer.")
 console = Console()
@@ -153,9 +153,13 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
             {
                 "run_id": plan.run_id,
                 "session_date": plan.session_date,
+                "broker_account_snapshot": plan.broker_account_snapshot_json(),
                 "portfolio_value_usd": plan.portfolio_value_usd,
+                "cash_sleeve_usd": plan.cash_sleeve_usd,
                 "total_allocated_pct": plan.total_allocated_pct,
                 "total_allocated_usd": plan.total_allocated_usd,
+                "unallocated_capital_usd": plan.unallocated_capital_usd,
+                "target_exposure_usd": plan.target_exposure_usd,
                 "strategy_books": [_strategy_book_to_json(book) for book in plan.strategy_books],
                 "combined_targets": [
                     _combined_target_to_json(position) for position in plan.combined_targets
@@ -355,15 +359,24 @@ def monitor(
         return
 
     session_date = decision.session_date
-    if state.has_session_attempt(session_date):
-        status = state.session_status(session_date)
+    status = state.session_status(session_date)
+    if status in TERMINAL_STATUSES:
         console.print(f"Skipping: session already attempted with status={status}")
         return
-    if not decision.should_run:
+    resuming = status == "running"
+    if not resuming and not decision.should_run:
         console.print(f"Skipping: {decision.reason}")
         return
 
-    run_id = utc_run_id()
+    # A "running" status with no terminal status ever recorded means the previous attempt was
+    # killed outright (process crash, OOM, VM restart) before it could reach the except handler
+    # below. Resuming with that same run_id lets ExecutionManager recognize orders the previous
+    # attempt already got to the broker (see submit_plan's idempotent replay) instead of treating
+    # them as brand new and resubmitting duplicates.
+    run_id = state.session_run_id(session_date) if resuming else None
+    if resuming:
+        console.print(f"Resuming session {session_date} left running by an earlier attempt (run_id={run_id})")
+    run_id = run_id or utc_run_id()
     state.begin_session(session_date, run_id)
     try:
         outcome, report_path = _run_rebalance(

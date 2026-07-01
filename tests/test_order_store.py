@@ -78,3 +78,41 @@ def test_upsert_only_touches_the_matching_ledger_key(tmp_path: Path) -> None:
 
     remaining = {entry.ledger_key: entry for entry in store.load_open_orders()}
     assert set(remaining) == {"b"}
+
+
+def test_get_latest_many_finds_open_and_terminal_entries_in_one_call(tmp_path: Path) -> None:
+    store = OrderStore(tmp_path)
+    store.upsert(
+        _entry(
+            ledger_key="open-order",
+            order_ref="open-order",
+            ticker="MSFT",
+            lifecycle_state=OrderLifecycleState.BROKER_ACCEPTED,
+        )
+    )
+    filled = _entry(ledger_key="filled-order", order_ref="filled-order", ticker="AAPL").with_order_result(
+        OrderResult(
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            quantity=5.0,
+            notional=980.0,
+            order_id=1,
+            status="Filled",
+            filled=5.0,
+            average_fill_price=196.4,
+        )
+    )
+    store.upsert(filled)
+
+    found = store.get_latest_many(["open-order", "filled-order", "never-submitted"])
+
+    assert set(found) == {"open-order", "filled-order"}
+    assert found["open-order"].lifecycle_state == OrderLifecycleState.BROKER_ACCEPTED
+    assert found["filled-order"].lifecycle_state == OrderLifecycleState.FILLED
+
+
+def test_get_latest_many_with_no_keys_does_not_read_any_file(tmp_path: Path) -> None:
+    store = OrderStore(tmp_path)
+    store.upsert(_entry())
+
+    assert store.get_latest_many([]) == {}

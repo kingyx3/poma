@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
+
 from conftest import FakeBroker, make_settings
 from typer.testing import CliRunner
 
 from poma.broker import BROKER_UNAVAILABLE_STATUS
 from poma.cli import _broker_unavailable_alert, _portfolio_summary, _run_rebalance, app
+from poma.engine import RebalanceOutcome
 from poma.health import Check
+from poma.market_calendar import MarketDecision
 from poma.models import CurrentPosition, OpenOrderSnapshot, OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.order_lifecycle import OrderLedgerEntry
 from poma.order_store import OrderStore
+from poma.state import LocalState
 
 runner = CliRunner()
 
@@ -132,6 +137,86 @@ def test_run_rebalance_writes_execution_journal_before_and_after_a_run(monkeypat
     assert order_journal_path.exists()
     # dry_run never submits orders, so no reconciliation file is written.
     assert not (tmp_path / "state" / "reconciliations" / "run-journal-1.json").exists()
+
+
+def test_monitor_resumes_a_session_left_running_by_a_killed_prior_attempt(monkeypatch, tmp_path) -> None:
+    """A hard-killed process (OOM/VM restart) never reaches mark_session, so the session is left
+    'running' forever unless the next monitor tick resumes it with the *same* run_id — otherwise
+    ExecutionManager's idempotent-replay protection can never actually trigger in production."""
+    settings = make_settings(STATE_DIR=str(tmp_path / "state"))
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "poma.cli.should_rebalance_now",
+        lambda **_kwargs: MarketDecision(should_run=True, session_date="2026-07-01", reason="ok"),
+    )
+    state = LocalState(settings.state_dir)
+    state.begin_session("2026-07-01", "crashed-run-1")
+
+    captured_run_ids: list[str] = []
+
+    def fake_run_rebalance(*, session_date, run_id, force_dry_run):
+        captured_run_ids.append(run_id)
+        plan = RebalancePlan(run_id, session_date, [], [], [], [])
+        return RebalanceOutcome(plan=plan, executed=False, blocked=False, status="dry_run"), tmp_path / "report.json"
+
+    monkeypatch.setattr("poma.cli._run_rebalance", fake_run_rebalance)
+
+    result = runner.invoke(app, ["monitor"])
+
+    assert result.exit_code == 0
+    assert captured_run_ids == ["crashed-run-1"]
+    assert state.session_status("2026-07-01") == "dry_run"
+
+
+def test_monitor_skips_a_session_that_already_reached_a_terminal_status(monkeypatch, tmp_path) -> None:
+    settings = make_settings(STATE_DIR=str(tmp_path / "state"))
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "poma.cli.should_rebalance_now",
+        lambda **_kwargs: MarketDecision(should_run=True, session_date="2026-07-01", reason="ok"),
+    )
+    state = LocalState(settings.state_dir)
+    state.begin_session("2026-07-01", "run-1")
+    state.mark_session("2026-07-01", "run-1", "completed")
+
+    monkeypatch.setattr(
+        "poma.cli._run_rebalance",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not run again")),
+    )
+
+    result = runner.invoke(app, ["monitor"])
+
+    assert result.exit_code == 0
+    assert "already attempted" in result.stdout
+
+
+def test_run_rebalance_report_includes_broker_snapshot_and_capital_breakdown(
+    monkeypatch, tmp_path
+) -> None:
+    settings = make_settings(
+        STATE_DIR=str(tmp_path / "state"),
+        REPORT_DIR=str(tmp_path / "reports"),
+        DATA_DIR=str(tmp_path / "data"),
+    )
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("poma.cli.send_alert", lambda *_args, **_kwargs: None)
+
+    _, report_path = _run_rebalance(
+        session_date="2026-07-01",
+        run_id="run-journal-2",
+        force_dry_run=False,
+    )
+
+    report = json.loads(report_path.read_text())
+    assert set(report["broker_account_snapshot"]) == {
+        "cash_usd",
+        "positions_market_value_usd",
+        "net_liquidation_usd",
+        "total_value_usd",
+    }
+    assert report["cash_sleeve_usd"] == 0.02 * settings.dry_run_portfolio_value_usd
+    assert report["unallocated_capital_usd"] >= 0
+    assert report["target_exposure_usd"] > 0
 
 
 def test_reconcile_orders_reports_no_open_orders(monkeypatch, tmp_path) -> None:

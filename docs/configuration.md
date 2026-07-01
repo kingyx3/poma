@@ -46,7 +46,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `REPLACE_AFTER_SECONDS` | yes | `120` | `poma reconcile-orders` replaces a still-working (unfilled) limit order once with a more aggressive price after this many seconds. |
 | `CANCEL_AFTER_SECONDS` | yes | `300` | `poma reconcile-orders` cancels a still-working limit order after this many seconds. Must be greater than `REPLACE_AFTER_SECONDS`. |
 | `REPLACE_PRICE_IMPROVEMENT_BPS` | yes | `15` | Basis-point price improvement applied on the single allowed replace. |
-| `STALE_ORDER_POLICY` | yes | `block` | What a new rebalance does when unresolved open orders remain from a *prior* session: `block` (default) blocks execution until they are reconciled/cancelled; `cancel` cancels them automatically before planning. Open orders from the *same* session are never blocking. |
+| `STALE_ORDER_POLICY` | yes | `block` | What a new rebalance does when unresolved open orders remain from a *prior* session, or from a *different run* within the same session: `block` (default) blocks execution until they are reconciled/cancelled; `cancel` cancels them automatically before planning. Open orders from the exact *same run* are never blocking — a retry of that run relies on idempotent replay instead (see `docs/architecture.md`). |
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
 | `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |

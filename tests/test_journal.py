@@ -89,6 +89,11 @@ def test_record_planned_writes_expected_orders_journal(tmp_path) -> None:
     assert payload["strategy_attribution"][0]["strategy_name"] == "rank_velocity_size_equal_weight"
     assert len(payload["planned_trades"]) == 1
     assert payload["expected_account_snapshot"]["cash_usd"] == 5_000.0
+    assert payload["broker_account_snapshot"]["cash_usd"] == 5_000.0
+    assert payload["broker_account_snapshot"]["total_value_usd"] == 10_000.0
+    assert payload["cash_sleeve_usd"] == 0.0
+    assert payload["unallocated_capital_usd"] == 5_000.0
+    assert payload["target_exposure_usd"] == 5_000.0
     assert "target_book_hash" in payload and payload["target_book_hash"]
 
 

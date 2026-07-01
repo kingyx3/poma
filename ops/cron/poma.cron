@@ -1,3 +1,8 @@
 # Check every 5 minutes. POMA decides whether the US market has been open for 10+ minutes
 # and whether today's rebalance already ran. This avoids DST-specific cron schedules.
 */5 * * * * cd /opt/poma && mkdir -p logs && /usr/bin/docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma monitor >> /opt/poma/logs/poma-cron.log 2>&1
+
+# Follow up on working orders independent of the rebalance process lifetime: replaces a
+# still-unfilled limit order once after REPLACE_AFTER_SECONDS, cancels it after
+# CANCEL_AFTER_SECONDS, and alerts on every lifecycle change. No-op when nothing is open.
+*/2 * * * * cd /opt/poma && mkdir -p logs && /usr/bin/docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma reconcile-orders >> /opt/poma/logs/poma-reconcile-cron.log 2>&1
