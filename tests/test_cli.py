@@ -6,9 +6,28 @@ from typer.testing import CliRunner
 from poma.broker import BROKER_UNAVAILABLE_STATUS
 from poma.cli import _broker_unavailable_alert, _portfolio_summary, _run_rebalance, app
 from poma.health import Check
-from poma.models import CurrentPosition, OrderResult, OrderSide, ProposedTrade, RebalancePlan
+from poma.models import CurrentPosition, OpenOrderSnapshot, OrderResult, OrderSide, ProposedTrade, RebalancePlan
+from poma.order_lifecycle import OrderLedgerEntry
+from poma.order_store import OrderStore
 
 runner = CliRunner()
+
+
+class _ReconcileBroker(FakeBroker):
+    """FakeBroker plus the lifecycle query/cancel/replace methods reconcile-orders needs."""
+
+    def __init__(self, snapshots: list[OpenOrderSnapshot]) -> None:
+        super().__init__()
+        self._snapshots = snapshots
+
+    def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
+        return self._snapshots
+
+    def cancel_order(self, order_id: int) -> bool:
+        return True
+
+    def replace_order(self, **_kwargs) -> OpenOrderSnapshot:
+        raise AssertionError("not exercised by this test")
 
 
 def test_cli_command_group_builds() -> None:
@@ -18,7 +37,7 @@ def test_cli_command_group_builds() -> None:
     from typer.main import get_command
 
     command = get_command(app)
-    assert {"rebalance", "monitor", "doctor", "ibkr-check", "positions"} <= set(
+    assert {"rebalance", "monitor", "doctor", "ibkr-check", "positions", "reconcile-orders"} <= set(
         command.commands
     )
 
@@ -113,6 +132,71 @@ def test_run_rebalance_writes_execution_journal_before_and_after_a_run(monkeypat
     assert order_journal_path.exists()
     # dry_run never submits orders, so no reconciliation file is written.
     assert not (tmp_path / "state" / "reconciliations" / "run-journal-1.json").exists()
+
+
+def test_reconcile_orders_reports_no_open_orders(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        "poma.cli.get_settings",
+        lambda: make_settings(TRADING_MODE="paper", STATE_DIR=str(tmp_path / "state")),
+    )
+    monkeypatch.setattr("poma.cli.build_broker", lambda settings: _ReconcileBroker([]))
+
+    result = runner.invoke(app, ["reconcile-orders"])
+
+    assert result.exit_code == 0
+    assert "No open orders to reconcile." in result.stdout
+
+
+def test_reconcile_orders_updates_the_ledger_and_alerts_on_fill(monkeypatch, tmp_path) -> None:
+    settings = make_settings(TRADING_MODE="paper", STATE_DIR=str(tmp_path / "state"))
+    store = OrderStore(settings.state_dir)
+    store.upsert(
+        OrderLedgerEntry(
+            ledger_key="poma:run-1:0:AAPL:BUY",
+            order_ref="poma:run-1:0:AAPL:BUY",
+            run_id="run-1",
+            session_date="2026-07-01",
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            quantity=5.0,
+            limit_price=196.20,
+        )
+    )
+    broker = _ReconcileBroker(
+        [
+            OpenOrderSnapshot(
+                order_ref="poma:run-1:0:AAPL:BUY",
+                order_id=1,
+                perm_id=None,
+                ticker="AAPL",
+                side=OrderSide.BUY,
+                raw_status="Filled",
+                filled=5.0,
+                remaining=0.0,
+                avg_fill_price=196.4,
+            )
+        ]
+    )
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("poma.cli.build_broker", lambda _settings: broker)
+    alerts: list[str] = []
+    monkeypatch.setattr("poma.cli.send_alert", lambda _settings, message: alerts.append(message))
+
+    result = runner.invoke(app, ["reconcile-orders"])
+
+    assert result.exit_code == 0
+    assert "AAPL" in result.stdout
+    assert store.load_open_orders() == []
+    assert any("Order lifecycle update" in alert for alert in alerts)
+
+
+def test_reconcile_orders_skips_in_dry_run_mode(monkeypatch) -> None:
+    monkeypatch.setattr("poma.cli.get_settings", lambda: make_settings(TRADING_MODE="dry_run"))
+
+    result = runner.invoke(app, ["reconcile-orders"])
+
+    assert result.exit_code == 0
+    assert "nothing to reconcile" in result.stdout
 
 
 def test_positions_renders_portfolio(monkeypatch) -> None:

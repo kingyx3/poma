@@ -12,9 +12,11 @@ from poma.broker import (
 )
 from poma.config import ManagedCapMode, Settings, TradingMode
 from poma.data import MarketDataClient, build_data_client
+from poma.execution_manager import ExecutionManager
 from poma.execution_policy import apply_execution_policy
 from poma.history import CapSnapshotHistory
 from poma.models import AccountSnapshot, OrderResult, RebalancePlan, StrategyTargetBook
+from poma.order_store import OrderStore
 from poma.portfolio import build_strategy_capital_plan
 from poma.portfolio_constructor import combine_strategy_target_books
 from poma.risk import (
@@ -51,16 +53,22 @@ class RebalanceEngine:
         broker: Broker | None = None,
         history: CapSnapshotHistory | None = None,
         strategy_registry: StrategyRegistry | None = None,
+        order_store: OrderStore | None = None,
     ) -> None:
         self.settings = settings
         self.data_client = data_client or build_data_client(settings)
         self.broker = broker or build_broker(settings)
         self.history = history
         self.strategy_registry = strategy_registry or default_registry()
+        self.order_store = order_store
 
     def build_plan(self, session_date: str, run_id: str) -> RebalancePlan:
         settings = self.settings
         warnings: list[str] = []
+        if self.order_store is not None and settings.trading_mode != TradingMode.DRY_RUN:
+            warnings.extend(
+                ExecutionManager(self.broker, self.order_store, settings).check_stale_orders(session_date).warnings
+            )
         account_snapshot = self._account_snapshot(warnings)
         portfolio_value_usd = self._resolve_portfolio_value_usd(account_snapshot)
         capital_plan = build_strategy_capital_plan(
@@ -205,6 +213,11 @@ class RebalanceEngine:
         plan: RebalancePlan,
         order_status_callback: OrderStatusCallback | None = None,
     ) -> RebalancePlan:
+        if self.order_store is not None:
+            manager = ExecutionManager(self.broker, self.order_store, self.settings)
+            results = manager.submit_plan(plan, status_callback=order_status_callback)
+            return replace(plan, execution_results=results)
+
         if order_status_callback is None:
             results = self.broker.submit_trades(plan.trades)
         else:
