@@ -237,7 +237,8 @@ jobs:
   # protection rules (e.g. required reviewers) gate this deploy before it runs. Release deploys are
   # intentionally unconditional because publishing a release is an explicit production promotion.
   # Build the released commit's image so prd deploys a byte-for-byte artifact of the release ref
-  # rather than trusting the mutable :main tag to still match.
+  # rather than trusting the mutable :main tag to still match. Also move :main so manual
+  # workflow_dispatch deploys (which default to :main) stay current with the latest release.
   prd-build-image:
     if: ${{ github.event_name == 'release' && github.event.release.prerelease == false }}
     permissions:
@@ -246,6 +247,7 @@ jobs:
     uses: ./.github/workflows/build-app-image.yml
     with:
       ref: ${{ github.sha }}
+      tag_main: true
 
   prd-deploy:
     needs: prd-build-image
