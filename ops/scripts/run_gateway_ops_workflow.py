@@ -232,6 +232,14 @@ def main() -> int:
         return remote(f"sudo journalctl -u ibgateway -n {log_lines} --no-pager", timeout=180)
     if action == "app-logs":
         return remote(
+            "echo '===== cron service status ====='; "
+            "sudo systemctl status cron --no-pager --lines=10 || true; "
+            "echo '===== poma crontab ====='; "
+            "sudo crontab -l -u poma 2>&1 || echo '(no crontab installed for poma)'; "
+            "echo '===== poma docker group membership ====='; "
+            "getent group docker || echo '(no docker group)'; "
+            "echo '===== /opt/poma/logs directory ====='; "
+            "sudo ls -la /opt/poma/logs 2>&1 || echo '(missing)'; "
             "echo '===== poma-cron.log (tail) ====='; "
             f"sudo tail -n {log_lines} /opt/poma/logs/poma-cron.log 2>/dev/null || echo '(missing)'; "
             "echo '===== poma-reconcile-cron.log (tail) ====='; "
