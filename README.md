@@ -5,8 +5,9 @@ POMA is a low-cost Python scaffold for a personal long-only US large-cap strateg
 ## Strategy
 
 ```text
-Portfolio value: broker USD cash + current portfolio value before each paper/live rebalance
-Dry-run fallback: PORTFOLIO_VALUE_USD for offline planning
+Portfolio value: one broker AccountSnapshot (cash + positions + net liquidation) before each paper/live rebalance
+Managed cap: MANAGED_CAP_MODE selects broker_total (default) or min(broker total, MANAGED_CAP_USD)
+Dry-run fallback: DRY_RUN_PORTFOLIO_VALUE_USD for offline planning
 Current allocation: 98% to rank_velocity_size_equal_weight, 2% to cash
 Universe: Yahoo Finance US top 500 by current market cap
 Deduplication: one ticker per company/share-class family, preferring the most liquid class
@@ -19,7 +20,7 @@ Weighting: equal-weighted across the selected 100 names inside the 98% rank stra
 
 Rank 1 is the largest company by market cap, so a positive rank-rising velocity score means the stock moved up the market-cap ranking over the 90-day window. The size and rank-rising velocity factors are each standardized (z-scored) and summed with equal weight, so the strategy favours companies that are both large and climbing. Selected names are held at equal weight (`1/N`) inside the rank strategy sleeve, with the per-position cap still binding.
 
-Capital is allocated through `STRATEGY_ALLOCATIONS`. Before each paper/live rebalance, POMA reads the configured IBKR account's USD cash balance and current portfolio balance, then uses that total as the portfolio value for strategy sleeves. Today the active trading strategy is `rank_velocity_size_equal_weight=0.98`, and the passive cash sleeve is `cash=0.02`. The cash sleeve counts toward the 100% portfolio value but does not generate trades. Future strategies can be added as separate sleeves, and the sum of all strategy allocations must stay at or below 100%. Cash is not modeled as a hidden buffer inside an active strategy; reserve cash by allocating a `cash` sleeve. `PORTFOLIO_VALUE_USD` remains only the dry-run/offline fallback.
+Capital is allocated through `STRATEGY_ALLOCATIONS`. Before each paper/live rebalance, POMA reads the configured IBKR account's USD cash, positions, and net liquidation in one `AccountSnapshot`, then resolves a portfolio value via `MANAGED_CAP_MODE` and uses that as the portfolio value for strategy sleeves. The engine executes every allocated non-`cash` sleeve through a strategy registry, not just one — today that is `rank_velocity_size_equal_weight=0.98`, with the passive cash sleeve `cash=0.02`. The cash sleeve counts toward the 100% portfolio value but does not generate trades. When multiple sleeves target the same ticker, POMA combines their targets into one portfolio-level order. Future strategies can be added as separate sleeves (registered in `src/poma/strategies/registry.py`), and the sum of all strategy allocations must stay at or below 100%. Cash is not modeled as a hidden buffer inside any strategy; reserve cash by allocating a `cash` sleeve. `DRY_RUN_PORTFOLIO_VALUE_USD` remains only the dry-run/offline fallback.
 
 The production market-data provider is `DATA_PROVIDER=yahoo`. It requests the largest 500 US-listed equities by current market cap, normalizes the feed into the provider contract, deduplicates share classes at issuer level when issuer/name metadata is present, and falls back to exact market-cap bucket dedupe when issuer metadata is unavailable. Future providers should implement the normalized `current_universe_snapshot()` contract without changing strategy or engine code.
 

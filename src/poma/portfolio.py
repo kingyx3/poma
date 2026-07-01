@@ -44,6 +44,14 @@ class PortfolioCapitalPlan:
         available = ", ".join(allocation.name for allocation in self.allocations)
         raise KeyError(f"strategy {strategy_name!r} is not allocated; available strategies: {available}")
 
+    def tradeable_sleeves(self) -> tuple[StrategyCapital, ...]:
+        """Every allocated sleeve the engine should execute: non-cash, with positive capital."""
+        return tuple(
+            allocation
+            for allocation in self.allocations
+            if allocation.name != CASH_STRATEGY_NAME and allocation.capital_usd > 0
+        )
+
 
 def _parse_pct(raw_value: str) -> float:
     value = raw_value.strip()

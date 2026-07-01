@@ -24,10 +24,20 @@ class CurrentPosition:
 
 
 @dataclass(frozen=True)
-class PortfolioBalances:
+class AccountSnapshot:
+    """A single consistent read of broker cash, positions, and net liquidation.
+
+    Fetched once per rebalance so every strategy sleeve and the risk engine see the same
+    account state, instead of separate cash and positions reads that can race against each
+    other during a live rebalance.
+    """
+
     cash_usd: float
+    positions: tuple[CurrentPosition, ...]
     positions_market_value_usd: float
     net_liquidation_usd: float | None = None
+    account_id: str | None = None
+    timestamp_utc: str | None = None
 
     @property
     def total_value_usd(self) -> float:
@@ -37,6 +47,45 @@ class PortfolioBalances:
         if self.net_liquidation_usd is not None:
             return self.net_liquidation_usd
         return cash_and_positions
+
+
+@dataclass(frozen=True)
+class StrategyTarget:
+    """One ticker target produced by a single strategy sleeve, before combining sleeves."""
+
+    strategy_name: str
+    ticker: str
+    sleeve_weight: float
+    portfolio_weight: float
+    target_notional: float
+
+
+@dataclass(frozen=True)
+class StrategyTargetBook:
+    """All targets produced by one strategy sleeve for a single rebalance."""
+
+    strategy_name: str
+    allocation_pct: float
+    capital_usd: float
+    targets: tuple[StrategyTarget, ...]
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CombinedTargetPosition:
+    """One ticker's final portfolio-level target after combining every strategy sleeve."""
+
+    ticker: str
+    target_weight: float
+    target_notional: float
+    contributions: tuple[StrategyTarget, ...]
+
+    def to_target_position(self) -> TargetPosition:
+        return TargetPosition(
+            ticker=self.ticker,
+            target_weight=self.target_weight,
+            target_notional=self.target_notional,
+        )
 
 
 @dataclass(frozen=True)
@@ -75,8 +124,7 @@ class RebalancePlan:
     portfolio_cash_usd: float = 0.0
     portfolio_positions_value_usd: float = 0.0
     portfolio_net_liquidation_usd: float | None = None
-    strategy_name: str = ""
-    strategy_allocation_pct: float = 1.0
-    strategy_capital_usd: float = 0.0
+    strategy_books: tuple[StrategyTargetBook, ...] = ()
+    combined_targets: tuple[CombinedTargetPosition, ...] = ()
     total_allocated_pct: float = 1.0
     total_allocated_usd: float = 0.0

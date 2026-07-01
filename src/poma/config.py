@@ -6,7 +6,8 @@ from pathlib import Path
 from pydantic import Field, PositiveFloat, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from poma.portfolio import CURRENT_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, parse_strategy_allocations
+from poma.portfolio import CASH_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, parse_strategy_allocations
+from poma.strategies import default_registry
 
 
 class TradingMode(StrEnum):
@@ -18,6 +19,13 @@ class TradingMode(StrEnum):
 class OrderType(StrEnum):
     LIMIT = "limit"
     MARKET = "market"
+
+
+class ManagedCapMode(StrEnum):
+    """How paper/live rebalances turn broker equity into a portfolio value to size against."""
+
+    BROKER_TOTAL = "broker_total"
+    MIN_OF_BROKER_TOTAL_AND_CAP = "min_of_broker_total_and_cap"
 
 
 class Settings(BaseSettings):
@@ -44,13 +52,20 @@ class Settings(BaseSettings):
     universe: str = Field(default="us_top_market_cap", alias="UNIVERSE")
     rank_lookback_days: PositiveInt = Field(default=90, alias="RANK_LOOKBACK_DAYS")
     max_holdings: PositiveInt = Field(default=100, alias="MAX_HOLDINGS")
-    active_strategy: str = Field(default=CURRENT_STRATEGY_NAME, alias="ACTIVE_STRATEGY")
     strategy_allocations: str = Field(
         default=DEFAULT_STRATEGY_ALLOCATIONS,
         alias="STRATEGY_ALLOCATIONS",
     )
 
-    portfolio_value_usd: PositiveFloat = Field(default=10_000.0, alias="PORTFOLIO_VALUE_USD")
+    dry_run_portfolio_value_usd: PositiveFloat = Field(
+        default=10_000.0,
+        alias="DRY_RUN_PORTFOLIO_VALUE_USD",
+    )
+    managed_cap_usd: float = Field(default=0.0, alias="MANAGED_CAP_USD")
+    managed_cap_mode: ManagedCapMode = Field(
+        default=ManagedCapMode.BROKER_TOTAL,
+        alias="MANAGED_CAP_MODE",
+    )
     max_position_pct: float = Field(default=0.10, alias="MAX_POSITION_PCT")
     max_turnover_pct: float = Field(default=1.0, alias="MAX_TURNOVER_PCT")
     min_trade_notional_usd: PositiveFloat = Field(
@@ -107,13 +122,12 @@ class Settings(BaseSettings):
             raise ValueError("basis-point settings must be non-negative")
         return value
 
-    @field_validator("active_strategy")
+    @field_validator("managed_cap_usd")
     @classmethod
-    def active_strategy_non_empty(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("ACTIVE_STRATEGY must not be empty")
-        return cleaned
+    def managed_cap_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("MANAGED_CAP_USD must be non-negative")
+        return value
 
     @model_validator(mode="after")
     def validate_runtime_config(self) -> Settings:
@@ -121,14 +135,26 @@ class Settings(BaseSettings):
             raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
 
         allocations = parse_strategy_allocations(self.strategy_allocations)
-        if self.active_strategy not in allocations:
-            available = ", ".join(allocations)
+        registry = default_registry()
+        unknown = sorted(
+            name
+            for name in allocations
+            if name != CASH_STRATEGY_NAME and name not in registry.names()
+        )
+        if unknown:
+            available = ", ".join(registry.names()) or "none"
             raise ValueError(
-                f"ACTIVE_STRATEGY={self.active_strategy!r} must be present in "
-                f"STRATEGY_ALLOCATIONS; available strategies: {available}"
+                f"STRATEGY_ALLOCATIONS references unregistered strategies {unknown}; "
+                f"available strategies: {available}"
             )
-        if allocations[self.active_strategy] <= 0:
-            raise ValueError("ACTIVE_STRATEGY allocation must be greater than 0")
+        if (
+            self.managed_cap_mode == ManagedCapMode.MIN_OF_BROKER_TOTAL_AND_CAP
+            and self.managed_cap_usd <= 0
+        ):
+            raise ValueError(
+                "MANAGED_CAP_USD must be greater than 0 when "
+                "MANAGED_CAP_MODE=min_of_broker_total_and_cap"
+            )
         return self
 
     def strategy_allocation_map(self) -> dict[str, float]:

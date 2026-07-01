@@ -19,9 +19,10 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-rising-velocity window. |
 | `MAX_HOLDINGS` | yes | `100` | Top 100 selected stocks are held when enough valid tickers exist. |
-| `ACTIVE_STRATEGY` | yes | `rank_velocity_size_equal_weight` | The active strategy sleeve currently executed by the engine. |
-| `STRATEGY_ALLOCATIONS` | yes | `rank_velocity_size_equal_weight=0.98,cash=0.02` | Named portfolio sleeves. Total must be `<= 1.0`. |
-| `PORTFOLIO_VALUE_USD` | yes | `10000` | Hard cap for all strategy sleeves combined. |
+| `STRATEGY_ALLOCATIONS` | yes | `rank_velocity_size_equal_weight=0.98,cash=0.02` | Named portfolio sleeves. Every non-`cash` name must be a registered strategy (see `docs/strategy-contract.md`); the engine executes every sleeve with a positive allocation, not just one. Total must be `<= 1.0`. |
+| `DRY_RUN_PORTFOLIO_VALUE_USD` | yes | `10000` | Portfolio value used only in `dry_run` mode. Paper/live size against broker account equity instead; see `MANAGED_CAP_MODE`. |
+| `MANAGED_CAP_MODE` | yes | `broker_total` | `broker_total` sizes paper/live sleeves off the full broker account value. `min_of_broker_total_and_cap` sizes off `min(broker account value, MANAGED_CAP_USD)`. |
+| `MANAGED_CAP_USD` | `min_of_broker_total_and_cap` only | `0` | Hard cap on managed capital when `MANAGED_CAP_MODE=min_of_broker_total_and_cap`. Must be greater than 0 in that mode; unused (and may stay `0`) under `broker_total`. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Position cap inside a strategy sleeve. |
 | `MAX_TURNOVER_PCT` | yes | `1.0` | Maximum absolute trade notional divided by the active strategy sleeve capital. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Suppresses tiny rebalance trades. |
@@ -48,16 +49,15 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 
 ## Portfolio sizing and existing account equity
 
-POMA sizes from `PORTFOLIO_VALUE_USD`, not from total IBKR account equity. `PORTFOLIO_VALUE_USD` is the hard cap for all strategy sleeves combined. `STRATEGY_ALLOCATIONS` then splits that cap across strategies, and the total allocation must be `<= 100%`.
+Paper/live rebalances size from the configured IBKR account's actual equity (USD cash + current portfolio value), read fresh before every rebalance, not from a static config number. `MANAGED_CAP_MODE=broker_total` (the default) uses that full broker equity. `MANAGED_CAP_MODE=min_of_broker_total_and_cap` instead uses `min(broker equity, MANAGED_CAP_USD)`, which is useful when the IBKR account holds more than POMA should manage. `DRY_RUN_PORTFOLIO_VALUE_USD` is used only in `dry_run` mode, where there is no broker to read from.
 
-Example:
+`STRATEGY_ALLOCATIONS` splits whichever value is resolved above across named sleeves, and the total allocation must be `<= 100%`. Every allocated non-`cash` sleeve is executed by the engine, not just one:
 
 ```text
-PORTFOLIO_VALUE_USD=10000
 STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.60,future_strategy=0.20,cash=0.20
 ```
 
-That gives the current strategy 60% of `PORTFOLIO_VALUE_USD`, gives the future strategy 20%, and leaves 20% in passive cash. The active strategy does not separately subtract a hidden cash buffer. If the account has more buying power than `PORTFOLIO_VALUE_USD`, POMA still targets only the configured cap.
+That runs `rank_velocity_size_equal_weight` on 60% of the resolved portfolio value, runs `future_strategy` on 20%, and leaves 20% in passive cash. No sleeve separately subtracts a hidden cash buffer. If two sleeves both target the same ticker, POMA combines their targets into a single portfolio-level order rather than trading them independently.
 
 Existing stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
 

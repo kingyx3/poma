@@ -23,17 +23,18 @@ The app checks the market calendar on every run and only rebalances when:
 ## Capital allocation boundary
 
 ```text
-paper/live broker account balances
-  -> USD cash + current portfolio value
-  -> STRATEGY_ALLOCATIONS
-      -> rank_velocity_size_equal_weight active sleeve
-      -> cash passive sleeve
-      -> future strategy sleeves
+paper/live: one AccountSnapshot read (broker cash + positions + net liquidation)
+  -> MANAGED_CAP_MODE (broker_total | min_of_broker_total_and_cap)
+  -> STRATEGY_ALLOCATIONS (PortfolioCapitalPlan)
+      -> every allocated non-cash sleeve is executed via the strategy registry
+      -> cash passive sleeve (never traded)
 ```
 
-For paper/live, POMA reads the configured IBKR account's USD cash balance and current portfolio value before every rebalance. `STRATEGY_ALLOCATIONS` splits that broker-derived value across named sleeves and cannot exceed 100%. The current active strategy receives only its allocated sleeve, so the default `rank_velocity_size_equal_weight=0.98,cash=0.02` uses 98% of the live account value for trades and leaves 2% in passive cash. Cash is not a hidden active-strategy buffer.
+For paper/live, POMA reads the configured IBKR account's USD cash, current positions, and net liquidation in a single broker call (`AccountSnapshot`) before every rebalance, instead of separate balance and position reads. `MANAGED_CAP_MODE=broker_total` (default) sizes the rebalance off that full broker equity; `min_of_broker_total_and_cap` instead sizes off `min(broker equity, MANAGED_CAP_USD)`. `STRATEGY_ALLOCATIONS` then splits the resolved value across named sleeves and cannot exceed 100%.
 
-`PORTFOLIO_VALUE_USD` remains a dry-run/offline fallback so local reports can still be generated without an IBKR account connection. In paper/live, inability to read a positive broker balance blocks execution rather than using the fallback for order sizing.
+The engine runs every sleeve with a positive allocation, not a single hardcoded strategy: each registered `Strategy` builds its own `StrategyTargetBook` against its sleeve's capital, and a `portfolio_constructor` step combines all sleeves' targets into one portfolio-level target per ticker (summing overlapping tickers across strategies and keeping per-strategy attribution for reports). The default `rank_velocity_size_equal_weight=0.98,cash=0.02` uses 98% of the resolved portfolio value for trades and leaves 2% in passive cash. Cash is not a hidden active-strategy buffer.
+
+`DRY_RUN_PORTFOLIO_VALUE_USD` is used only in `dry_run` mode so local reports can still be generated without an IBKR account connection. In paper/live, inability to read a positive broker account snapshot blocks execution rather than using that fallback for order sizing.
 
 ## Market data provider boundary
 
@@ -77,14 +78,18 @@ Terraform creates one small VM, one standard boot disk, one dedicated VPC/subnet
 
 ```text
 plan rebalance
-  -> paper/live: read broker USD cash + current portfolio value before sizing targets
-  -> validate target/risk/order guards
-  -> dry_run: write report + Telegram summary only
+  -> paper/live: read one broker AccountSnapshot (cash + positions + net liquidation)
+  -> resolve portfolio value via MANAGED_CAP_MODE
+  -> build a StrategyTargetBook per allocated strategy sleeve
+  -> combine sleeve target books into one portfolio-level target per ticker
+  -> validate target/risk/order guards (including buying-power)
+  -> write report + execution journal (state/orders/<run_id>.json)
+  -> dry_run: Telegram summary only
   -> paper/live: execution-start Telegram alert
       -> broker readiness check: connected, authenticated, configured account visible
       -> if unavailable: deduplicated broker-unavailable alert + no order-created spam
       -> if ready: submit orders and emit broker-accepted status/final/failure callbacks
-      -> write final report
+      -> write final report + reconciliation (state/reconciliations/<run_id>.json)
       -> Telegram final summary
       -> local state status: completed or completed_with_order_issues
 ```
@@ -96,6 +101,10 @@ Order status notifications are best-effort. Telegram failure never causes duplic
 ```text
 state/rebalance_state.json       # last completed trading session
                                      # includes completed_with_order_issues as terminal
+state/orders/<run_id>.json       # planned trades, strategy attribution, target book hash,
+                                     # and the expected account snapshot; written before submission
+state/reconciliations/<run_id>.json  # order results and a post-trade account snapshot;
+                                     # written after submission, best-effort
 
 data/market_snapshots/*.csv      # provider snapshots and market-cap ranks
 reports/*.json                   # generated rebalance reports

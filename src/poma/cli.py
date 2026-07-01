@@ -15,6 +15,7 @@ from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
 from poma.health import check_ibkr, run_checks
 from poma.history import CapSnapshotHistory
+from poma.journal import ExecutionJournal
 from poma.market_calendar import should_rebalance_now
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
@@ -123,6 +124,25 @@ def _result_to_json(result: OrderResult) -> dict[str, object]:
     return payload
 
 
+def _strategy_book_to_json(book) -> dict[str, object]:
+    return {
+        "strategy_name": book.strategy_name,
+        "allocation_pct": book.allocation_pct,
+        "capital_usd": book.capital_usd,
+        "targets": [target.__dict__ for target in book.targets],
+        "warnings": list(book.warnings),
+    }
+
+
+def _combined_target_to_json(position) -> dict[str, object]:
+    return {
+        "ticker": position.ticker,
+        "target_weight": position.target_weight,
+        "target_notional": position.target_notional,
+        "contributions": [contribution.__dict__ for contribution in position.contributions],
+    }
+
+
 def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"{plan.run_id}.json"
@@ -132,13 +152,12 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
                 "run_id": plan.run_id,
                 "session_date": plan.session_date,
                 "portfolio_value_usd": plan.portfolio_value_usd,
-                "strategy": {
-                    "name": plan.strategy_name,
-                    "allocation_pct": plan.strategy_allocation_pct,
-                    "capital_usd": plan.strategy_capital_usd,
-                    "total_allocated_pct": plan.total_allocated_pct,
-                    "total_allocated_usd": plan.total_allocated_usd,
-                },
+                "total_allocated_pct": plan.total_allocated_pct,
+                "total_allocated_usd": plan.total_allocated_usd,
+                "strategy_books": [_strategy_book_to_json(book) for book in plan.strategy_books],
+                "combined_targets": [
+                    _combined_target_to_json(position) for position in plan.combined_targets
+                ],
                 "targets": [target.__dict__ for target in plan.targets],
                 "trades": [_trade_to_json(trade) for trade in plan.trades],
                 "execution_results": [
@@ -193,8 +212,10 @@ def _run_rebalance(
     )
 
     engine = RebalanceEngine(settings, history=CapSnapshotHistory(settings.data_dir))
+    journal = ExecutionJournal(settings.state_dir)
     plan = engine.build_plan(session_date, run_id)
     report_path = _write_report(plan, settings.report_dir)
+    journal.record_planned(plan)
 
     blocked = engine.is_blocked(plan)
     is_dry_run = settings.trading_mode == TradingMode.DRY_RUN
@@ -241,6 +262,15 @@ def _run_rebalance(
     status = engine.execution_status(plan.execution_results)
     outcome = RebalanceOutcome(plan=plan, executed=True, blocked=False, status=status)
     report_path = _write_report(plan, settings.report_dir)
+
+    post_trade_snapshot = None
+    post_trade_snapshot_error = None
+    try:
+        post_trade_snapshot = engine.broker.account_snapshot()
+    except Exception as exc:  # noqa: BLE001 - reconciliation read is diagnostic, not blocking
+        post_trade_snapshot_error = str(exc)
+    journal.record_reconciliation(plan, post_trade_snapshot, post_trade_snapshot_error)
+
     send_alert(settings, _portfolio_summary(session_date, plan, status, executed=True))
     console.print(f"Submitted {len(plan.trades)} trades. Report written to {report_path}")
     return outcome, report_path
@@ -388,7 +418,7 @@ def positions() -> None:
     """Print the broker's current stock positions (the live paper/live portfolio)."""
     settings = get_settings()
     broker = build_broker(settings)
-    rows = broker.positions()
+    rows = broker.account_snapshot().positions
     if not rows:
         console.print(f"No positions ({settings.trading_mode.value} mode).")
         return

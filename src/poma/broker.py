@@ -4,12 +4,13 @@ import math
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
 from poma.config import OrderType, Settings, TradingMode
-from poma.models import CurrentPosition, OrderResult, PortfolioBalances, ProposedTrade
+from poma.models import AccountSnapshot, CurrentPosition, OrderResult, ProposedTrade
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
@@ -75,10 +76,7 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
 
 
 class Broker(Protocol):
-    def account_balances(self) -> PortfolioBalances:
-        ...
-
-    def positions(self) -> list[CurrentPosition]:
+    def account_snapshot(self) -> AccountSnapshot:
         ...
 
     def submit_trades(
@@ -93,15 +91,13 @@ class DryRunBroker:
     def __init__(self, fallback_portfolio_value_usd: float = 0.0) -> None:
         self.fallback_portfolio_value_usd = fallback_portfolio_value_usd
 
-    def account_balances(self) -> PortfolioBalances:
-        return PortfolioBalances(
+    def account_snapshot(self) -> AccountSnapshot:
+        return AccountSnapshot(
             cash_usd=self.fallback_portfolio_value_usd,
+            positions=(),
             positions_market_value_usd=0.0,
             net_liquidation_usd=self.fallback_portfolio_value_usd,
         )
-
-    def positions(self) -> list[CurrentPosition]:
-        return []
 
     def submit_trades(
         self,
@@ -175,7 +171,12 @@ class IbkrBroker:
             raise BrokerUnavailable(trading_message)
         self._assert_connected(ib)
 
-    def account_balances(self) -> PortfolioBalances:
+    def account_snapshot(self) -> AccountSnapshot:
+        """Read cash, positions, and net liquidation from one IBKR session.
+
+        Fetching both in the same connect/disconnect avoids two separate IBKR sessions racing
+        against each other and reporting inconsistent cash vs. positions for the same rebalance.
+        """
         ib = self._connect()
         try:
             positions = self._positions_from_ib(ib)
@@ -196,18 +197,14 @@ class IbkrBroker:
                 positions_market_value = summary_positions_value
             if cash_usd is None:
                 raise BrokerUnavailable("IBKR did not return a USD cash balance for the configured account")
-            return PortfolioBalances(
+            return AccountSnapshot(
                 cash_usd=cash_usd,
+                positions=tuple(positions),
                 positions_market_value_usd=positions_market_value,
                 net_liquidation_usd=net_liquidation_usd,
+                account_id=self.settings.ibkr_account,
+                timestamp_utc=datetime.now(UTC).isoformat(),
             )
-        finally:
-            ib.disconnect()
-
-    def positions(self) -> list[CurrentPosition]:
-        ib = self._connect()
-        try:
-            return self._positions_from_ib(ib)
         finally:
             ib.disconnect()
 
@@ -600,5 +597,5 @@ def order_results_have_no_accepted_orders(results: list[OrderResult]) -> bool:
 
 def build_broker(settings: Settings) -> Broker:
     if settings.trading_mode == TradingMode.DRY_RUN:
-        return DryRunBroker(settings.portfolio_value_usd)
+        return DryRunBroker(settings.dry_run_portfolio_value_usd)
     return IbkrBroker(settings)

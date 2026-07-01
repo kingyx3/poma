@@ -11,10 +11,9 @@ from poma.portfolio import build_strategy_capital_plan
 def validate(settings: Settings) -> list[str]:
     settings.assert_safe_for_execution()
     capital_plan = build_strategy_capital_plan(
-        settings.portfolio_value_usd,
+        settings.dry_run_portfolio_value_usd,
         settings.strategy_allocations,
     )
-    strategy_capital = capital_plan.capital_for(settings.active_strategy)
 
     errors: list[str] = []
     if settings.trading_mode in {TradingMode.PAPER, TradingMode.LIVE} and settings.data_provider != "yahoo":
@@ -23,10 +22,10 @@ def validate(settings: Settings) -> list[str]:
         errors.append("MAX_DAILY_TRADES must be at least MAX_HOLDINGS for a full bootstrap rebalance")
     if settings.max_order_notional_usd < settings.min_trade_notional_usd:
         errors.append("MAX_ORDER_NOTIONAL_USD must be greater than or equal to MIN_TRADE_NOTIONAL_USD")
-    if strategy_capital.capital_usd > settings.portfolio_value_usd:
-        errors.append("active strategy capital exceeds PORTFOLIO_VALUE_USD")
-    if capital_plan.total_allocated_usd > settings.portfolio_value_usd + 1e-6:
-        errors.append("total allocated capital exceeds PORTFOLIO_VALUE_USD")
+    if capital_plan.total_allocated_usd > settings.dry_run_portfolio_value_usd + 1e-6:
+        errors.append("total allocated capital exceeds DRY_RUN_PORTFOLIO_VALUE_USD")
+    if not capital_plan.tradeable_sleeves():
+        errors.append("STRATEGY_ALLOCATIONS must allocate at least one non-cash strategy sleeve")
     return errors
 
 
@@ -41,14 +40,17 @@ def main() -> None:
         raise SystemExit("; ".join(errors))
 
     allocations = settings.strategy_allocation_map()
-    capital_plan = build_strategy_capital_plan(settings.portfolio_value_usd, allocations)
+    capital_plan = build_strategy_capital_plan(settings.dry_run_portfolio_value_usd, allocations)
+    sleeves = ", ".join(
+        f"{sleeve.name}=${sleeve.capital_usd:,.2f}" for sleeve in capital_plan.tradeable_sleeves()
+    )
     print(
         "runtime config ok: "
         f"mode={settings.trading_mode.value} provider={settings.data_provider} "
-        f"active_strategy={settings.active_strategy} "
-        f"active_capital=${capital_plan.capital_for(settings.active_strategy).capital_usd:,.2f} "
+        f"managed_cap_mode={settings.managed_cap_mode.value} "
+        f"strategy_sleeves=[{sleeves}] "
         f"total_allocated=${capital_plan.total_allocated_usd:,.2f} "
-        f"portfolio_cap=${settings.portfolio_value_usd:,.2f}"
+        f"dry_run_portfolio_value=${settings.dry_run_portfolio_value_usd:,.2f}"
     )
 
 

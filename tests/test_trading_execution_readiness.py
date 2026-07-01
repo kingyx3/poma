@@ -18,7 +18,7 @@ from poma.config import Settings
 from poma.data import FixtureMarketDataClient
 from poma.engine import NO_ORDERS_ACCEPTED_STATUS, RebalanceEngine
 from poma.health import check_ibkr
-from poma.models import OrderResult, OrderSide, PortfolioBalances, ProposedTrade
+from poma.models import AccountSnapshot, OrderResult, OrderSide, ProposedTrade
 from poma.order_status_alerts import order_status_alert
 from poma.portfolio import CURRENT_STRATEGY_NAME, build_strategy_capital_plan
 from poma.risk import enforce_turnover_limit, generate_trades
@@ -58,7 +58,7 @@ def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
 def test_default_turnover_allows_initial_full_paper_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(monkeypatch)
     capital_plan = build_strategy_capital_plan(
-        settings.portfolio_value_usd,
+        settings.dry_run_portfolio_value_usd,
         settings.strategy_allocations,
     )
     strategy_capital = capital_plan.capital_for(CURRENT_STRATEGY_NAME)
@@ -84,7 +84,7 @@ def test_default_turnover_allows_initial_full_paper_bootstrap(monkeypatch: pytes
     assert strategy_capital.allocation_pct == pytest.approx(0.98)
     assert warnings == []
     assert len(trades) == settings.max_holdings
-    assert sum(trade.notional for trade in trades) / settings.portfolio_value_usd == pytest.approx(0.98)
+    assert sum(trade.notional for trade in trades) / settings.dry_run_portfolio_value_usd == pytest.approx(0.98)
     assert enforce_turnover_limit(trades, strategy_capital.capital_usd, settings.max_turnover_pct) == []
 
 
@@ -172,7 +172,7 @@ def test_ibkr_broker_reads_cash_and_position_balances_before_rebalance(
 
     monkeypatch.setattr("poma.broker.IB", FakeIB)
 
-    balances = IbkrBroker(_settings(monkeypatch)).account_balances()
+    balances = IbkrBroker(_settings(monkeypatch)).account_snapshot()
 
     assert balances.cash_usd == 15_000
     assert balances.positions_market_value_usd == 5_000
@@ -227,7 +227,7 @@ def test_ibkr_broker_reads_balances_from_authenticated_account_values_when_summa
     fake_ib = FakeIB()
     monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
 
-    balances = IbkrBroker(_settings(monkeypatch)).account_balances()
+    balances = IbkrBroker(_settings(monkeypatch)).account_snapshot()
 
     assert fake_ib.account_summary_queries == ["DU1234567", ""]
     assert fake_ib.account_value_queries == ["DU1234567", ""]
@@ -367,11 +367,8 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
 
 def test_engine_marks_all_cancelled_orders_as_no_orders_accepted() -> None:
     class CancelledBroker:
-        def account_balances(self) -> PortfolioBalances:
-            return PortfolioBalances(cash_usd=10_000.0, positions_market_value_usd=0.0)
-
-        def positions(self) -> list:
-            return []
+        def account_snapshot(self) -> AccountSnapshot:
+            return AccountSnapshot(cash_usd=10_000.0, positions=(), positions_market_value_usd=0.0)
 
         def submit_trades(
             self,

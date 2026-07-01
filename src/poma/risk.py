@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from poma.models import CurrentPosition, OrderSide, ProposedTrade, TargetPosition
 
+# --- Target risk: combined portfolio-level target checks -----------------------------------
+
 
 def validate_targets(targets: list[TargetPosition], max_position_pct: float) -> list[str]:
     warnings: list[str] = []
@@ -18,6 +20,9 @@ def validate_targets(targets: list[TargetPosition], max_position_pct: float) -> 
 def _build_limit_price(side: OrderSide, reference_price: float, offset_bps: float) -> float:
     multiplier = 1 + offset_bps / 10_000 if side == OrderSide.BUY else 1 - offset_bps / 10_000
     return round(reference_price * multiplier, 2)
+
+
+# --- Trade risk: order generation and per-batch limits --------------------------------------
 
 
 def generate_trades(
@@ -104,3 +109,20 @@ def enforce_order_limits(
             f"orders exceed max notional {max_order_notional_usd:.2f}: {tickers}; block execution"
         )
     return warnings
+
+
+def enforce_buying_power(trades: list[ProposedTrade], available_cash_usd: float) -> list[str]:
+    """Block execution when planned net buys would exceed the account's available cash.
+
+    Sell proceeds are not assumed to settle before buys are placed, but modeling planned sells
+    as immediately available buying power matches how a same-day rebalance nets out.
+    """
+    net_cash_outflow = sum(trade.notional for trade in trades if trade.side == OrderSide.BUY) - sum(
+        trade.notional for trade in trades if trade.side == OrderSide.SELL
+    )
+    if net_cash_outflow > available_cash_usd + 1e-6:
+        return [
+            f"planned net buys (${net_cash_outflow:,.2f}) exceed available cash "
+            f"(${available_cash_usd:,.2f}); block execution"
+        ]
+    return []
