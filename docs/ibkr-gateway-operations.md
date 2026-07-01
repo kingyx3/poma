@@ -81,6 +81,8 @@ sudo journalctl -u ibgateway -n 200 --no-pager
 sudo tail -n 120 /var/log/poma/ibgateway/*.log
 ```
 
+Run **IB Gateway Ops** with `action=app-logs` to read the app-side `poma monitor`/`poma reconcile-orders` cron output (`/opt/poma/logs/poma-cron.log`, `/opt/poma/logs/poma-reconcile-cron.log`) and the current `/opt/poma/state/rebalance_state.json` directly from the GitHub Actions job log, without SSH.
+
 Open the Gateway GUI only through a local tunnel over IAP SSH:
 
 ```bash

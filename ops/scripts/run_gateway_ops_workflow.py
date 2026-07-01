@@ -230,6 +230,16 @@ def main() -> int:
         return remote("sudo systemctl restart ibgateway", timeout=180)
     if action == "logs":
         return remote(f"sudo journalctl -u ibgateway -n {log_lines} --no-pager", timeout=180)
+    if action == "app-logs":
+        return remote(
+            "echo '===== poma-cron.log (tail) ====='; "
+            f"sudo tail -n {log_lines} /opt/poma/logs/poma-cron.log 2>/dev/null || echo '(missing)'; "
+            "echo '===== poma-reconcile-cron.log (tail) ====='; "
+            f"sudo tail -n {log_lines} /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null || echo '(missing)'; "
+            "echo '===== rebalance_state.json ====='; "
+            "sudo cat /opt/poma/state/rebalance_state.json 2>/dev/null || echo '(missing)'",
+            timeout=180,
+        )
     if action == "clear-rebalance-state":
         return remote(
             "sudo install -d -o poma -g poma /opt/poma/state && "

@@ -13,10 +13,10 @@ on:
         description: Operation to run on the VM.
         required: true
         type: choice
-        options: [status, restart, logs, verify-socket, configure-paper, configure-live, clear-rebalance-state]
+        options: [status, restart, logs, app-logs, verify-socket, configure-paper, configure-live, clear-rebalance-state]
         default: status
       log_lines:
-        description: Number of ibgateway journal lines for logs/status output.
+        description: Number of ibgateway journal / poma-cron.log lines for logs/app-logs/status output.
         required: true
         type: number
         default: 200
