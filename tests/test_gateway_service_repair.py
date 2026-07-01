@@ -116,6 +116,8 @@ def test_install_helper_sets_expected_ibc_values() -> None:
         "set_ini OverrideTwsApiPort 7497",
         "set_ini AcceptIncomingConnectionAction accept",
         "set_ini AllowBlindTrading yes",
+        "set_ini ReadOnlyLogin no",
+        "set_ini ReadOnlyApi no",
     ):
         assert snippet in script
 
@@ -176,17 +178,16 @@ def test_ops_workflow_waits_for_gateway_socket_and_trading_readiness() -> None:
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 600" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert (
-        "Waiting up to {timeout_seconds}s for broker auth and Gateway API trading readiness"
+        "Waiting up to {timeout_seconds}s per login attempt for broker auth and Gateway API trading readiness"
         in runner
     )
     for snippet in (
         "while time.monotonic() < deadline:",
         "Socket/service poll attempt {attempt}",
         "systemctl is-active --quiet ibgateway",
-        "Gateway API socket stability guard",
-        "non-transmitted IBKR what-if order preview",
+        "stable >= 2",
         "Restart ibgateway for trading-enabled login",
-        "Broker auth, Gateway API, or trading permission readiness timed out",
+        "readiness timed out before the API",
     ):
         assert snippet in runner
 

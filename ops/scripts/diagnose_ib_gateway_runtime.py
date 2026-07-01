@@ -253,7 +253,7 @@ def validate_config(mode: str) -> int:
         values = read_key_values(IBC_CONFIG)
         for key in sorted(values):
             print(f"{key}={'***' if key in SENSITIVE_KEYS else values[key]}")
-        expected = {"TradingMode": mode, "OverrideTwsApiPort": "7497", "AcceptIncomingConnectionAction": "accept", "AllowBlindTrading": "yes", "ReloginAfterSecondFactorAuthenticationTimeout": "yes"}
+        expected = {"TradingMode": mode, "OverrideTwsApiPort": "7497", "AcceptIncomingConnectionAction": "accept", "AllowBlindTrading": "yes", "ReloginAfterSecondFactorAuthenticationTimeout": "yes", "ReadOnlyLogin": "no", "ReadOnlyApi": "no"}
         # Compare ownership by uid, not name. startup.sh may create the poma app user with a
         # non-unique uid shared with the cloud image's default user (uid 1000 = ubuntu), so
         # name lookup for the file's uid can resolve to "ubuntu" even though the file is owned

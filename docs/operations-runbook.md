@@ -93,10 +93,13 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 
 ```bash
 cd /opt/poma
-sudo -u poma docker compose run --rm poma doctor
-sudo -u poma docker compose run --rm poma ibkr-check
-sudo -u poma docker compose run --rm poma positions
-sudo -u poma docker compose run --rm poma rebalance --session-date manual-check --dry-run
+# Use the deployed VM compose file so these reuse the pulled image (host-networked) instead of
+# rebuilding from source on the e2-micro. This mirrors deploy.sh and the Gateway Ops readiness check.
+compose="docker compose --env-file .compose.env -f docker-compose.vm.yml"
+sudo -u poma $compose run --rm poma doctor
+sudo -u poma $compose run --rm poma ibkr-check
+sudo -u poma $compose run --rm poma positions
+sudo -u poma $compose run --rm poma rebalance --session-date manual-check --dry-run
 sudo -u poma tail -n 200 logs/poma.log
 ```
 

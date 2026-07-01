@@ -138,17 +138,20 @@ def main() -> int:
     def api_ready(mode: str, required: bool) -> int:
         timeout_seconds = int(twofa_timeout)
         poll_interval_seconds = int(poll_seconds)
+        max_trading_login_restarts = 2
         started = time.monotonic()
-        deadline = started + timeout_seconds
+        # Overall safety cap so bounded per-login restarts can never overrun the job timeout.
+        hard_deadline = started + 2 * timeout_seconds
+        # login_started tracks the current login attempt; a forced restart resets it so the fresh
+        # login gets its own readiness/no-progress budget instead of inheriting a spent one.
+        login_started = started
+        deadline = min(hard_deadline, started + timeout_seconds)
         stable = 0
         attempt = 1
-        print(f"Waiting up to {timeout_seconds}s for broker auth and Gateway API trading readiness.")
-        print(
-            "The readiness check includes a non-transmitted IBKR what-if order preview, so a "
-            "read-only / no Trading-Market-Data-permissions login will be retried before deploy succeeds."
-        )
+        restarts = 0
+        print(f"Waiting up to {timeout_seconds}s per login attempt for broker auth and Gateway API trading readiness.")
         while time.monotonic() < deadline:
-            elapsed_seconds = int(time.monotonic() - started)
+            elapsed_seconds = int(time.monotonic() - login_started)
             poll = timed(
                 f"Socket/service poll attempt {attempt}",
                 lambda: remote(
@@ -158,12 +161,14 @@ def main() -> int:
             )
             if poll == 0:
                 stable += 1
-                print(f"Gateway API socket stability guard: {stable}/2.")
                 if stable >= 2:
+                    # Run the readiness what-if against the deployed VM image (docker-compose.vm.yml,
+                    # host-networked) so it reuses the pulled image instead of building from source on
+                    # the e2-micro and so 127.0.0.1:7497 reaches the host Gateway.
                     check = (
-                        "if ! test -f /opt/poma/docker-compose.yml && ! test -f /opt/poma/compose.yaml; then "
-                        + ("echo 'POMA app not deployed at /opt/poma' >&2; exit 1; " if required else "echo 'POMA app not deployed at /opt/poma; skipping.'; exit 0; ")
-                        + "fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose run --rm -e TRADING_MODE="
+                        "if ! test -f /opt/poma/docker-compose.vm.yml; then "
+                        + ("echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2; exit 1; " if required else "echo 'POMA app not deployed at /opt/poma; skipping.'; exit 0; ")
+                        + "fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm -e TRADING_MODE="
                         + mode
                         + " -e DATA_PROVIDER=fixture poma ibkr-check'"
                     )
@@ -171,18 +176,33 @@ def main() -> int:
                     if check_status == 0:
                         print("IBKR API handshake and trading permission preview succeeded; Gateway is ready to submit orders.")
                         return 0
+                    if restarts >= max_trading_login_restarts:
+                        print(
+                            "ERROR: the IBKR API socket is open but the what-if trading preview still fails "
+                            f"after {restarts} forced fresh-login restart(s). The Gateway keeps logging in "
+                            "read-only or without Trading/Market-Data permissions, which a restart cannot fix. "
+                            "Verify the IBKR account's API settings have 'Read-Only API' disabled and that "
+                            f"Trading and Market Data subscriptions are active for the {mode} account.",
+                            file=sys.stderr,
+                        )
+                        diagnose()
+                        return 1
+                    restarts += 1
                     restart_gateway_for_trading_login(
-                        "IBKR API socket opened but trading readiness failed. "
-                        "This usually means Gateway logged in without Trading/Market Data permissions."
+                        "IBKR API socket opened but trading readiness failed. This usually means Gateway "
+                        "logged in read-only / without Trading/Market-Data permissions. Forcing a fresh "
+                        f"trading-enabled login (restart {restarts}/{max_trading_login_restarts})."
                     )
+                    # Reset the per-login clocks so the fresh login gets a full, bounded readiness window.
                     stable = 0
+                    login_started = time.monotonic()
+                    deadline = min(hard_deadline, login_started + timeout_seconds)
             elif poll == 1:
                 stable = 0
-                print("Gateway service is active but API socket is closed; checking startup progress.")
                 startup_status = gateway_startup_progress(elapsed_seconds)
                 if startup_status == 2:
                     print(
-                        "Gateway startup stalled before opening the API socket; collecting diagnostics.",
+                        "ERROR: Gateway startup stalled before opening the API socket; collecting diagnostics.",
                         file=sys.stderr,
                     )
                     diagnose()
@@ -191,7 +211,11 @@ def main() -> int:
                 stable = 0
             time.sleep(poll_interval_seconds)
             attempt += 1
-        print("Broker auth, Gateway API, or trading permission readiness timed out.", file=sys.stderr)
+        print(
+            "ERROR: broker auth, Gateway API, or trading-permission readiness timed out before the API "
+            f"socket became stably tradable ({restarts} forced restart(s) used); collecting diagnostics.",
+            file=sys.stderr,
+        )
         diagnose()
         return 1
 

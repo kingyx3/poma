@@ -96,6 +96,10 @@ set_ini AutoRestartTime 23:45
 # sample or stale read-only login settings, because those make ibkr-check fail with read-only API
 # errors and would also prevent later paper order submission.
 set_ini ReadOnlyLogin no
+# Explicitly disable the Gateway "Read-Only API" toggle. When left unset it can default to the
+# stored (often read-only) value, which makes the ibkr-check what-if order preview fail even after
+# a successful login, so trading/market-data readiness never passes.
+set_ini ReadOnlyApi no
 # Force the API socket onto the port POMA and the ops verification expect (IB
 # Gateway otherwise defaults to 4002 for paper / 4001 for live).
 set_ini OverrideTwsApiPort 7497

@@ -83,7 +83,7 @@ def test_gateway_ops_workflow_core_contract() -> None:
         "poma-configure-ibc",
         "repair_runtime",
         "poma ibkr-check",
-        "Gateway API socket stability guard",
+        "Socket/service poll attempt",
         "poma-wait-ibgateway-2fa",
     ):
         assert snippet in runner
