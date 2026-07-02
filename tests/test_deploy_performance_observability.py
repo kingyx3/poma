@@ -122,6 +122,8 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         'bounded_docker_diagnostics "after image pull"',
         "timeout_compose 5m pull poma",
         "timeout_compose 3m run --rm",
+        "smoke_session=\"deploy-smoke-$(date -u +%Y%m%dT%H%M%SZ)\"",
+        "poma rebalance --session-date \"${smoke_session}\" --dry-run",
         "timed \"deploy smoke test\" run_deploy_smoke",
         "DOCKER_PRUNE_TIMEOUT=\"${DOCKER_PRUNE_TIMEOUT:-45s}\"",
         "timeout --kill-after=30s \"${DOCKER_PRUNE_TIMEOUT}\" docker image prune -f",
@@ -132,6 +134,7 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
     for snippet in expected_snippets:
         assert snippet in script
 
+    assert "--session-date deploy-smoke --dry-run" not in script
     assert "docker compose build" not in script
     assert 'timeout --kill-after=30s "${duration}" docker compose' in script
     assert "docker system df || true" not in script

@@ -120,13 +120,14 @@ pull_image() {
 }
 
 run_deploy_smoke() {
-  local after_count before_count
+  local after_count before_count smoke_session
 
+  smoke_session="deploy-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
   before_count="$(find reports -maxdepth 1 -type f -name 'rebalance-*.json' | wc -l)"
   timeout_compose 3m run --rm \
     -e DATA_PROVIDER=fixture \
     -e TRADING_MODE=dry_run \
-    poma rebalance --session-date deploy-smoke --dry-run
+    poma rebalance --session-date "${smoke_session}" --dry-run
   after_count="$(find reports -maxdepth 1 -type f -name 'rebalance-*.json' | wc -l)"
 
   if [ "${after_count}" -le "${before_count}" ]; then
