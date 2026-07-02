@@ -19,6 +19,11 @@ HELPER_SCRIPTS = [
     "ops/scripts/wait_ib_gateway_2fa.py",
 ]
 HELPER_ARCHIVE_NAME = "poma-gateway-helpers.tar.gz"
+NON_RETRIABLE_IBKR_MARKET_DATA_ERRORS = (
+    ("10089", "requested market data requires additional subscription"),
+    ("354", "requested market data is not subscribed"),
+    ("10197", "no market data during competing live session"),
+)
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -70,6 +75,33 @@ def run(command: list[str], *, timeout: int = 180, input_text: str | None = None
     return completed.returncode
 
 
+def run_capture(command: list[str], *, timeout: int = 180) -> tuple[int, str]:
+    print(_echo_command(command), flush=True)
+    def as_text(part) -> str:
+        if isinstance(part, bytes):
+            return part.decode(errors="replace")
+        return part or ""
+
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            timeout=timeout,
+            capture_output=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = "".join(as_text(part) for part in (exc.stdout, exc.stderr))
+        if output:
+            print(output, end="" if output.endswith("\n") else "\n")
+        print(f"command timed out after {timeout}s: {' '.join(command)}", file=sys.stderr)
+        return 124, output
+    output = completed.stdout + completed.stderr
+    if output:
+        print(output, end="" if output.endswith("\n") else "\n")
+    return completed.returncode, output
+
+
 def timed(label: str, func) -> int:
     print(f"::group::{label}")
     start = time.monotonic()
@@ -95,6 +127,16 @@ def build_helper_archive() -> Path:
             path = Path(script)
             archive.add(path, arcname=path.name)
     return archive_path
+
+
+def classify_non_retriable_ibkr_check(output: str) -> tuple[str, str] | None:
+    lower_output = output.lower()
+    if any(code in lower_output and phrase in lower_output for code, phrase in NON_RETRIABLE_IBKR_MARKET_DATA_ERRORS):
+        return (
+            "poma ibkr-check failed with an IBKR market-data entitlement/session error.",
+            "Fix the IBKR market-data/API entitlement or close the competing live session, then rerun Gateway configure.",
+        )
+    return None
 
 
 def main() -> int:
@@ -131,6 +173,9 @@ def main() -> int:
 
     def remote(command: str, timeout: int = 180) -> int:
         return gcloud("compute", "ssh", vm_name, *ssh_common, "--command", command, timeout=timeout)
+
+    def remote_capture(command: str, timeout: int = 180) -> tuple[int, str]:
+        return run_capture(["gcloud", "compute", "ssh", vm_name, *ssh_common, "--command", command], timeout=timeout)
 
     def record_failure(stage: str, reason: str, next_action: str) -> None:
         summary = (
@@ -319,10 +364,16 @@ def main() -> int:
             socket_budget = min(timeout_seconds, remaining)
             socket_status = wait_for_stable_api_socket(attempt, socket_budget)
             if socket_status == 0:
-                check_status = remote(ibkr_check_command(mode, required), timeout=ibkr_check_timeout_seconds)
+                check_status, check_output = remote_capture(ibkr_check_command(mode, required), timeout=ibkr_check_timeout_seconds)
                 if check_status == 0:
                     print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
                     return 0
+                non_retriable = classify_non_retriable_ibkr_check(check_output)
+                if non_retriable is not None:
+                    reason, next_action = non_retriable
+                    print(f"ERROR: {reason} Not forcing a fresh Gateway login because the captured IBKR error is not fixed by restart.", file=sys.stderr)
+                    diagnose("ibkr-check", reason, next_action)
+                    return 1
                 if restarts >= max_trading_login_restarts:
                     reason = (
                         "IBKR API socket is open, but poma ibkr-check still fails after "

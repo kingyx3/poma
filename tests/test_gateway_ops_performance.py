@@ -1,3 +1,4 @@
+import importlib.util
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,15 @@ def _workflow() -> str:
 
 def _runner() -> str:
     return GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
+
+
+def _load_gateway_runner():
+    spec = importlib.util.spec_from_file_location("run_gateway_ops_workflow", GATEWAY_OPS_RUNNER)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
@@ -59,6 +69,25 @@ def test_gateway_readiness_uses_pulled_vm_image_and_bounded_restarts() -> None:
     assert 'max_trading_login_restarts = int(env("IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS", "1"))' in runner
     assert "hard_deadline = started + (max_trading_login_restarts + 1) * timeout_seconds" in runner
     assert "'Read-Only API' disabled" in runner
+    assert "classify_non_retriable_ibkr_check(check_output)" in runner
+
+
+def test_gateway_market_data_entitlement_failures_skip_fresh_login_restart() -> None:
+    module = _load_gateway_runner()
+
+    for output in (
+        "Error 10089: Requested market data requires additional subscription for API.",
+        "Error 354: Requested market data is not subscribed.",
+        "Error 10197: No market data during competing live session",
+    ):
+        classification = module.classify_non_retriable_ibkr_check(output)
+
+        assert classification is not None
+        reason, next_action = classification
+        assert "market-data" in reason
+        assert "rerun Gateway configure" in next_action
+
+    assert module.classify_non_retriable_ibkr_check("TimeoutError connecting to IBKR API") is None
 
 
 def test_gateway_ops_logs_stay_concise_and_error_specific() -> None:
