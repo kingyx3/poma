@@ -243,6 +243,20 @@ def test_managed_cap_mode_min_of_broker_total_and_cap_limits_sizing() -> None:
     assert plan.portfolio_value_usd == 10_000
 
 
+def test_estimated_transaction_costs_skip_marginal_rebalance_trades() -> None:
+    plan = _engine(
+        broker=FakeBroker(cash_usd=10_000.0),
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
+        ESTIMATED_TRANSACTION_COST_FIXED_USD=100_000,
+        MAX_TURNOVER_PCT=1.0,
+        MAX_ORDER_NOTIONAL_USD=100_000.0,
+    ).build_plan("session", "rebalance-x")
+
+    assert plan.trades == []
+    assert any("estimated transaction cost" in warning for warning in plan.warnings)
+
+
 def test_current_holdings_reduce_buys_and_generate_sells() -> None:
     broker = FakeBroker(
         positions=[CurrentPosition("AAPL", quantity=1_000.0, market_value=9_800.0)],

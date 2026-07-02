@@ -23,6 +23,7 @@ from poma.risk import (
     enforce_buying_power,
     enforce_order_limits,
     enforce_turnover_limit,
+    filter_trades_by_estimated_transaction_cost,
     generate_trades,
     validate_targets,
 )
@@ -136,6 +137,12 @@ class RebalanceEngine:
             min_weight_delta_pct=settings.min_weight_delta_pct,
             limit_offset_bps=settings.limit_offset_bps,
         )
+        trades, cost_warnings = filter_trades_by_estimated_transaction_cost(
+            trades,
+            min_trade_notional_usd=settings.min_trade_notional_usd,
+            estimated_transaction_cost_bps=settings.estimated_transaction_cost_bps,
+            estimated_transaction_cost_fixed_usd=settings.estimated_transaction_cost_fixed_usd,
+        )
         trades, execution_policy_warnings = apply_execution_policy(
             trades,
             settings.execution_rules(),
@@ -144,6 +151,7 @@ class RebalanceEngine:
 
         warnings.extend(validate_targets(targets, settings.max_position_pct))
         warnings.extend(trade_warnings)
+        warnings.extend(cost_warnings)
         warnings.extend(execution_policy_warnings)
         warnings.extend(
             enforce_turnover_limit(
@@ -204,17 +212,13 @@ class RebalanceEngine:
             )
             return fallback
 
+        warnings.extend(snapshot.warnings)
         if snapshot.total_value_usd <= 0:
             warnings.append(
                 "broker cash and portfolio balances produced a non-positive portfolio value; "
                 f"{BLOCK_MARKER}"
             )
             return fallback
-        if snapshot.base_currency and snapshot.base_per_usd:
-            warnings.append(
-                f"account balances converted from base currency {snapshot.base_currency} to USD "
-                f"at {snapshot.base_per_usd:.4f} {snapshot.base_currency}/USD"
-            )
         return snapshot
 
     def _resolve_portfolio_value_usd(self, account_snapshot: AccountSnapshot) -> float:

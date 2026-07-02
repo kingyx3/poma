@@ -7,7 +7,6 @@ import pytest
 from conftest import make_settings
 
 from poma.broker import (
-    BrokerUnavailable,
     IbkrBroker,
     order_results_have_issues,
     order_results_have_no_accepted_orders,
@@ -512,27 +511,27 @@ def _sgd_account_rows(cash_sgd: str = "13100", net_liq_sgd: str = "13100") -> di
             FakeAccountValue(tag="TotalCashValue", value=cash_sgd, currency="SGD"),
             FakeAccountValue(tag="NetLiquidation", value=net_liq_sgd, currency="SGD"),
         ],
-        "account_value_rows": [
-            FakeAccountValue(tag="ExchangeRate", value="1.31", currency="USD"),
-            FakeAccountValue(tag="ExchangeRate", value="1.0", currency="SGD"),
-        ],
+        "account_value_rows": [],
     }
 
 
-def test_account_snapshot_converts_sgd_base_balances_to_usd(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_account_snapshot_ignores_sgd_base_balances_for_usd_rebalancing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_ib = FakeIB(**_sgd_account_rows())
     monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
     broker = IbkrBroker(_settings(monkeypatch))
 
     snapshot = broker.account_snapshot()
 
-    assert snapshot.cash_usd == pytest.approx(13_100 / 1.31)
-    assert snapshot.net_liquidation_usd == pytest.approx(13_100 / 1.31)
-    assert snapshot.base_currency == "SGD"
-    assert snapshot.base_per_usd == pytest.approx(1.31)
+    assert snapshot.cash_usd == 0.0
+    assert snapshot.net_liquidation_usd is None
+    assert snapshot.total_value_usd == 0.0
+    assert any("ignored non-USD/BASE account balance rows" in warning for warning in snapshot.warnings)
+    assert any("treating available USD cash as $0.00" in warning for warning in snapshot.warnings)
 
 
-def test_account_snapshot_converts_base_currency_gross_position_value(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_account_snapshot_ignores_non_usd_gross_position_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = _sgd_account_rows()
     rows["account_summary_rows"].append(FakeAccountValue(tag="GrossPositionValue", value="6550", currency="SGD"))
     fake_ib = FakeIB(
@@ -544,10 +543,11 @@ def test_account_snapshot_converts_base_currency_gross_position_value(monkeypatc
 
     snapshot = broker.account_snapshot()
 
-    # USD-denominated stock positions pass through unchanged; the base-currency gross total
-    # (S$6,550 at 1.31) converts to the same $5,000, keeping both reads consistent.
+    # USD-denominated stock positions pass through unchanged; the non-USD gross summary is
+    # informational only and must not override the USD position read.
     assert snapshot.positions[0].market_value == 5000.0
     assert snapshot.positions_market_value_usd == pytest.approx(5000.0)
+    assert any("SGD" in warning for warning in snapshot.warnings)
 
 
 def test_account_snapshot_usd_base_account_needs_no_exchange_rate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -563,11 +563,10 @@ def test_account_snapshot_usd_base_account_needs_no_exchange_rate(monkeypatch: p
     snapshot = broker.account_snapshot()
 
     assert snapshot.cash_usd == 10_000.0
-    assert snapshot.base_currency is None
-    assert snapshot.base_per_usd is None
+    assert snapshot.warnings == ()
 
 
-def test_account_snapshot_refuses_base_currency_balances_without_usd_rate(
+def test_account_snapshot_does_not_need_exchange_rate_for_ignored_non_usd_balances(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_ib = FakeIB(
@@ -576,20 +575,21 @@ def test_account_snapshot_refuses_base_currency_balances_without_usd_rate(
     monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
     broker = IbkrBroker(_settings(monkeypatch))
 
-    with pytest.raises(BrokerUnavailable, match="base currency \\(SGD\\)"):
-        broker.account_snapshot()
+    snapshot = broker.account_snapshot()
+
+    assert snapshot.cash_usd == 0.0
+    assert snapshot.net_liquidation_usd is None
+    assert any("SGD" in warning for warning in snapshot.warnings)
 
 
-def test_account_snapshot_skips_single_currency_cash_sleeves_for_totals(
+def test_account_snapshot_uses_only_usd_cash_when_mixed_currency_balances_exist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Without summary rows, only the BASE total row of the per-currency balances counts; the
-    # SGD sleeve row must not be mistaken for the account total.
     fake_ib = FakeIB(
         account_value_rows=[
+            FakeAccountValue(tag="TotalCashBalance", value="500", currency="USD"),
             FakeAccountValue(tag="TotalCashBalance", value="12000", currency="SGD"),
             FakeAccountValue(tag="TotalCashBalance", value="13100", currency="BASE"),
-            FakeAccountValue(tag="ExchangeRate", value="1.31", currency="USD"),
         ],
     )
     monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
@@ -597,4 +597,32 @@ def test_account_snapshot_skips_single_currency_cash_sleeves_for_totals(
 
     snapshot = broker.account_snapshot()
 
-    assert snapshot.cash_usd == pytest.approx(13_100 / 1.31)
+    assert snapshot.cash_usd == 500.0
+    assert snapshot.total_value_usd == 500.0
+    assert any("BASE" in warning and "SGD" in warning for warning in snapshot.warnings)
+
+
+def test_account_snapshot_excludes_non_usd_stock_positions(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(
+        account_summary_rows=[
+            FakeAccountValue(tag="TotalCashValue", value="100", currency="USD"),
+            FakeAccountValue(tag="NetLiquidation", value="5100", currency="USD"),
+        ],
+        portfolio_items=[
+            FakePortfolioItem(contract=FakeContract(symbol="AAPL"), position=25.0, marketValue=5000.0),
+            FakePortfolioItem(
+                contract=FakeContract(symbol="SAP", currency="EUR"),
+                position=10.0,
+                marketValue=1800.0,
+            ),
+        ],
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    snapshot = broker.account_snapshot()
+
+    assert [position.ticker for position in snapshot.positions] == ["AAPL"]
+    assert snapshot.positions_market_value_usd == 5000.0
+    assert snapshot.total_value_usd == 5100.0
+    assert any("ignored non-USD stock positions" in warning and "EUR" in warning for warning in snapshot.warnings)
