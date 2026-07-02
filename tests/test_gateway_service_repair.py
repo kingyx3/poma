@@ -175,17 +175,16 @@ def test_ops_workflow_waits_for_gateway_socket_and_trading_readiness() -> None:
     workflow = OPS_WORKFLOW.read_text(encoding="utf-8")
     runner = GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
 
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 600" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert (
         "Waiting up to {timeout_seconds}s per login attempt for broker auth and Gateway API trading readiness"
         in runner
     )
     for snippet in (
-        "while time.monotonic() < deadline:",
-        "Socket/service poll attempt {attempt}",
+        "VM-local socket/service wait attempt",
         "systemctl is-active --quiet ibgateway",
-        "stable >= 2",
+        'if [ \\"${stable}\\" -ge 2 ]; then exit 0; fi',
         "Restart ibgateway for trading-enabled login",
         "readiness timed out before the API",
     ):

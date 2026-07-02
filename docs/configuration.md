@@ -20,13 +20,15 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rolling rank-rising-velocity window. |
 | `MAX_HOLDINGS` | yes | `50` | Top 50 selected stocks are held when enough valid tickers exist. Kept at 50 so whole-share sizing leaves a meaningful per-slot notional on a small managed cap. |
 | `STRATEGY_ALLOCATIONS` | yes | `rank_velocity_size_equal_weight=0.98,cash=0.02` | Named portfolio sleeves. Every non-`cash` name must be a registered strategy (see `docs/strategy-contract.md`); the engine executes every sleeve with a positive allocation, not just one. Total must be `<= 1.0`. |
-| `DRY_RUN_PORTFOLIO_VALUE_USD` | yes | `10000` | Portfolio value used only in `dry_run` mode. Paper/live size against broker account equity instead; see `MANAGED_CAP_MODE`. |
-| `MANAGED_CAP_MODE` | yes | `broker_total` | `broker_total` sizes paper/live sleeves off the full broker account value. `min_of_broker_total_and_cap` sizes off `min(broker account value, MANAGED_CAP_USD)`. |
+| `DRY_RUN_PORTFOLIO_VALUE_USD` | yes | `10000` | Portfolio value used only in `dry_run` mode. Paper/live size against USD-only broker account equity instead; see `MANAGED_CAP_MODE`. |
+| `MANAGED_CAP_MODE` | yes | `broker_total` | `broker_total` sizes paper/live sleeves off the USD-only broker account value. `min_of_broker_total_and_cap` sizes off `min(USD-only broker account value, MANAGED_CAP_USD)`. |
 | `MANAGED_CAP_USD` | `min_of_broker_total_and_cap` only | `0` | Hard cap on managed capital when `MANAGED_CAP_MODE=min_of_broker_total_and_cap`. Must be greater than 0 in that mode; unused (and may stay `0`) under `broker_total`. |
 | `MAX_POSITION_PCT` | yes | `0.10` | Position cap inside a strategy sleeve. |
 | `MAX_TURNOVER_PCT` | yes | `1.0` | Maximum absolute trade notional divided by the active strategy sleeve capital. |
 | `MIN_TRADE_NOTIONAL_USD` | yes | `25` | Suppresses tiny rebalance trades. |
 | `MIN_WEIGHT_DELTA_PCT` | yes | `0.0025` | Suppresses tiny target/current weight differences. |
+| `ESTIMATED_TRANSACTION_COST_BPS` | yes | `0` | Optional all-in estimated transaction cost in basis points. Include expected commissions, spreads, fees, FX costs, taxes, or other known trade friction. |
+| `ESTIMATED_TRANSACTION_COST_FIXED_USD` | yes | `0` | Optional fixed estimated transaction cost per trade. A trade is skipped when its notional minus estimated cost falls below `MIN_TRADE_NOTIONAL_USD`. |
 | `ORDER_TYPE` | yes | `limit` | Use `limit` by default. |
 | `ALLOW_MARKET_ORDERS` | live market only | `false` | Explicit opt-in for live market orders. |
 | `LIMIT_OFFSET_BPS` | yes | `10` | Limit price offset applied on top of the *selected execution reference price* (see below), not the Yahoo screener snapshot. |
@@ -103,7 +105,9 @@ directly as `market_data_type=…` and `realtime_entitlement=yes|no`.
 
 ## Portfolio sizing and existing account equity
 
-Paper/live rebalances size from the configured IBKR account's actual equity (cash + current portfolio value), read fresh before every rebalance, not from a static config number. Accounts whose base currency is not USD (e.g. an SGD-based account trading US stocks) report cash, net liquidation, and gross position totals in the base currency; POMA converts every base-denominated balance to USD via the account's IBKR `ExchangeRate` rows before sizing USD orders, records the conversion as an informational plan warning (e.g. `account balances converted from base currency SGD to USD at 1.3100 SGD/USD`), and refuses to trade (`BrokerUnavailable`) if the broker reports base-currency balances without a USD exchange rate to convert them. `MANAGED_CAP_MODE=broker_total` (the default) uses that full broker equity. `MANAGED_CAP_MODE=min_of_broker_total_and_cap` instead uses `min(broker equity, MANAGED_CAP_USD)`, which is useful when the IBKR account holds more than POMA should manage. `DRY_RUN_PORTFOLIO_VALUE_USD` is used only in `dry_run` mode, where there is no broker to read from.
+Paper/live rebalances size from the configured IBKR account's actual USD cash plus USD-denominated portfolio value, read fresh before every rebalance, not from a static config number. POMA does not convert non-USD cash, `BASE` totals, or non-USD position values into USD buying power; those rows are ignored for allocation gaps and trade recommendations, with a plan warning so the report explains the exclusion. If an account has non-USD cash that should fund US-stock rebalancing, convert it to USD outside POMA before the run. `MANAGED_CAP_MODE=broker_total` (the default) uses that USD-only broker equity. `MANAGED_CAP_MODE=min_of_broker_total_and_cap` instead uses `min(USD-only broker equity, MANAGED_CAP_USD)`, which is useful when the IBKR account holds more USD value than POMA should manage. `DRY_RUN_PORTFOLIO_VALUE_USD` is used only in `dry_run` mode, where there is no broker to read from.
+
+Transaction costs are operator estimates, not broker guarantees. Set `ESTIMATED_TRANSACTION_COST_BPS` and/or `ESTIMATED_TRANSACTION_COST_FIXED_USD` to account for commissions, spreads, platform fees, FX costs, taxes, or other known trade friction. After normal trade generation, POMA skips any trade whose notional minus estimated cost falls below `MIN_TRADE_NOTIONAL_USD`. The execution-time spread guard (`EXECUTION_MAX_SPREAD_BPS`) remains separate and can still block an otherwise cost-acceptable order if the live quote is too wide.
 
 `STRATEGY_ALLOCATIONS` splits whichever value is resolved above across named sleeves, and the total allocation must be `<= 100%`. Every allocated non-`cash` sleeve is executed by the engine, not just one:
 
@@ -113,7 +117,7 @@ STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.60,future_strategy=0.20,c
 
 That runs `rank_velocity_size_equal_weight` on 60% of the resolved portfolio value, runs `future_strategy` on 20%, and leaves 20% in passive cash. No sleeve separately subtracts a hidden cash buffer. If two sleeves both target the same ticker, POMA combines their targets into a single portfolio-level order rather than trading them independently.
 
-Existing stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
+Existing USD-denominated stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
 
 ## Required GitHub secret shapes
 

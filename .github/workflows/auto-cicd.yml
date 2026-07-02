@@ -217,7 +217,9 @@ jobs:
       trading_mode: paper
       data_provider: yahoo
       allow_live_trading: false
-      deploy_smoke: true
+      # PR deploys already build the exact image under test and run CI on the runner.
+      # Skip the containerized dry-run smoke on the e2-micro to keep the shared dev VM fast.
+      deploy_smoke: false
       image: ${{ needs.dev-build-image.outputs.image }}
     secrets: inherit
 

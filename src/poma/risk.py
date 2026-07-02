@@ -113,6 +113,35 @@ def enforce_order_limits(
     return warnings
 
 
+def filter_trades_by_estimated_transaction_cost(
+    trades: list[ProposedTrade],
+    *,
+    min_trade_notional_usd: float,
+    estimated_transaction_cost_bps: float,
+    estimated_transaction_cost_fixed_usd: float,
+) -> tuple[list[ProposedTrade], list[str]]:
+    """Drop trades whose estimated all-in cost overwhelms their rebalance value."""
+    if estimated_transaction_cost_bps <= 0 and estimated_transaction_cost_fixed_usd <= 0:
+        return trades, []
+
+    kept: list[ProposedTrade] = []
+    warnings: list[str] = []
+    for trade in trades:
+        estimated_cost = estimated_transaction_cost_fixed_usd + (
+            trade.notional * estimated_transaction_cost_bps / 10_000
+        )
+        benefit_after_cost = trade.notional - estimated_cost
+        if benefit_after_cost < min_trade_notional_usd:
+            warnings.append(
+                f"{trade.ticker}: estimated transaction cost ${estimated_cost:,.2f} "
+                f"leaves ${benefit_after_cost:,.2f} of rebalance benefit, below "
+                f"MIN_TRADE_NOTIONAL_USD=${min_trade_notional_usd:,.2f}; skipping trade"
+            )
+            continue
+        kept.append(trade)
+    return kept, warnings
+
+
 def enforce_buying_power(trades: list[ProposedTrade], available_cash_usd: float) -> list[str]:
     """Block execution when planned net buys would exceed the account's available cash.
 

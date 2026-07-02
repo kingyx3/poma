@@ -39,7 +39,7 @@ Important stages:
 | `gateway-log-error` | recent logs contain a fatal Gateway or IBC error. |
 | `gateway-running-no-login-progress-timeout` | Gateway stayed alive but did not show login, 2FA, or API progress before the grace deadline. |
 | `login-reached-2fa-pending` | Gateway reached broker authentication. Approve the prompt. |
-| `api-socket-open` | port `7497` is listening; after two stable socket polls, the workflow proceeds to the real API handshake. |
+| `api-socket-open` | port `7497` is listening; after two stable VM-local socket polls, the workflow proceeds to the real API handshake. |
 
 ## Manual checks
 
@@ -56,4 +56,4 @@ The full diagnosis includes redacted config, launcher settings, process state, l
 
 ## Transient socket and service restarts
 
-IB Gateway can briefly open `127.0.0.1:7497` before the authenticated API session is ready. The workflow now requires two consecutive successful socket polls before it runs `poma ibkr-check`, then captures the redacted `ibkr-check` tail if the real `ib_insync` handshake fails. If `ibgateway.service` stops after a transient socket, the workflow records a readiness snapshot and allows the systemd restart loop to recover within the bounded readiness deadline instead of failing immediately.
+IB Gateway can briefly open `127.0.0.1:7497` before the authenticated API session is ready. The workflow now requires two consecutive successful socket polls on the VM before it runs `poma ibkr-check`, then captures the redacted `ibkr-check` tail if the real `ib_insync` handshake fails. Running the poll loop on the VM avoids repeated IAP SSH sessions from GitHub Actions. If no login/API progress appears before the grace deadline, the VM-local loop runs `poma-diagnose-ibgateway startup-check` and fails with the same compact startup diagnosis.
