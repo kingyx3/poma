@@ -135,6 +135,35 @@ def test_gateway_log_error_is_never_fail_fast() -> None:
     assert result.action == "continue"
 
 
+def test_startup_check_keeps_waiting_when_login_progress_exists(monkeypatch) -> None:
+    module = load_diagnostics_module()
+    classification = module.StartupClassification(
+        "login-reached-awaiting-auth",
+        "continue",
+        "Gateway reached login/authentication, but API port 7497 is still closed.",
+    )
+    monkeypatch.setattr(module, "print_startup", lambda log_lines: classification)
+
+    result = module.startup_check(log_lines=80, elapsed_seconds=182, fail_no_progress_after=180)
+
+    assert result == 1
+
+
+def test_startup_check_fails_after_grace_when_no_login_progress(monkeypatch) -> None:
+    module = load_diagnostics_module()
+    classification = module.StartupClassification(
+        "gateway-running-no-api-socket",
+        "continue",
+        "Gateway support processes are running, but API port 7497 has not opened.",
+    )
+    monkeypatch.setattr(module, "print_startup", lambda log_lines: classification)
+    monkeypatch.setattr(module, "print_visible_startup_failure", lambda *args, **kwargs: None)
+
+    result = module.startup_check(log_lines=80, elapsed_seconds=182, fail_no_progress_after=180)
+
+    assert result == 2
+
+
 def test_classifies_open_api_socket_as_ready_for_real_handshake() -> None:
     result = classify(api_socket_open=True, has_xvfb=False, has_java=False)
 

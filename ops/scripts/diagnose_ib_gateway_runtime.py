@@ -3,13 +3,24 @@ from __future__ import annotations
 
 import argparse
 import os
-import pwd
 import re
 import shutil
 import stat
 import subprocess
 from pathlib import Path
 from typing import NamedTuple
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - exercised only by Windows-local tests
+    class _PwdUnavailable:
+        def getpwuid(self, uid: int):
+            raise RuntimeError("pwd module is unavailable on this platform")
+
+        def getpwnam(self, name: str):
+            raise RuntimeError("pwd module is unavailable on this platform")
+
+    pwd = _PwdUnavailable()
 
 APP_USER = "poma"
 IBC_CONFIG = Path("/home/poma/ibc/config.ini")
@@ -25,6 +36,7 @@ PORTS = ("7497", "4001", "4002", "5900")
 SENSITIVE_KEYS = {"IbLoginId", "IbPassword", "TWSUSERID", "TWSPASSWORD"}
 _STARTUP_GRACE_STAGES = frozenset({"service-active-no-process"})
 _STARTUP_LOG_NOISY_STAGES = frozenset({"gateway-log-error"})
+_STARTUP_LOGIN_PROGRESS_STAGES = frozenset({"login-reached-2fa-pending", "login-reached-awaiting-auth"})
 PROCESS_RE = re.compile(r"ibgateway|gatewaystart|poma-ibc-gateway-engine|ibc|Xvfb|fluxbox|x11vnc|java", re.I)
 TWO_FA_HINTS = re.compile(r"second factor|2fa|two-factor|mobile app|approve", re.I)
 LOGIN_STAGE_HINTS = re.compile(r"login|authenticat|credentials|username|password", re.I)
@@ -256,13 +268,13 @@ def startup_check(log_lines: int, elapsed_seconds: int, fail_no_progress_after: 
     classification = print_startup(log_lines)
     if classification.action == "ready":
         return 0
-    if elapsed_seconds >= fail_no_progress_after:
-        message = "Startup progress deadline exceeded before API readiness; failing fast so full diagnostics are collected."
-        print(message)
-        print_visible_startup_failure(classification, log_lines, message)
-        return 2
     if classification.action == "fail":
         print_visible_startup_failure(classification, log_lines, "Startup classifier marked this state as non-recoverable.")
+        return 2
+    if elapsed_seconds >= fail_no_progress_after and classification.stage not in _STARTUP_LOGIN_PROGRESS_STAGES:
+        message = "Startup progress deadline exceeded without login/API progress; failing fast so full diagnostics are collected."
+        print(message)
+        print_visible_startup_failure(classification, log_lines, message)
         return 2
     return 1
 
