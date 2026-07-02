@@ -20,6 +20,10 @@ FAILED_SENTINEL="$${READY_DIR}/vm-startup-failed"
 
 export DEBIAN_FRONTEND=noninteractive
 
+log_phase() {
+  echo "POMA STARTUP phase=$${1}"
+}
+
 mkdir -p "$${READY_DIR}"
 record_startup_failure() {
   status="$${?}"
@@ -32,9 +36,22 @@ trap record_startup_failure EXIT
 
 rm -f "$${READY_SENTINEL}" "$${FAILED_SENTINEL}"
 
+# A recreated or reset VM can inherit an already-installed crontab from the persistent boot disk
+# before the new app bundle is installed. Stop cron and remove stale schedules first so old
+# monitor/reconcile containers cannot compete with apt, Docker startup, or the deploy upload on
+# the 1 GB e2-micro.
+log_phase "quiesce-cron"
+systemctl stop cron || true
+crontab -u ubuntu -r || true
+if id "$${APP_USER}" >/dev/null 2>&1; then
+  crontab -u "$${APP_USER}" -r || true
+fi
+pkill -f 'docker compose.*poma' || true
+
 # Ubuntu cloud images already reserve uid/gid 1000 for the default ubuntu identity.
 # Keep the numeric app identity aligned with the prebuilt container without renaming
 # platform users/groups that the guest agent may still expect.
+log_phase "user"
 if ! getent group "$${APP_USER}" >/dev/null 2>&1; then
   if getent group "$${APP_GID}" >/dev/null 2>&1; then
     groupadd --non-unique --gid "$${APP_GID}" "$${APP_USER}"
@@ -54,6 +71,10 @@ if [ "$(id -u "$${APP_USER}")" != "$${APP_UID}" ] || [ "$(id -g "$${APP_USER}")"
   exit 1
 fi
 
+# Remove any app-user crontab that may have been created after the earlier pre-user cleanup.
+crontab -u "$${APP_USER}" -r || true
+
+log_phase "runtime-dirs"
 mkdir -p \
   "$${APP_DIR}" \
   "$${APP_DIR}/reports" \
@@ -65,6 +86,7 @@ chown -R "$${APP_USER}:$${APP_USER}" "$${APP_DIR}"
 # The 1 GB e2-micro has no memory headroom for IB Gateway's JVM (~850 MB) plus Docker image builds
 # and the pandas app. OOM kills were wedging the VM (dead SSH, not recoverable by a reboot). Add a
 # 2 GB swap file so memory pressure pages to disk instead of killing the box.
+log_phase "swap"
 if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
   fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
   chmod 600 /swapfile
@@ -73,14 +95,24 @@ if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
 fi
 
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates cron curl python3
+log_phase "apt"
+if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1 || \
+  ! command -v docker >/dev/null 2>&1 || ! command -v cron >/dev/null 2>&1; then
+  log_phase "apt-update"
+  apt-get update
+  log_phase "apt-install"
+  apt-get install -y --no-install-recommends ca-certificates cron curl python3
+else
+  echo "POMA STARTUP apt packages already present; skipping apt-get update/install."
+fi
 
+log_phase "docker"
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 fi
 rm -rf /var/lib/apt/lists/*
 
+log_phase "groups"
 usermod -aG docker "$${APP_USER}"
 # $${APP_USER} is intentionally created non-unique on the same uid/gid as the cloud image's
 # default "ubuntu" account (see the useradd block above). Tools that resolve a uid back to a
@@ -92,6 +124,7 @@ if id -u ubuntu >/dev/null 2>&1 && [ "$${APP_USER}" != "ubuntu" ]; then
   usermod -aG docker ubuntu
 fi
 
+log_phase "services"
 systemctl enable --now docker
 # Use enable+restart (not enable --now) for cron: cron may already be running from an earlier
 # invocation of this script on an already-booted host (e.g. a manual startup-script re-run), and
@@ -102,5 +135,6 @@ systemctl enable cron
 systemctl restart cron
 systemctl is-active --quiet docker
 systemctl is-active --quiet cron
+log_phase "ready"
 printf '%s %s\n' "$${STARTUP_REVISION}" "$(cat /proc/sys/kernel/random/boot_id)" >"$${READY_SENTINEL}"
 chmod 0644 "$${READY_SENTINEL}"
