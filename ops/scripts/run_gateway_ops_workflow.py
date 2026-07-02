@@ -179,6 +179,22 @@ def main() -> int:
         )
         return timed("Gateway startup progress check", lambda: remote(command, timeout=120))
 
+    def ibkr_check_command(mode: str, required: bool) -> str:
+        # Run the readiness check against the deployed VM image (docker-compose.vm.yml,
+        # host-networked) so it reuses the pulled image instead of building from source on
+        # the e2-micro and so 127.0.0.1:7497 reaches the host Gateway.
+        return (
+            "if ! test -f /opt/poma/docker-compose.vm.yml; then "
+            + (
+                "echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2; exit 1; "
+                if required
+                else "echo 'POMA app not deployed at /opt/poma; skipping.'; exit 0; "
+            )
+            + "fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm -e TRADING_MODE="
+            + mode
+            + " -e DATA_PROVIDER=fixture poma ibkr-check'"
+        )
+
     def api_ready(mode: str, required: bool) -> int:
         timeout_seconds = int(twofa_timeout)
         poll_interval_seconds = int(poll_seconds)
@@ -206,17 +222,7 @@ def main() -> int:
             if poll == 0:
                 stable += 1
                 if stable >= 2:
-                    # Run the readiness what-if against the deployed VM image (docker-compose.vm.yml,
-                    # host-networked) so it reuses the pulled image instead of building from source on
-                    # the e2-micro and so 127.0.0.1:7497 reaches the host Gateway.
-                    check = (
-                        "if ! test -f /opt/poma/docker-compose.vm.yml; then "
-                        + ("echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2; exit 1; " if required else "echo 'POMA app not deployed at /opt/poma; skipping.'; exit 0; ")
-                        + "fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm -e TRADING_MODE="
-                        + mode
-                        + " -e DATA_PROVIDER=fixture poma ibkr-check'"
-                    )
-                    check_status = remote(check, timeout=240)
+                    check_status = remote(ibkr_check_command(mode, required), timeout=240)
                     if check_status == 0:
                         print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
                         return 0
@@ -336,6 +342,15 @@ def main() -> int:
             return 1
         remote("sudo systemctl restart ibgateway || true", timeout=180)
         return api_ready("paper", required=False)
+    if action == "verify-market-data":
+        # Read-only market data entitlement verification: no repair, no restart. Runs poma
+        # ibkr-check against the *currently running* Gateway session, so a green run proves the
+        # account is genuinely serving entitled quotes (live during market hours, frozen after
+        # hours; REQUIRE_LIVE_EXECUTION_QUOTES in the deployed .env decides how strict that is).
+        return timed(
+            "Market data entitlement check (poma ibkr-check)",
+            lambda: remote(ibkr_check_command("paper", required=True), timeout=240),
+        )
 
     if action not in {"configure-paper", "configure-live"}:
         print(f"unknown action: {action}", file=sys.stderr)

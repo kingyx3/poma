@@ -57,6 +57,19 @@ def test_gateway_readiness_uses_pulled_vm_image_and_bounded_restarts() -> None:
     assert "'Read-Only API' disabled" in runner
 
 
+def test_gateway_ops_supports_read_only_market_data_verification() -> None:
+    workflow = _workflow()
+    runner = _runner()
+
+    assert "verify-market-data" in workflow
+    verify_block = runner.split('if action == "verify-market-data":', 1)[1].split("if action not in", 1)[0]
+    # The entitlement check must observe the running Gateway session as-is: a restart or
+    # repair would force a fresh login and hide what the deployed session actually serves.
+    assert "ibkr_check_command" in verify_block
+    assert "systemctl restart" not in verify_block
+    assert "repair_runtime()" not in verify_block
+
+
 def test_gateway_runtime_repair_installs_helpers_idempotently() -> None:
     runner = _runner()
 

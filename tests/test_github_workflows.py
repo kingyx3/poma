@@ -247,3 +247,26 @@ def test_adr_0003_market_data_readiness_check_records_the_decision() -> None:
     assert "src/poma/health.py" in text
     assert "10089" in text
     assert "ALLOW_DELAYED_EXECUTION_QUOTES=true" in text
+
+
+def test_adr_0004_market_data_entitlement_probe_ladder_records_the_decision() -> None:
+    adr = REPO_ROOT / "docs/adr/0004-market-data-entitlement-probe-ladder.md"
+    text = adr.read_text(encoding="utf-8")
+    assert "Status: Accepted" in text
+    assert "frozen" in text
+    assert "REQUIRE_LIVE_EXECUTION_QUOTES" in text
+    assert "MARKET_DATA_PROBE_WAIT_SECONDS" in text
+    assert "verify-market-data" in text
+    assert "transmit=True" in text
+    assert "is_market_open" in text
+
+
+def test_deploy_workflow_requires_live_quotes_proof_for_non_live_only() -> None:
+    workflow = _text(DEPLOY_WORKFLOW)
+    block = workflow.split('set_default ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE "false"', 1)[1].split(
+        'set_default MARKET_DATA_PROBE_WAIT_SECONDS "5"', 1
+    )[0]
+
+    assert 'if [ "${TRADING_MODE}" = "live" ]; then' in block
+    assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "false"' in block
+    assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "true"' in block

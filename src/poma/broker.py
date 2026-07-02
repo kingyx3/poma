@@ -24,17 +24,33 @@ from poma.models import (
 from poma.order_lifecycle import IDEMPOTENT_REPLAY_STATUS, ORDER_REF_PREFIX
 
 # ib_insync reports market data type as an int on the ticker/reqMarketDataType callback:
-# 1=live, 2=frozen, 3=delayed, 4=delayed-frozen. Only live/frozen reflect real-time prices.
+# 1=live, 2=frozen, 3=delayed, 4=delayed-frozen. Only live/frozen reflect real-time prices:
+# frozen serves the last real-time quote when the market is closed and requires the same
+# entitlement as live, so a frozen tick proves real-time entitlement outside market hours.
 MARKET_DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed_frozen"}
 DELAYED_MARKET_DATA_TYPES = {"delayed", "delayed_frozen"}
 LIVE_MARKET_DATA_TYPE = 1
+FROZEN_MARKET_DATA_TYPE = 2
 DELAYED_MARKET_DATA_TYPE = 3
+DELAYED_FROZEN_MARKET_DATA_TYPE = 4
+REALTIME_MARKET_DATA_TYPE_CODES = {LIVE_MARKET_DATA_TYPE, FROZEN_MARKET_DATA_TYPE}
+FROZEN_MARKET_DATA_TYPE_CODES = {FROZEN_MARKET_DATA_TYPE, DELAYED_FROZEN_MARKET_DATA_TYPE}
+DELAYED_MARKET_DATA_TYPE_CODES = {DELAYED_MARKET_DATA_TYPE, DELAYED_FROZEN_MARKET_DATA_TYPE}
+# The readiness probe walks every market data type so an off-hours check is still conclusive:
+# live first, then frozen (after-hours real-time evidence), then the delayed variants. The
+# ladder is probe-only; execution pricing never reads frozen data.
+PROBE_MARKET_DATA_TYPE_LADDER = (
+    LIVE_MARKET_DATA_TYPE,
+    FROZEN_MARKET_DATA_TYPE,
+    DELAYED_MARKET_DATA_TYPE,
+    DELAYED_FROZEN_MARKET_DATA_TYPE,
+)
 # Delayed-data subscriptions can take noticeably longer than live ones to start ticking,
 # especially right after a Gateway restart before market data farm connections have settled.
 # A too-short wait here reads identically to "no entitlement at all" (no tick, no error), so err
 # generous: this runs once per rebalance/probe, not per symbol.
 EXECUTION_QUOTE_WAIT_SECONDS = 5.0
-MARKET_DATA_PROBE_WAIT_SECONDS = 5.0
+DELAYED_PROBE_WAIT_MULTIPLIER = 2
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
@@ -69,6 +85,13 @@ class IbkrHealth:
     trading_permissions_message: str
     market_data_ok: bool
     market_data_message: str
+    # Which market data type actually ticked ("live"/"frozen"/"delayed"/"delayed_frozen"), or
+    # None when nothing ticked (or the probe was skipped). realtime is True only for live/frozen
+    # -- the direct answer to "does this session have real-time entitlement". A soft failure is
+    # an inconclusive probe (market closed, no tick, no broker error) that must not fail configure.
+    market_data_type: str | None = None
+    market_data_realtime: bool = False
+    market_data_soft_failure: bool = False
 
 
 @dataclass
@@ -156,39 +179,118 @@ def _retry_missing_quotes_as_delayed(ib: IB, market_data_by_ticker: dict[str, ob
     ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
 
 
-def _probe_market_data(ib: IB, settings: Settings) -> tuple[bool, str]:
+@dataclass(frozen=True)
+class _MarketDataProbe:
+    ok: bool
+    message: str
+    ticked_type: str | None
+    realtime: bool
+    soft_failure: bool
+
+
+def _probe_tick_evidence(market_data: object, data_type: int) -> bool:
+    """Whether this ladder step produced usable evidence of market data flowing.
+
+    A tick timestamp is always evidence. Frozen/delayed-frozen snapshots may populate prices
+    without a fresh timestamp (they serve the last quote of a closed session), so on those steps
+    a finite positive price field also counts -- probe-only, never used for execution pricing.
+    """
+    if isinstance(getattr(market_data, "time", None), datetime):
+        return True
+    if data_type not in FROZEN_MARKET_DATA_TYPE_CODES:
+        return False
+    return any(
+        _valid_price(getattr(market_data, price_field, None)) is not None
+        for price_field in ("bid", "ask", "last", "close")
+    )
+
+
+def _probe_is_market_open(settings: Settings) -> bool | None:
+    """Best-effort market-hours lookup; a calendar failure must never fail a gateway check."""
+    from poma.market_calendar import is_market_open
+
+    try:
+        return is_market_open(settings.market_calendar)
+    except Exception:  # noqa: BLE001 - treat an unreadable calendar as "unknown", like closed
+        return None
+
+
+def _probe_market_data(ib: IB, settings: Settings) -> _MarketDataProbe:
     """Confirm the session actually receives a market data tick, not just an open socket.
 
     A Gateway session can be fully authenticated and trade-enabled while still returning no
     ticks at all -- e.g. a paper account whose market data sharing was never fully enabled, or
-    an exchange data agreement that was never accepted for this account. Checking this at
-    Gateway-configure time turns a silent per-order "missing quote timestamp" block during
-    every future rebalance into a loud, actionable readiness failure instead.
+    an exchange data agreement that was never accepted for this account. Walking the full
+    market data type ladder (live, frozen, delayed, delayed-frozen) makes the verdict conclusive
+    even outside market hours: a frozen tick proves real-time entitlement off-hours, a
+    delayed-only tick proves the real-time entitlement is missing.
     """
     contract = Stock(MARKET_DATA_PROBE_SYMBOL, "SMART", "USD")
+    symbol = MARKET_DATA_PROBE_SYMBOL
+    wait_seconds = settings.market_data_probe_wait_seconds
+    ticked_code: int | None = None
     with _collect_market_data_errors(ib) as errors:
-        market_data_by_ticker: dict[str, object] = {
-            MARKET_DATA_PROBE_SYMBOL: ib.reqMktData(contract, "", False, False)
-        }
-        ib.sleep(MARKET_DATA_PROBE_WAIT_SECONDS)
-        _retry_missing_quotes_as_delayed(
-            ib, market_data_by_ticker, allow_delayed=settings.allow_delayed_execution_quotes
+        for data_type in PROBE_MARKET_DATA_TYPE_LADDER:
+            ib.reqMarketDataType(data_type)
+            market_data = ib.reqMktData(contract, "", False, False)
+            step_wait = wait_seconds * (
+                DELAYED_PROBE_WAIT_MULTIPLIER if data_type in DELAYED_MARKET_DATA_TYPE_CODES else 1
+            )
+            ib.sleep(step_wait)
+            ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
+            if _probe_tick_evidence(market_data, data_type):
+                ticked_code = data_type
+                break
+        ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
+
+    if ticked_code is not None:
+        type_name = MARKET_DATA_TYPE_NAMES[ticked_code]
+        if ticked_code in REALTIME_MARKET_DATA_TYPE_CODES:
+            suffix = "" if ticked_code == LIVE_MARKET_DATA_TYPE else "; market closed, last real-time quote"
+            return _MarketDataProbe(
+                ok=True,
+                message=f"received {type_name} tick for {symbol} (real-time entitlement confirmed{suffix})",
+                ticked_type=type_name,
+                realtime=True,
+                soft_failure=False,
+            )
+        detail = "; ".join(errors.per_symbol.get(symbol, []) or errors.general)
+        reason = f"; ibkr said: {detail}" if detail else ""
+        message = (
+            f"received {type_name} tick for {symbol} but real-time entitlement MISSING "
+            f"(best available: {type_name}){reason}"
         )
-        market_data = market_data_by_ticker[MARKET_DATA_PROBE_SYMBOL]
-        ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
+        if settings.require_live_execution_quotes:
+            message += "; REQUIRE_LIVE_EXECUTION_QUOTES=true demands a live/frozen tick"
+            return _MarketDataProbe(False, message, type_name, False, False)
+        if not settings.allow_delayed_execution_quotes:
+            message += "; ALLOW_DELAYED_EXECUTION_QUOTES=false so execution would block on every order"
+            return _MarketDataProbe(False, message, type_name, False, False)
+        return _MarketDataProbe(True, message, type_name, False, False)
 
-    tick_time = getattr(market_data, "time", None)
-    if isinstance(tick_time, datetime):
-        market_data_type = MARKET_DATA_TYPE_NAMES.get(getattr(market_data, "marketDataType", None), "unknown")
-        return True, f"received {market_data_type} tick for {MARKET_DATA_PROBE_SYMBOL}"
-
-    detail = "; ".join(errors.per_symbol.get(MARKET_DATA_PROBE_SYMBOL, []) or errors.general)
-    reason = f"; ibkr said: {detail}" if detail else "; IBKR reported no error, request may still be warming up"
-    return False, (
-        f"no market data tick received for {MARKET_DATA_PROBE_SYMBOL} after "
-        f"{MARKET_DATA_PROBE_WAIT_SECONDS:.0f}s (ALLOW_DELAYED_EXECUTION_QUOTES="
-        f"{str(settings.allow_delayed_execution_quotes).lower()}){reason}"
-    )
+    detail = "; ".join(errors.per_symbol.get(symbol, []) or errors.general)
+    base = f"no market data tick received for {symbol} at any market data type (live/frozen/delayed/delayed_frozen)"
+    if detail:
+        return _MarketDataProbe(False, f"{base}; ibkr said: {detail}", None, False, False)
+    market_open = _probe_is_market_open(settings)
+    if market_open:
+        return _MarketDataProbe(
+            False,
+            f"{base}; US market is open so silence is conclusive -- entitlement or market-data-farm failure",
+            None,
+            False,
+            False,
+        )
+    message = f"market closed -- probe inconclusive ({base})"
+    if settings.require_live_execution_quotes:
+        return _MarketDataProbe(
+            False,
+            message + "; REQUIRE_LIVE_EXECUTION_QUOTES=true demands proof of a live/frozen tick",
+            None,
+            False,
+            False,
+        )
+    return _MarketDataProbe(False, message, None, False, True)
 
 
 def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
@@ -203,11 +305,14 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
         stock_positions = sum(1 for item in ib.portfolio() if item.contract.secType == "STK")
         trading_permissions_ok, trading_permissions_message = _probe_trading_permissions(ib, settings)
         if settings.execution_price_source == ExecutionPriceSource.IBKR:
-            market_data_ok, market_data_message = _probe_market_data(ib, settings)
+            probe = _probe_market_data(ib, settings)
         else:
-            market_data_ok, market_data_message = (
-                True,
-                f"skipped (EXECUTION_PRICE_SOURCE={settings.execution_price_source.value})",
+            probe = _MarketDataProbe(
+                ok=True,
+                message=f"skipped (EXECUTION_PRICE_SOURCE={settings.execution_price_source.value})",
+                ticked_type=None,
+                realtime=False,
+                soft_failure=False,
             )
         return IbkrHealth(
             connected=ib.isConnected(),
@@ -216,8 +321,11 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
             stock_positions=stock_positions,
             trading_permissions_ok=trading_permissions_ok,
             trading_permissions_message=trading_permissions_message,
-            market_data_ok=market_data_ok,
-            market_data_message=market_data_message,
+            market_data_ok=probe.ok,
+            market_data_message=probe.message,
+            market_data_type=probe.ticked_type,
+            market_data_realtime=probe.realtime,
+            market_data_soft_failure=probe.soft_failure,
         )
     finally:
         ib.disconnect()
@@ -843,7 +951,9 @@ def _probe_trading_permissions(ib: IB, settings: Settings) -> tuple[bool, str]:
     contract = Stock(TRADING_PERMISSION_PROBE_SYMBOL, "SMART", "USD")
     order = LimitOrder("BUY", 1, TRADING_PERMISSION_PROBE_LIMIT_PRICE)
     order.whatIf = True
-    order.transmit = False
+    # IBKR rejects what-if orders with transmit=False (Error 321 "What-If order should have
+    # transmit flag set to TRUE"); whatIf=True already guarantees nothing is ever executed.
+    order.transmit = True
     if settings.ibkr_account:
         order.account = settings.ibkr_account
     try:
