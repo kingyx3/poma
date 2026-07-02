@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,21 @@ def test_deploy_workflow_routes_paper_to_paper_account() -> None:
     assert 'case "${TRADING_MODE}" in' in workflow
     assert 'set_env IBKR_ACCOUNT "${IBKR_ACCOUNT_PAPER}"' in workflow
     assert "TRADING_MODE=live" in workflow
+
+
+def test_deploy_workflow_provides_every_env_example_key_for_strict_render() -> None:
+    """Deploy renders .env with render_env.py --strict-env, which requires every key in
+    .env.example to be present in the process environment. A key added to .env.example
+    without a matching set_env/set_default in the deploy workflow fails every deploy."""
+    env_example = _text(REPO_ROOT / ".env.example")
+    workflow = _text(DEPLOY_WORKFLOW)
+
+    keys = re.findall(r"^([A-Z][A-Z0-9_]*)=", env_example, flags=re.MULTILINE)
+    missing = [
+        key for key in keys if f"set_default {key} " not in workflow and f"set_env {key} " not in workflow
+    ]
+
+    assert missing == []
 
 
 def test_deploy_workflow_defaults_delayed_quotes_on_for_non_live_only() -> None:
