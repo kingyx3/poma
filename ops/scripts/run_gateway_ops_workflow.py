@@ -109,6 +109,7 @@ def main() -> int:
     no_progress_after = env("IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS", "180")
     max_trading_login_restarts = int(env("IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS", "1"))
     ibkr_check_timeout_seconds = int(env("IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS", "300"))
+    runtime_repair_timeout_seconds = int(env("IB_GATEWAY_RUNTIME_REPAIR_TIMEOUT_SECONDS", "780"))
     # --verbosity=error and --no-user-output-enabled silence gcloud's per-invocation chatter
     # ("Updating instance ssh metadata...", SSH key propagation waits, IAP NumPy warnings) that
     # otherwise repeats on every poll attempt; remote command output is unaffected (it comes from
@@ -130,6 +131,31 @@ def main() -> int:
 
     def remote(command: str, timeout: int = 180) -> int:
         return gcloud("compute", "ssh", vm_name, *ssh_common, "--command", command, timeout=timeout)
+
+    def record_failure(stage: str, reason: str, next_action: str) -> None:
+        summary = (
+            "===== Gateway failure summary =====\n"
+            f"GATEWAY_FAILURE_STAGE={stage}\n"
+            f"GATEWAY_FAILURE_REASON={reason}\n"
+            f"GATEWAY_NEXT_ACTION={next_action}"
+        )
+        print(summary, file=sys.stderr)
+        _emit_github_error("Gateway configure failed", f"{stage}: {reason} Next action: {next_action}")
+        _append_step_summary(
+            "\n".join(
+                [
+                    "## Gateway configure failure",
+                    "",
+                    f"- **Environment:** `{deploy_environment}`",
+                    f"- **Action:** `{action}`",
+                    f"- **Stage:** `{stage}`",
+                    f"- **Reason:** {reason}",
+                    f"- **Next action:** {next_action}",
+                    "",
+                    "Full redacted diagnostics remain in the workflow log groups.",
+                ]
+            )
+        )
 
     def repair_runtime() -> int:
         check = (
@@ -159,43 +185,50 @@ def main() -> int:
         print(f"TIMING Upload gateway helper bundle: status={upload}")
         if upload != 0:
             return upload
+        timed(
+            "Gateway runtime preflight",
+            lambda: remote(
+                "if test -x /opt/ibgateway/ibgateway || find /opt/ibgateway -type d -name jars -print -quit 2>/dev/null | grep -q .; then "
+                "echo 'Gateway runtime artifacts already present; helper/service repair should be quick.'; "
+                "else echo 'Fresh Gateway runtime install path; first install on e2-micro may take several minutes.'; fi",
+                timeout=60,
+            ),
+        )
         install = (
             f"sudo tar -xzf /tmp/{HELPER_ARCHIVE_NAME} -C /tmp && "
             f"sudo rm -f /tmp/{HELPER_ARCHIVE_NAME} && "
-            "sudo python3 /tmp/repair_ib_gateway_runtime.py && "
-            "sudo python3 /tmp/install_ibc_config_helper.py && "
             "sudo install -m 755 /tmp/diagnose_ib_gateway_runtime.py /usr/local/bin/poma-diagnose-ibgateway && "
             "sudo install -m 755 /tmp/wait_ib_gateway_2fa.py /usr/local/bin/poma-wait-ibgateway-2fa && "
+            "sudo python3 /tmp/repair_ib_gateway_runtime.py && "
+            "sudo python3 /tmp/install_ibc_config_helper.py && "
             "sudo sh /tmp/ensure_ibgateway_service.sh && "
             "sudo install -d -m 755 /var/lib/poma && "
             f"printf '%s\n' '{revision}' | sudo tee '{sentinel}' >/dev/null"
         )
-        return timed("Runtime repair/install", lambda: remote(install, timeout=600))
-
-    def record_failure(stage: str, reason: str, next_action: str) -> None:
-        summary = (
-            "===== Gateway failure summary =====\n"
-            f"GATEWAY_FAILURE_STAGE={stage}\n"
-            f"GATEWAY_FAILURE_REASON={reason}\n"
-            f"GATEWAY_NEXT_ACTION={next_action}"
+        status = timed("Runtime repair/install", lambda: remote(install, timeout=runtime_repair_timeout_seconds))
+        if status == 0:
+            return 0
+        record_failure(
+            "runtime-repair",
+            f"Gateway runtime repair/install failed or exceeded {runtime_repair_timeout_seconds}s.",
+            "Inspect the runtime diagnostics below. On a freshly replaced e2-micro, rerun after the first install settles only if diagnostics show the installer completed late.",
         )
-        print(summary, file=sys.stderr)
-        _emit_github_error("Gateway configure failed", f"{stage}: {reason} Next action: {next_action}")
-        _append_step_summary(
-            "\n".join(
-                [
-                    "## Gateway configure failure",
-                    "",
-                    f"- **Environment:** `{deploy_environment}`",
-                    f"- **Action:** `{action}`",
-                    f"- **Stage:** `{stage}`",
-                    f"- **Reason:** {reason}",
-                    f"- **Next action:** {next_action}",
-                    "",
-                    "Full redacted diagnostics remain in the `Collect post-failure diagnostics` log group.",
-                ]
-            )
+        timed(
+            "Collect runtime repair diagnostics",
+            lambda: remote(
+                "echo '===== runtime processes ====='; "
+                "ps -eo pid,ppid,stat,etimes,comm,args | grep -E 'apt|dpkg|ibgateway|install4j|java|unzip|tar|python3' | grep -v grep || true; "
+                "echo '===== disk ====='; df -h / /opt /tmp 2>/dev/null || df -h; "
+                "echo '===== gateway artifact probe ====='; "
+                "find /opt/ibgateway -maxdepth 4 \\( -name ibgateway -o -name jars \\) -print 2>/dev/null | head -50 || true; "
+                "echo '===== ibc artifact probe ====='; "
+                "find /opt/ibc -maxdepth 2 -type f \\( -name gatewaystart.sh -o -name config.ini \\) -print 2>/dev/null || true; "
+                "if command -v poma-diagnose-ibgateway >/dev/null 2>&1; then sudo poma-diagnose-ibgateway diagnose --log-lines 80 || true; "
+                "elif test -f /tmp/diagnose_ib_gateway_runtime.py; then sudo python3 /tmp/diagnose_ib_gateway_runtime.py diagnose --log-lines 80 || true; fi",
+                timeout=240,
+            ),
         )
+        return status
 
     def diagnose(stage: str, reason: str, next_action: str) -> None:
         record_failure(stage, reason, next_action)

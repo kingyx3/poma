@@ -25,6 +25,7 @@ def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 180" in workflow
     assert "IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS: 1" in workflow
     assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS: 300" in workflow
+    assert "IB_GATEWAY_RUNTIME_REPAIR_TIMEOUT_SECONDS: 780" in workflow
     assert "Resolve broker login secrets" in workflow
 
 
@@ -95,13 +96,18 @@ def test_gateway_runtime_repair_installs_helpers_idempotently() -> None:
         "tarfile.open",
         "Upload gateway helper bundle",
         "timeout=240",
+        "Gateway runtime preflight",
         "sudo tar -xzf /tmp/{HELPER_ARCHIVE_NAME} -C /tmp",
+        "sudo install -m 755 /tmp/diagnose_ib_gateway_runtime.py",
         "/var/lib/poma/ib-gateway-runtime-revision",
         "poma-diagnose-ibgateway",
         "poma-wait-ibgateway-2fa",
         "Gateway runtime helpers already current",
         "Gateway runtime sentinel missing or stale; fail-open",
         "systemctl cat ibgateway",
+        "runtime_repair_timeout_seconds",
+        "runtime-repair",
+        "Collect runtime repair diagnostics",
     ):
         assert snippet in runner
 
@@ -178,11 +184,12 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
     workflow = _workflow()
     runner = _runner()
 
-    assert "timeout-minutes: 20" in workflow
+    assert "timeout-minutes: 25" in workflow
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 180" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS" in workflow
     assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS" in workflow
+    assert "IB_GATEWAY_RUNTIME_REPAIR_TIMEOUT_SECONDS" in workflow
     assert "ibkr_check_timeout_seconds" in runner
-    assert "timeout=600" in runner
+    assert "timeout=runtime_repair_timeout_seconds" in runner

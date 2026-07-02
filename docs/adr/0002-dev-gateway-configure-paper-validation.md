@@ -23,7 +23,8 @@ Pull-request `dev-configure-gateway` uses `action: configure-paper`.
 
 The dev PR check validates the full paper Gateway path:
 
-1. Repairs and installs the Gateway runtime helpers when the runtime sentinel is stale.
+1. Repairs and installs the Gateway runtime helpers when the runtime sentinel is stale, with
+   diagnostic helpers installed before the bounded first-time runtime repair starts.
 2. Writes dev IBC paper credentials from GitHub Environment Secrets.
 3. Truncates stale Gateway/IBC logs used for login-stage classification.
 4. Forces `ibgateway.service` through a fresh stop/start path so the new config is loaded.
