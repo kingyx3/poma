@@ -43,8 +43,17 @@ def _append_step_summary(markdown: str) -> None:
         handle.write("\n")
 
 
+def _echo_command(command: list[str]) -> str:
+    """Compact command echo: the fixed gcloud ssh boilerplate repeated on every poll buries the
+    lines that matter, so print only the part that varies (the target VM and remote command)."""
+    if command[:3] == ["gcloud", "compute", "ssh"] and "--command" in command:
+        remote_command = command[command.index("--command") + 1]
+        return f"+ [ssh {command[3]}] {remote_command}"
+    return "+ " + " ".join(command)
+
+
 def run(command: list[str], *, timeout: int = 180, input_text: str | None = None) -> int:
-    print("+", " ".join(command), flush=True)
+    print(_echo_command(command), flush=True)
     try:
         completed = subprocess.run(
             command,
@@ -86,7 +95,19 @@ def main() -> int:
     twofa_timeout = env("IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS", "360")
     poll_seconds = env("IB_GATEWAY_SOCKET_POLL_SECONDS", "5")
     no_progress_after = env("IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS", "200")
-    ssh_common = ["--zone", zone, "--tunnel-through-iap", "--ssh-key-expire-after=15m", "--quiet"]
+    # --verbosity=error and --no-user-output-enabled silence gcloud's per-invocation chatter
+    # ("Updating instance ssh metadata...", SSH key propagation waits, IAP NumPy warnings) that
+    # otherwise repeats on every poll attempt; remote command output is unaffected (it comes from
+    # the ssh subprocess, not gcloud's output framework), and real gcloud errors still print.
+    ssh_common = [
+        "--zone",
+        zone,
+        "--tunnel-through-iap",
+        "--ssh-key-expire-after=15m",
+        "--quiet",
+        "--verbosity=error",
+        "--no-user-output-enabled",
+    ]
     sentinel = "/var/lib/poma/ib-gateway-runtime-revision"
     revision = helper_revision()
 
