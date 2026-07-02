@@ -5,7 +5,10 @@ STARTUP_SCRIPT = REPO_ROOT / "infra/gcp-free-tier/startup.sh"
 
 # The startup script is intentionally minimal host prep so cloud-init finishes quickly.
 REQUIRED_STARTUP_SNIPPETS = (
-    "apt-get install -y --no-install-recommends ca-certificates cron curl python3",
+    "systemctl stop cron || true",
+    "missing_packages=()",
+    "apt-get install -y --no-install-recommends \"$${missing_packages[@]}\"",
+    "Required host packages already present; skipping apt-get update/install.",
     "curl -fsSL https://get.docker.com | sh",
     "rm -rf /var/lib/apt/lists/*",
     'READY_SENTINEL="$${READY_DIR}/vm-ready"',
@@ -63,7 +66,7 @@ def test_gcp_startup_script_is_minimal_host_bootstrap() -> None:
     for snippet in REQUIRED_STARTUP_SNIPPETS:
         assert snippet in script, snippet
 
-    assert script.index('useradd --uid "$${APP_UID}"') < script.index("apt-get update")
+    assert script.index('useradd --uid "$${APP_UID}"') < script.index("missing_packages=()")
 
 
 def test_gcp_startup_script_does_not_install_ib_gateway() -> None:

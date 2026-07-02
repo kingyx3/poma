@@ -433,7 +433,7 @@ jobs:
 
       - name: Upload and install on VM
         if: ${{ inputs.deployment_action == 'deploy' && inputs.terraform_action == 'apply' && inputs.deploy_app }}
-        timeout-minutes: 35
+        timeout-minutes: 40
         run: |
           set -euo pipefail
 
@@ -497,11 +497,12 @@ jobs:
           # cloud-init's boot-finished marker by itself: the Google metadata startup script can
           # still be running, and deploy needs the concrete POMA host contract.
           wait_for_vm_ready() {
-            local deadline=$((SECONDS + 420)) attempt=0 status=1
+            local wait_seconds="$1" wait_label="$2"
+            local deadline=$((SECONDS + wait_seconds)) attempt=0 status=1 saw_remote=0
             while true; do
               set +e
               run_with_timeout 45s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron"
+                --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; if test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron; then exit 0; fi; if systemctl is-active --quiet google-startup-scripts.service; then echo \"startup_status=running\" >&2; exit 43; fi; echo \"startup_status=not-ready\" >&2; exit 44"
               status="$?"
               set -e
               if [ "${status}" -eq 0 ]; then
@@ -510,11 +511,17 @@ jobs:
               if [ "${status}" -eq 42 ]; then
                 echo "::error::VM startup script failed before writing the readiness sentinel."
                 print_vm_bootstrap_status
-                return 1
+                return 42
+              fi
+              if [ "${status}" -eq 43 ] || [ "${status}" -eq 44 ]; then
+                saw_remote=1
               fi
               if [ "${SECONDS}" -ge "${deadline}" ]; then
-                echo "VM ${instance_name} not reachable or startup revision ${startup_revision} not ready within 7m." >&2
+                echo "VM ${instance_name} not reachable or startup revision ${startup_revision} not ready within ${wait_label}." >&2
                 print_vm_bootstrap_status
+                if [ "${saw_remote}" -eq 1 ]; then
+                  return 2
+                fi
                 return 1
               fi
               attempt=$((attempt + 1))
@@ -529,12 +536,21 @@ jobs:
           # separately recreates the VM whenever startup.sh changes, so this only covers transient
           # or wedged states, not config drift.
           ensure_vm_ready() {
-            if wait_for_vm_ready; then
+            local status
+            set +e
+            wait_for_vm_ready 720 "12m"
+            status="$?"
+            set -e
+            if [ "${status}" -eq 0 ]; then
               return 0
+            fi
+            if [ "${status}" -eq 2 ] || [ "${status}" -eq 42 ]; then
+              echo "::error::VM is reachable but did not finish startup readiness; not resetting a still-bootstrapping host." >&2
+              return 1
             fi
             echo "Resetting ${instance_name} once and waiting for it to come back."
             run_with_timeout 3m gcloud compute instances reset "${instance_name}" --zone "${zone}" --quiet || true
-            wait_for_vm_ready
+            wait_for_vm_ready 720 "12m"
           }
 
           retry_with_backoff() {
@@ -554,6 +570,16 @@ jobs:
           }
 
           timed "VM readiness" ensure_vm_ready
+
+          timed "Pause app cron before deploy" run_with_timeout 45s \
+            gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
+              set +e
+              sudo crontab -r -u poma 2>/dev/null || true
+              sudo systemctl stop cron || true
+              if [ -f /opt/poma/docker-compose.vm.yml ] && [ -f /opt/poma/.compose.env ]; then
+                cd /opt/poma && sudo -u poma docker compose --env-file .compose.env -f docker-compose.vm.yml down --remove-orphans || true
+              fi
+            '
 
           timed "Deployment bundle upload" retry_with_backoff 4m "Deployment bundle upload" 2 \
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
@@ -634,6 +660,7 @@ jobs:
             # it out of the deploy keeps this step to app concerns only (image pull + optional smoke + cron).
             remote_timed "Docker pull and optional smoke" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} RUN_DOCKER_PULL_DIAGNOSTICS=${{ inputs.deploy_smoke }} RUN_DOCKER_PRUNE=${{ inputs.deploy_smoke }} POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh
             remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
+            remote_timed "Restart cron scheduler" sudo systemctl restart cron
             echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
 
