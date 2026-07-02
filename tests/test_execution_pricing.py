@@ -140,7 +140,7 @@ def test_wide_spread_blocks() -> None:
 
 
 def test_delayed_quote_blocks_unless_allowed() -> None:
-    settings = make_settings()
+    settings = make_settings(ALLOW_DELAYED_EXECUTION_QUOTES="false")
     price, warnings = select_execution_price(_quote(is_delayed=True), OrderSide.BUY, settings)
     assert price is None
     assert "delayed execution quote" in warnings[0]
@@ -206,3 +206,44 @@ def test_apply_execution_quotes_only_blocks_the_failing_ticker() -> None:
 
     assert [trade.ticker for trade in repriced] == ["AAPL"]
     assert any("MSFT" in warning for warning in warnings)
+
+
+def test_apply_execution_quotes_rounds_repriced_quantity_to_whole_shares() -> None:
+    settings = make_settings()
+    rules = settings.execution_rules()
+    trade = _trade(notional=1000.0)
+    quotes = {"AAPL": _quote()}
+
+    repriced, warnings = apply_execution_quotes([trade], quotes, settings, rules)
+
+    assert warnings == []
+    updated = repriced[0]
+    # 1000 / 200.10 = 4.9975 shares -> 5 whole shares for a BUY.
+    assert updated.quantity == 5
+    assert updated.notional == 5 * 200.10
+
+
+def test_apply_execution_quotes_rounds_repriced_sells_down() -> None:
+    settings = make_settings()
+    rules = settings.execution_rules()
+    trade = _trade(side=OrderSide.SELL, notional=1150.0)
+    quotes = {"AAPL": _quote()}
+
+    repriced, warnings = apply_execution_quotes([trade], quotes, settings, rules)
+
+    assert warnings == []
+    # 1150 / 199.90 = 5.753 shares -> floored to 5 so a repriced sell can never oversell.
+    assert repriced[0].quantity == 5
+
+
+def test_apply_execution_quotes_drops_trade_that_rounds_below_one_share() -> None:
+    settings = make_settings()
+    rules = settings.execution_rules()
+    trade = _trade(notional=80.0)
+    quotes = {"AAPL": _quote()}
+
+    repriced, warnings = apply_execution_quotes([trade], quotes, settings, rules)
+
+    assert repriced == []
+    assert "AAPL" in warnings[0]
+    assert "tradable minimum" in warnings[0]

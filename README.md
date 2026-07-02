@@ -14,8 +14,9 @@ Deduplication: one ticker per company/share-class family, preferring the most li
 Lookback: 90 days
 Factors: market-cap size + rank-rising velocity (previous_rank - current_rank), each z-scored
 Score: equal-weighted sum of the two factors (combined_score)
-Selection: top 100 company stocks by combined_score
-Weighting: equal-weighted across the selected 100 names inside the 98% rank strategy sleeve, with risk caps
+Selection: top 50 company stocks by combined_score (MAX_HOLDINGS, default 50)
+Weighting: equal-weighted across the selected 50 names inside the 98% rank strategy sleeve, with risk caps
+Sizing: whole shares only (buys round to nearest, sells round down) — the IBKR API rejects fractional order sizes
 ```
 
 Rank 1 is the largest company by market cap, so a positive rank-rising velocity score means the stock moved up the market-cap ranking over the 90-day window. The size and rank-rising velocity factors are each standardized (z-scored) and summed with equal weight, so the strategy favours companies that are both large and climbing. Selected names are held at equal weight (`1/N`) inside the rank strategy sleeve, with the per-position cap still binding.

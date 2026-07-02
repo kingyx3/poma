@@ -115,10 +115,15 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         "timed \"compose image configuration\" write_compose_env",
         "timed \"vm compose file\" ensure_vm_compose_file",
         "timed \"docker image pull\" pull_image",
-        "Docker disk/cache usage before image pull",
+        "DOCKER_DIAGNOSTIC_TIMEOUT=\"${DOCKER_DIAGNOSTIC_TIMEOUT:-30s}\"",
+        "timeout --kill-after=10s \"${DOCKER_DIAGNOSTIC_TIMEOUT}\" docker system df",
+        'bounded_docker_diagnostics "before image pull"',
+        'bounded_docker_diagnostics "after image pull"',
         "timeout_compose 8m pull poma",
         "timeout_compose 3m run --rm",
         "timed \"deploy smoke test\" run_deploy_smoke",
+        "DOCKER_PRUNE_TIMEOUT=\"${DOCKER_PRUNE_TIMEOUT:-2m}\"",
+        "timeout --kill-after=30s \"${DOCKER_PRUNE_TIMEOUT}\" docker image prune -f",
         "timed \"dangling image prune\" prune_dangling_images",
         "DEFAULT_IMAGE_TAG=\"${DEFAULT_IMAGE_TAG:-main}\"",
     )
@@ -127,6 +132,8 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
 
     assert "docker compose build" not in script
     assert 'timeout --kill-after=30s "${duration}" docker compose' in script
+    assert "docker system df || true" not in script
+    assert "docker image prune -f >/dev/null\n}" not in script
     assert "DOCKER_BUILDKIT" not in script
 
 

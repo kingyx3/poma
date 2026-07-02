@@ -136,7 +136,11 @@ class RebalanceEngine:
             min_weight_delta_pct=settings.min_weight_delta_pct,
             limit_offset_bps=settings.limit_offset_bps,
         )
-        trades, execution_policy_warnings = apply_execution_policy(trades, settings.execution_rules())
+        trades, execution_policy_warnings = apply_execution_policy(
+            trades,
+            settings.execution_rules(),
+            available_cash_usd=account_snapshot.cash_usd,
+        )
 
         warnings.extend(validate_targets(targets, settings.max_position_pct))
         warnings.extend(trade_warnings)
@@ -206,6 +210,11 @@ class RebalanceEngine:
                 f"{BLOCK_MARKER}"
             )
             return fallback
+        if snapshot.base_currency and snapshot.base_per_usd:
+            warnings.append(
+                f"account balances converted from base currency {snapshot.base_currency} to USD "
+                f"at {snapshot.base_per_usd:.4f} {snapshot.base_currency}/USD"
+            )
         return snapshot
 
     def _resolve_portfolio_value_usd(self, account_snapshot: AccountSnapshot) -> float:

@@ -207,10 +207,13 @@ def test_build_plan_runs_every_allocated_sleeve_and_nets_overlapping_targets(
     assert math.isclose(aapl.target_notional, expected_notional)
     assert any("combines overlapping allocations" in warning for warning in plan.warnings)
 
-    # The overlapping sleeves net into a single AAPL order, not one order per strategy.
+    # The overlapping sleeves net into a single AAPL order, not one order per strategy, sized
+    # to the nearest whole share of the combined target notional.
     aapl_trades = [trade for trade in plan.trades if trade.ticker == "AAPL"]
     assert len(aapl_trades) == 1
-    assert math.isclose(aapl_trades[0].notional, expected_notional, rel_tol=1e-6)
+    expected_quantity = round(expected_notional / aapl_trades[0].reference_price)
+    assert aapl_trades[0].quantity == expected_quantity
+    assert math.isclose(aapl_trades[0].notional, expected_quantity * aapl_trades[0].reference_price)
 
 
 def test_managed_cap_mode_broker_total_uses_full_account_value() -> None:

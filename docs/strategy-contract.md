@@ -8,7 +8,7 @@ Production behavior of the current `rank_velocity_size_equal_weight` strategy:
 - Normalize provider rows into the internal snapshot contract.
 - Collapse multiple share classes of the same company before ranking.
 - Compute a dual score from current size and 90-day rank-rising velocity.
-- Select the top 100 company stocks by that combined score.
+- Select the top 50 company stocks by that combined score (`MAX_HOLDINGS`, default 50).
 - Equal-weight the selected names, subject to the configured risk caps.
 
 This is a US top-market-cap strategy, not a strict index-constituent strategy.

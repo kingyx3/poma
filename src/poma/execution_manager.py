@@ -232,7 +232,7 @@ class ExecutionManager:
             return trades, []
 
         quotes = self.broker.execution_quotes([trade.ticker for trade in trades])
-        repriced, warnings = apply_execution_quotes(trades, quotes, self.settings)
+        repriced, warnings = apply_execution_quotes(trades, quotes, self.settings, self.settings.execution_rules())
         repriced_by_ticker = {trade.ticker: trade for trade in repriced}
 
         submittable: list[ProposedTrade] = []
