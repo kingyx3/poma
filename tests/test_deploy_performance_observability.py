@@ -15,16 +15,16 @@ def test_upload_install_step_reports_stage_timings() -> None:
     expected_snippets = (
         "Packaged runtime archive:",
         "timed \"VM readiness\" ensure_vm_ready",
-        "timed \"App package upload\"",
-        "timed \"Environment upload\"",
-        "timed \"Remote install, Docker pull, smoke, cron\"",
+        "timed \"Deployment bundle upload\"",
+        "retry_with_backoff 4m \"Deployment bundle upload\" 2",
+        "timed \"Remote install, Docker pull, optional smoke, cron\"",
         "REMOTE TIMING BEGIN",
         "trap remote_failure_diagnostics EXIT",
         "REMOTE FAILURE status=${status}; collecting deploy diagnostics",
         "docker compose version",
-        "remote_retry_with_backoff",
-        "retrying remote attempt",
-        "remote_timed \"Docker pull and smoke test\"",
+        "remote_timed \"Make deployment bundle readable\"",
+        "remote_timed \"Extract deployment bundle as app user\"",
+        "remote_timed \"Docker pull and optional smoke\"",
         "remote_timed \"Install cron schedule\"",
         "TIMING Upload and install on VM total",
     )
@@ -45,9 +45,9 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
         "timeout --kill-after=30s 2m tar",
         "docker-compose.vm.yml",
-        "timeout-minutes: 55",
+        "timeout-minutes: 35",
         "timeout-minutes: 90",
-        "Remote install, Docker pull, smoke, cron",
+        "Remote install, Docker pull, optional smoke, cron",
     )
     for snippet in expected_snippets:
         assert snippet in workflow
@@ -89,8 +89,8 @@ def test_prebuilt_image_workflow_pushes_sha_and_optional_main_tag_with_cache() -
 def test_deploy_polling_and_retries_are_bounded() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "local deadline=$((SECONDS + 600)) attempt=0" in workflow
-    assert "startup revision ${startup_revision} not ready within 10m" in workflow
+    assert "local deadline=$((SECONDS + 420)) attempt=0" in workflow
+    assert "startup revision ${startup_revision} not ready within 7m" in workflow
     assert "startup_failed=$(cat /var/lib/poma/vm-startup-failed" in workflow
     assert "VM startup script failed before writing the readiness sentinel" in workflow
     assert "exit 42" in workflow
@@ -115,15 +115,17 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         "timed \"compose image configuration\" write_compose_env",
         "timed \"vm compose file\" ensure_vm_compose_file",
         "timed \"docker image pull\" pull_image",
-        "DOCKER_DIAGNOSTIC_TIMEOUT=\"${DOCKER_DIAGNOSTIC_TIMEOUT:-30s}\"",
+        "DOCKER_DIAGNOSTIC_TIMEOUT=\"${DOCKER_DIAGNOSTIC_TIMEOUT:-10s}\"",
         "timeout --kill-after=10s \"${DOCKER_DIAGNOSTIC_TIMEOUT}\" docker system df",
+        "RUN_DOCKER_PULL_DIAGNOSTICS:-false",
         'bounded_docker_diagnostics "before image pull"',
         'bounded_docker_diagnostics "after image pull"',
-        "timeout_compose 8m pull poma",
+        "timeout_compose 5m pull poma",
         "timeout_compose 3m run --rm",
         "timed \"deploy smoke test\" run_deploy_smoke",
-        "DOCKER_PRUNE_TIMEOUT=\"${DOCKER_PRUNE_TIMEOUT:-2m}\"",
+        "DOCKER_PRUNE_TIMEOUT=\"${DOCKER_PRUNE_TIMEOUT:-45s}\"",
         "timeout --kill-after=30s \"${DOCKER_PRUNE_TIMEOUT}\" docker image prune -f",
+        "RUN_DOCKER_PRUNE:-true",
         "timed \"dangling image prune\" prune_dangling_images",
         "DEFAULT_IMAGE_TAG=\"${DEFAULT_IMAGE_TAG:-main}\"",
     )

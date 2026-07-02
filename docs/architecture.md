@@ -25,14 +25,14 @@ If the local state file shows today's session as `running` with no terminal stat
 ## Capital allocation boundary
 
 ```text
-paper/live: one AccountSnapshot read (broker cash + positions + net liquidation)
+paper/live: one AccountSnapshot read (USD cash + USD positions + USD net liquidation)
   -> MANAGED_CAP_MODE (broker_total | min_of_broker_total_and_cap)
   -> STRATEGY_ALLOCATIONS (PortfolioCapitalPlan)
       -> every allocated non-cash sleeve is executed via the strategy registry
       -> cash passive sleeve (never traded)
 ```
 
-For paper/live, POMA reads the configured IBKR account's USD cash, current positions, and net liquidation in a single broker call (`AccountSnapshot`) before every rebalance, instead of separate balance and position reads. `MANAGED_CAP_MODE=broker_total` (default) sizes the rebalance off that full broker equity; `min_of_broker_total_and_cap` instead sizes off `min(broker equity, MANAGED_CAP_USD)`. `STRATEGY_ALLOCATIONS` then splits the resolved value across named sleeves and cannot exceed 100%.
+For paper/live, POMA reads the configured IBKR account's actual USD cash, USD-denominated positions, and USD net liquidation in a single broker call (`AccountSnapshot`) before every rebalance, instead of separate balance and position reads. Non-USD cash, `BASE` totals, and non-USD position values are not converted or treated as available rebalancing capital; the plan records a warning when those rows are ignored. `MANAGED_CAP_MODE=broker_total` (default) sizes the rebalance off that USD-only broker equity; `min_of_broker_total_and_cap` instead sizes off `min(USD-only broker equity, MANAGED_CAP_USD)`. `STRATEGY_ALLOCATIONS` then splits the resolved value across named sleeves and cannot exceed 100%.
 
 The engine runs every sleeve with a positive allocation, not a single hardcoded strategy: each registered `Strategy` builds its own `StrategyTargetBook` against its sleeve's capital, and a `portfolio_constructor` step combines all sleeves' targets into one portfolio-level target per ticker (summing overlapping tickers across strategies and keeping per-strategy attribution for reports). The default `rank_velocity_size_equal_weight=0.98,cash=0.02` uses 98% of the resolved portfolio value for trades and leaves 2% in passive cash. Cash is not a hidden active-strategy buffer.
 
@@ -86,10 +86,11 @@ plan rebalance
           -> STALE_ORDER_POLICY=cancel: cancel them, then continue planning
       -> from this run_id: reported informationally only (a retry relies on idempotent replay
          below, not on being blocked by its own still-working orders)
-  -> paper/live: read one broker AccountSnapshot (cash + positions + net liquidation)
+  -> paper/live: read one broker AccountSnapshot (USD cash + USD positions + USD net liquidation)
   -> resolve portfolio value via MANAGED_CAP_MODE
   -> build a StrategyTargetBook per allocated strategy sleeve
   -> combine sleeve target books into one portfolio-level target per ticker
+  -> skip trades whose operator-estimated transaction cost makes the rebalance benefit too small
   -> validate target/risk/order guards (including buying-power)
   -> write report + execution journal (state/orders/<run_id>.json)
   -> dry_run: Telegram summary only
@@ -140,7 +141,7 @@ ExecutionManager (src/poma/execution_manager.py)
 
 Both `reports/<run_id>.json` (the CLI report) and `state/orders/<run_id>.json` (the execution journal, written before submission) carry the full capital picture for the run, not just the trades:
 
-- `broker_account_snapshot` — the raw broker read (`cash_usd`, `positions_market_value_usd`, `net_liquidation_usd`, `total_value_usd`) before `MANAGED_CAP_MODE` is applied.
+- `broker_account_snapshot` — the USD-only broker read (`cash_usd`, `positions_market_value_usd`, `net_liquidation_usd`, `total_value_usd`) before `MANAGED_CAP_MODE` is applied.
 - `portfolio_value_usd` — the managed value the rebalance actually sized against (equal to the broker total unless `MANAGED_CAP_MODE=min_of_broker_total_and_cap` capped it below that).
 - `cash_sleeve_usd` — capital assigned to the passive `cash` strategy sleeve, if `STRATEGY_ALLOCATIONS` configures one; `0` if it does not.
 - `total_allocated_usd` / `total_allocated_pct` — capital assigned to every sleeve (active strategies plus cash).

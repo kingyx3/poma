@@ -97,6 +97,11 @@ class Settings(BaseSettings):
         alias="MIN_TRADE_NOTIONAL_USD",
     )
     min_weight_delta_pct: float = Field(default=0.0025, alias="MIN_WEIGHT_DELTA_PCT")
+    estimated_transaction_cost_bps: float = Field(default=0.0, alias="ESTIMATED_TRANSACTION_COST_BPS")
+    estimated_transaction_cost_fixed_usd: float = Field(
+        default=0.0,
+        alias="ESTIMATED_TRANSACTION_COST_FIXED_USD",
+    )
 
     order_type: OrderType = Field(default=OrderType.LIMIT, alias="ORDER_TYPE")
     allow_market_orders: bool = Field(default=False, alias="ALLOW_MARKET_ORDERS")
@@ -186,18 +191,22 @@ class Settings(BaseSettings):
             raise ValueError("percentage settings must be between 0 and 1")
         return value
 
-    @field_validator("limit_offset_bps", "replace_price_improvement_bps")
+    @field_validator(
+        "limit_offset_bps",
+        "replace_price_improvement_bps",
+        "estimated_transaction_cost_bps",
+    )
     @classmethod
     def bps_non_negative(cls, value: float) -> float:
         if value < 0:
             raise ValueError("basis-point settings must be non-negative")
         return value
 
-    @field_validator("managed_cap_usd")
+    @field_validator("managed_cap_usd", "estimated_transaction_cost_fixed_usd")
     @classmethod
-    def managed_cap_non_negative(cls, value: float) -> float:
+    def usd_amount_non_negative(cls, value: float) -> float:
         if value < 0:
-            raise ValueError("MANAGED_CAP_USD must be non-negative")
+            raise ValueError("USD amount settings must be non-negative")
         return value
 
     @model_validator(mode="after")

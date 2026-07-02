@@ -92,9 +92,11 @@ def main() -> int:
     project_id = env("GCP_PROJECT_ID")
     zone = env("GCP_ZONE")
     vm_name = env("GCP_VM_NAME")
-    twofa_timeout = env("IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS", "360")
+    twofa_timeout = env("IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS", "300")
     poll_seconds = env("IB_GATEWAY_SOCKET_POLL_SECONDS", "5")
-    no_progress_after = env("IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS", "200")
+    no_progress_after = env("IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS", "180")
+    max_trading_login_restarts = int(env("IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS", "1"))
+    ibkr_check_timeout_seconds = int(env("IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS", "300"))
     # --verbosity=error and --no-user-output-enabled silence gcloud's per-invocation chatter
     # ("Updating instance ssh metadata...", SSH key propagation waits, IAP NumPy warnings) that
     # otherwise repeats on every poll attempt; remote command output is unaffected (it comes from
@@ -126,11 +128,11 @@ def main() -> int:
             "test -x /usr/local/bin/poma-wait-ibgateway-2fa && "
             "systemctl cat ibgateway >/dev/null"
         )
-        if timed("IAP SSH/runtime sentinel check", lambda: remote(check, timeout=75)) == 0:
+        if timed("IAP SSH/runtime sentinel check", lambda: remote(check, timeout=45)) == 0:
             print(f"Gateway runtime helpers already current ({revision}); skipping repair/install.")
             return 0
         print("Gateway runtime sentinel missing or stale; fail-open by running repair/install.")
-        upload = gcloud("compute", "scp", *HELPER_SCRIPTS, f"{vm_name}:/tmp/", *ssh_common, timeout=180)
+        upload = gcloud("compute", "scp", *HELPER_SCRIPTS, f"{vm_name}:/tmp/", *ssh_common, timeout=90)
         print(f"TIMING Upload gateway helper scripts: status={upload}")
         if upload != 0:
             return upload
@@ -143,7 +145,7 @@ def main() -> int:
             "sudo install -d -m 755 /var/lib/poma && "
             f"printf '%s\n' '{revision}' | sudo tee '{sentinel}' >/dev/null"
         )
-        return timed("Runtime repair/install", lambda: remote(install, timeout=900))
+        return timed("Runtime repair/install", lambda: remote(install, timeout=600))
 
     def record_failure(stage: str, reason: str, next_action: str) -> None:
         summary = (
@@ -192,13 +194,38 @@ def main() -> int:
             lambda: remote("sudo systemctl restart ibgateway", timeout=240),
         )
 
-    def gateway_startup_progress(elapsed_seconds: int) -> int:
+    def wait_for_stable_api_socket(login_attempt: int, timeout_seconds: int) -> int:
         command = (
-            "sudo poma-diagnose-ibgateway startup-check --log-lines 80 "
-            f"--elapsed-seconds {elapsed_seconds} "
-            f"--fail-no-progress-after {no_progress_after}"
+            f"started=\"$(date +%s)\"; deadline=$((started + {timeout_seconds})); "
+            "stable=0; poll_attempt=1; progress_checked=0; "
+            "echo 'Waiting on VM for two stable Gateway API socket polls.'; "
+            "while [ \"$(date +%s)\" -lt \"${deadline}\" ]; do "
+            "if nc -z 127.0.0.1 7497; then "
+            "stable=$((stable + 1)); echo \"socket poll ${poll_attempt}: open (stable=${stable})\"; "
+            "if [ \"${stable}\" -ge 2 ]; then exit 0; fi; "
+            "else "
+            "stable=0; "
+            "if ! systemctl is-active --quiet ibgateway; then "
+            "echo \"socket poll ${poll_attempt}: ibgateway service not active yet\"; "
+            "else echo \"socket poll ${poll_attempt}: waiting for API socket\"; fi; "
+            "fi; "
+            "elapsed=$(( $(date +%s) - started )); "
+            f"if [ \"${{elapsed}}\" -ge {no_progress_after} ] && [ \"${{progress_checked}}\" -eq 0 ]; then "
+            "echo 'Running VM-local Gateway startup progress check'; "
+            f"sudo poma-diagnose-ibgateway startup-check --log-lines 80 --elapsed-seconds \"${{elapsed}}\" --fail-no-progress-after {no_progress_after}; "
+            "progress_status=$?; "
+            "if [ \"${progress_status}\" -eq 2 ]; then exit 2; fi; "
+            "progress_checked=1; "
+            "fi; "
+            f"sleep {int(poll_seconds)}; "
+            "poll_attempt=$((poll_attempt + 1)); "
+            "done; "
+            "exit 1"
         )
-        return timed("Gateway startup progress check", lambda: remote(command, timeout=120))
+        return timed(
+            f"VM-local socket/service wait attempt {login_attempt}",
+            lambda: remote(command, timeout=timeout_seconds + 45),
+        )
 
     def ibkr_check_command(mode: str, required: bool) -> str:
         # Run the readiness check against the deployed VM image (docker-compose.vm.yml,
@@ -218,86 +245,65 @@ def main() -> int:
 
     def api_ready(mode: str, required: bool) -> int:
         timeout_seconds = int(twofa_timeout)
-        poll_interval_seconds = int(poll_seconds)
-        max_trading_login_restarts = 2
         started = time.monotonic()
         # Overall safety cap so bounded per-login restarts can never overrun the job timeout.
-        hard_deadline = started + 2 * timeout_seconds
-        # login_started tracks the current login attempt; a forced restart resets it so the fresh
-        # login gets its own readiness/no-progress budget instead of inheriting a spent one.
-        login_started = started
-        deadline = min(hard_deadline, started + timeout_seconds)
-        stable = 0
+        hard_deadline = started + (max_trading_login_restarts + 1) * timeout_seconds
         attempt = 1
         restarts = 0
-        print(f"Waiting up to {timeout_seconds}s per login attempt for broker auth and Gateway API trading readiness.")
-        while time.monotonic() < deadline:
-            elapsed_seconds = int(time.monotonic() - login_started)
-            poll = timed(
-                f"Socket/service poll attempt {attempt}",
-                lambda: remote(
-                    "if nc -z 127.0.0.1 7497; then exit 0; fi; if ! systemctl is-active --quiet ibgateway; then exit 2; fi; exit 1",
-                    timeout=45,
-                ),
-            )
-            if poll == 0:
-                stable += 1
-                if stable >= 2:
-                    # 240s proved too tight on a cold post-deploy VM: image pull + container
-                    # boot alone can eat ~3 minutes on the e2-micro before the check's connect
-                    # attempt (60s) and probe ladder (~30s worst case) even start, and a timed-out
-                    # check triggers a counterproductive forced Gateway restart below.
-                    check_status = remote(ibkr_check_command(mode, required), timeout=480)
-                    if check_status == 0:
-                        print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
-                        return 0
-                    if restarts >= max_trading_login_restarts:
-                        reason = (
-                            "IBKR API socket is open, but poma ibkr-check still fails after "
-                            f"{restarts} forced fresh-login restart(s)."
-                        )
-                        print(
-                            "ERROR: "
-                            + reason
-                            + " Verify the account's API settings have 'Read-Only API' disabled and that Trading and Market Data subscriptions are active for the "
-                            + mode
-                            + " account.",
-                            file=sys.stderr,
-                        )
-                        diagnose(
-                            "ibkr-check",
-                            reason,
-                            "Read the ibkr fail line immediately above this summary. If it says unreachable/TimeoutError with the socket open, rerun after the VM settles; if it cites IBKR market-data/trading permissions, fix the IBKR account setting.",
-                        )
-                        return 1
-                    restarts += 1
-                    restart_gateway_for_trading_login(
-                        "IBKR API socket opened but trading readiness failed. This usually means Gateway "
-                        "logged in read-only / without Trading/Market-Data permissions. Forcing a fresh "
-                        f"trading-enabled login (restart {restarts}/{max_trading_login_restarts})."
+        print(
+            f"Waiting up to {timeout_seconds}s per login attempt for broker auth and Gateway API trading readiness "
+            f"({max_trading_login_restarts} forced restart(s) allowed)."
+        )
+        while True:
+            remaining = int(hard_deadline - time.monotonic())
+            if remaining <= 0:
+                break
+            socket_budget = min(timeout_seconds, remaining)
+            socket_status = wait_for_stable_api_socket(attempt, socket_budget)
+            if socket_status == 0:
+                check_status = remote(ibkr_check_command(mode, required), timeout=ibkr_check_timeout_seconds)
+                if check_status == 0:
+                    print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
+                    return 0
+                if restarts >= max_trading_login_restarts:
+                    reason = (
+                        "IBKR API socket is open, but poma ibkr-check still fails after "
+                        f"{restarts} forced fresh-login restart(s)."
                     )
-                    # Reset the per-login clocks so the fresh login gets a full, bounded readiness window.
-                    stable = 0
-                    login_started = time.monotonic()
-                    deadline = min(hard_deadline, login_started + timeout_seconds)
-            elif poll == 1:
-                stable = 0
-                startup_status = gateway_startup_progress(elapsed_seconds)
-                if startup_status == 2:
                     print(
-                        "ERROR: Gateway startup stalled before opening the API socket; collecting diagnostics.",
+                        "ERROR: "
+                        + reason
+                        + " Verify the account's API settings have 'Read-Only API' disabled and that Trading and Market Data subscriptions are active for the "
+                        + mode
+                        + " account.",
                         file=sys.stderr,
                     )
                     diagnose(
-                        "gateway-startup",
-                        "Gateway startup stalled before opening the API socket.",
-                        "Inspect the visible startup diagnostic and recent IBC/Gateway log hints in the diagnostics group.",
+                        "ibkr-check",
+                        reason,
+                        "Read the ibkr fail line immediately above this summary. If it says unreachable/TimeoutError with the socket open, rerun after the VM settles; if it cites IBKR market-data/trading permissions, fix the IBKR account setting.",
                     )
                     return 1
-            else:
-                stable = 0
-            time.sleep(poll_interval_seconds)
-            attempt += 1
+                restarts += 1
+                restart_gateway_for_trading_login(
+                    "IBKR API socket opened but trading readiness failed. This usually means Gateway "
+                    "logged in read-only / without Trading/Market-Data permissions. Forcing a fresh "
+                    f"trading-enabled login (restart {restarts}/{max_trading_login_restarts})."
+                )
+                attempt += 1
+                continue
+            if socket_status == 2:
+                print(
+                    "ERROR: Gateway startup stalled before opening the API socket; collecting diagnostics.",
+                    file=sys.stderr,
+                )
+                diagnose(
+                    "gateway-startup",
+                    "Gateway startup stalled before opening the API socket.",
+                    "Inspect the visible startup diagnostic and recent IBC/Gateway log hints in the diagnostics group.",
+                )
+                return 1
+            break
         reason = (
             "Broker auth, Gateway API, or trading-permission readiness timed out before the API "
             f"socket became stably tradable ({restarts} forced restart(s) used)."
@@ -374,7 +380,7 @@ def main() -> int:
         # hours; REQUIRE_LIVE_EXECUTION_QUOTES in the deployed .env decides how strict that is).
         return timed(
             "Market data entitlement check (poma ibkr-check)",
-            lambda: remote(ibkr_check_command("paper", required=True), timeout=480),
+            lambda: remote(ibkr_check_command("paper", required=True), timeout=ibkr_check_timeout_seconds),
         )
 
     if action not in {"configure-paper", "configure-live"}:
@@ -421,7 +427,7 @@ def main() -> int:
         f"sudo poma-wait-ibgateway-2fa --log-lines 80 --timeout-seconds {twofa_timeout} "
         f"--poll-seconds {poll_seconds} --fail-no-progress-after {no_progress_after}"
     )
-    if timed("Fresh live 2FA challenge wait", lambda: remote(wait_command, timeout=480)) != 0:
+    if timed("Fresh live 2FA challenge wait", lambda: remote(wait_command, timeout=int(twofa_timeout) + 60)) != 0:
         print("No fresh IBKR mobile 2FA evidence appeared; refusing live configure success.", file=sys.stderr)
         diagnose(
             "live-2fa",

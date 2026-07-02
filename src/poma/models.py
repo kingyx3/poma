@@ -43,9 +43,8 @@ class AccountSnapshot:
 
     Fetched once per rebalance so every strategy sleeve and the risk engine see the same
     account state, instead of separate cash and positions reads that can race against each
-    other during a live rebalance. All monetary fields are USD: accounts with a non-USD base
-    currency have their broker-reported base-currency balances converted at read time
-    (``base_currency``/``base_per_usd`` record that conversion for reporting).
+    other during a live rebalance. All monetary fields are actual USD-denominated values;
+    non-USD cash and positions are excluded from rebalancing decisions.
     """
 
     cash_usd: float
@@ -54,10 +53,7 @@ class AccountSnapshot:
     net_liquidation_usd: float | None = None
     account_id: str | None = None
     timestamp_utc: str | None = None
-    # Set only when the broker reported balances in a non-USD base currency: the base currency
-    # code (e.g. "SGD") and how many base-currency units one USD was worth at conversion time.
-    base_currency: str | None = None
-    base_per_usd: float | None = None
+    warnings: tuple[str, ...] = ()
 
     @property
     def total_value_usd(self) -> float:
@@ -228,7 +224,7 @@ class RebalancePlan:
         return sum(position.target_notional for position in self.combined_targets)
 
     def broker_account_snapshot_json(self) -> dict[str, object]:
-        """The raw broker read this plan sized against, shared by the CLI report and journal."""
+        """The USD-only broker read this plan sized against, shared by reports and journal."""
         return {
             "cash_usd": self.portfolio_cash_usd,
             "positions_market_value_usd": self.portfolio_positions_value_usd,

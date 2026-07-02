@@ -197,6 +197,8 @@ jobs:
           set_default MAX_POSITION_PCT "0.10"
           set_default MAX_TURNOVER_PCT "1.0"
           set_default MIN_TRADE_NOTIONAL_USD "25"
+          set_default ESTIMATED_TRANSACTION_COST_BPS "0"
+          set_default ESTIMATED_TRANSACTION_COST_FIXED_USD "0"
           set_default MIN_WEIGHT_DELTA_PCT "0.0025"
           set_default ORDER_TYPE "limit"
           set_default ALLOW_MARKET_ORDERS "false"
@@ -406,12 +408,15 @@ jobs:
         if: ${{ inputs.deployment_action == 'deploy' && inputs.terraform_action == 'apply' && inputs.deploy_app }}
         run: |
           set -euo pipefail
-          # Ship only the runtime files required on the VM. Avoid uploading CI/test/docs/git
-          # history so IAP transfer and on-VM Docker pull/smoke contexts stay small.
+          chmod 600 .env.deploy
+          # Ship only the runtime files required on the VM, plus the already-rendered
+          # environment file. A single IAP upload avoids a second SSH/SCP round trip while
+          # keeping CI/test/docs/git history off the e2-micro.
           timeout --kill-after=30s 2m tar \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             -czf /tmp/poma.tar.gz \
+            .env.deploy \
             .dockerignore \
             Dockerfile \
             README.md \
@@ -428,14 +433,14 @@ jobs:
 
       - name: Upload and install on VM
         if: ${{ inputs.deployment_action == 'deploy' && inputs.terraform_action == 'apply' && inputs.deploy_app }}
-        timeout-minutes: 55
+        timeout-minutes: 35
         run: |
           set -euo pipefail
 
           instance_name="$(terraform -chdir=infra/gcp-free-tier output -raw instance_name)"
           zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
           startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"
-          ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+          ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet --verbosity=error --no-user-output-enabled)
           step_start="${SECONDS}"
 
           # Validate the requested image ref before it is interpolated into the remote shell
@@ -460,7 +465,7 @@ jobs:
             echo "::endgroup::"
             echo "TIMING ${label}: $((SECONDS - start))s (status=${status})"
             if [ "${status}" -eq 124 ]; then
-              echo "::error::${label} timed out; check VM readiness, IAP/SSH connectivity, Docker image pull, or smoke-test health."
+              echo "::error::${label} timed out; check VM readiness, IAP/SSH connectivity, Docker image pull, or deploy-script health."
             fi
             return "${status}"
           }
@@ -472,7 +477,7 @@ jobs:
           }
 
           print_vm_bootstrap_status() {
-            run_with_timeout 45s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
+            run_with_timeout 30s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
               set +e
               echo "===== POMA VM bootstrap status ====="
               echo "sentinel=$(cat /var/lib/poma/vm-ready 2>/dev/null || true)"
@@ -481,7 +486,7 @@ jobs:
               id poma || true
               systemctl is-active docker cron || true
               systemctl --no-pager --full status google-startup-scripts.service google-guest-agent.service docker cron || true
-              journalctl --no-pager -n 160 -u google-startup-scripts.service -u google-guest-agent.service -u docker -u cron || true
+              journalctl --no-pager -n 100 -u google-startup-scripts.service -u google-guest-agent.service -u docker -u cron || true
             ' || true
           }
 
@@ -492,10 +497,10 @@ jobs:
           # cloud-init's boot-finished marker by itself: the Google metadata startup script can
           # still be running, and deploy needs the concrete POMA host contract.
           wait_for_vm_ready() {
-            local deadline=$((SECONDS + 600)) attempt=0 status=1
+            local deadline=$((SECONDS + 420)) attempt=0 status=1
             while true; do
               set +e
-              run_with_timeout 75s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
+              run_with_timeout 45s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
                 --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron"
               status="$?"
               set -e
@@ -508,13 +513,13 @@ jobs:
                 return 1
               fi
               if [ "${SECONDS}" -ge "${deadline}" ]; then
-                echo "VM ${instance_name} not reachable or startup revision ${startup_revision} not ready within 10m." >&2
+                echo "VM ${instance_name} not reachable or startup revision ${startup_revision} not ready within 7m." >&2
                 print_vm_bootstrap_status
                 return 1
               fi
               attempt=$((attempt + 1))
-              echo "VM not ready yet (attempt ${attempt}); retrying in 15s..."
-              sleep 15
+              echo "VM not ready yet (attempt ${attempt}); retrying in 10s..."
+              sleep 10
             done
           }
 
@@ -550,12 +555,10 @@ jobs:
 
           timed "VM readiness" ensure_vm_ready
 
-          timed "App package upload" retry_with_backoff 3m "App package upload" 3 \
+          timed "Deployment bundle upload" retry_with_backoff 4m "Deployment bundle upload" 2 \
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
-          timed "Environment upload" retry_with_backoff 2m "Environment upload" 3 \
-            gcloud compute scp .env.deploy "${instance_name}:/tmp/poma.env" "${ssh_common[@]}"
 
-          timed "Remote install, Docker pull, smoke, cron" run_with_timeout 25m \
+          timed "Remote install, Docker pull, optional smoke, cron" run_with_timeout 15m \
             gcloud compute ssh "${instance_name}" "${ssh_common[@]}" --command '
             set -euo pipefail
 
@@ -575,7 +578,7 @@ jobs:
               docker compose version >&2 || true
               systemctl is-active docker cron >&2 || true
               df -h / /opt/poma >&2 || true
-              docker system df >&2 || true
+              timeout --kill-after=10s 10s docker system df >&2 || true
               if [ -f /opt/poma/.compose.env ]; then
                 sed "s/^POMA_IMAGE=.*/POMA_IMAGE=<redacted>/" /opt/poma/.compose.env >&2 || true
               fi
@@ -596,21 +599,8 @@ jobs:
               return "${status}"
             }
 
-            remote_retry_with_backoff() {
-              local label="$1" max_attempts="$2" attempt=1
-              shift 2
-              until "$@"; do
-                if [ "${attempt}" -ge "${max_attempts}" ]; then
-                  echo "${label} failed after ${attempt} remote attempt(s)." >&2
-                  return 1
-                fi
-                attempt=$((attempt + 1))
-                echo "${label} failed; retrying remote attempt ${attempt}/${max_attempts} in 20s..." >&2
-                sleep 20
-              done
-            }
-
             remote_timed "Prepare app directory" sudo mkdir -p /opt/poma
+            remote_timed "Fix app directory ownership" sudo chown poma:poma /opt/poma
             # Remove files owned by the deploy package before extracting the trimmed runtime set.
             # Preserve .env plus runtime data/report/state/log directories across deploys.
             remote_timed "Remove old deployed package files" sudo rm -rf \
@@ -627,32 +617,22 @@ jobs:
               /opt/poma/pyproject.toml \
               /opt/poma/src \
               /opt/poma/tests
-            remote_timed "Extract application package" sudo tar -xzf /tmp/poma.tar.gz -C /opt/poma
-            remote_timed "Install rendered environment" sudo mv /tmp/poma.env /opt/poma/.env
-            remote_timed "Secure rendered environment" sudo chmod 600 /opt/poma/.env
+            remote_timed "Make deployment bundle readable" sudo chmod 644 /tmp/poma.tar.gz
+            remote_timed "Extract deployment bundle as app user" sudo -u poma tar -xzf /tmp/poma.tar.gz -C /opt/poma
+            test -f /opt/poma/.env.deploy || { echo "Rendered environment missing from deployment bundle" >&2; exit 1; }
+            remote_timed "Install rendered environment" sudo -u poma mv /opt/poma/.env.deploy /opt/poma/.env
+            remote_timed "Secure rendered environment" sudo -u poma chmod 600 /opt/poma/.env
+            remote_timed "Remove uploaded deployment bundle" sudo rm -f /tmp/poma.tar.gz
             remote_timed "Ensure runtime state directories" sudo install -d -o poma -g poma \
               /opt/poma/data \
               /opt/poma/logs \
               /opt/poma/reports \
               /opt/poma/state
-            # Keep deploy fast on long-lived VMs: do not recursively chown data/reports/state/logs.
-            # Only the freshly extracted package and .env need ownership fixed on each deploy.
-            remote_timed "Fix package ownership" sudo chown poma:poma /opt/poma /opt/poma/.env
-            remote_timed "Fix extracted file ownership" sudo chown -R poma:poma \
-              /opt/poma/.dockerignore \
-              /opt/poma/Dockerfile \
-              /opt/poma/README.md \
-              /opt/poma/docker-compose.vm.yml \
-              /opt/poma/docker-compose.yml \
-              /opt/poma/ops \
-              /opt/poma/pyproject.toml \
-              /opt/poma/src
             cd /opt/poma
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
-            # it out of the deploy keeps this step to app concerns only (image pull + smoke + cron).
-            remote_retry_with_backoff "Docker pull and smoke test" 2 \
-              remote_timed "Docker pull and smoke test" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh
+            # it out of the deploy keeps this step to app concerns only (image pull + optional smoke + cron).
+            remote_timed "Docker pull and optional smoke" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} RUN_DOCKER_PULL_DIAGNOSTICS=${{ inputs.deploy_smoke }} RUN_DOCKER_PRUNE=${{ inputs.deploy_smoke }} POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh
             remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
             echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '

@@ -125,7 +125,8 @@ def build_strategy_capital_plan(
     """Convert allocation percentages into per-strategy capital sleeves.
 
     ``portfolio_value_usd`` is the effective account value for this plan. Paper/live runs pass
-    broker-derived cash plus current portfolio balances; dry-runs pass the configured fallback.
+    broker-derived USD cash plus USD-denominated portfolio balances; dry-runs pass the
+    configured fallback.
     Individual strategies receive ``portfolio_value_usd * allocation_pct``. Passive cash is modeled
     as its own ``cash`` allocation sleeve rather than as a hidden buffer inside an active strategy.
     """

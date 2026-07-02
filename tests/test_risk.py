@@ -3,6 +3,7 @@ from poma.risk import (
     enforce_buying_power,
     enforce_order_limits,
     enforce_turnover_limit,
+    filter_trades_by_estimated_transaction_cost,
     generate_trades,
     validate_targets,
 )
@@ -98,6 +99,34 @@ def _trade(ticker: str, side: OrderSide, notional: float) -> ProposedTrade:
         limit_price=100.1,
         reason="rebalance_to_target_weight",
     )
+
+
+def test_estimated_transaction_cost_filter_skips_marginal_trades() -> None:
+    trades = [_trade("A", OrderSide.BUY, 30), _trade("B", OrderSide.BUY, 100)]
+
+    filtered, warnings = filter_trades_by_estimated_transaction_cost(
+        trades,
+        min_trade_notional_usd=25,
+        estimated_transaction_cost_bps=0,
+        estimated_transaction_cost_fixed_usd=10,
+    )
+
+    assert [trade.ticker for trade in filtered] == ["B"]
+    assert any("A" in warning and "estimated transaction cost" in warning for warning in warnings)
+
+
+def test_estimated_transaction_cost_filter_keeps_trades_when_disabled() -> None:
+    trades = [_trade("A", OrderSide.BUY, 30)]
+
+    filtered, warnings = filter_trades_by_estimated_transaction_cost(
+        trades,
+        min_trade_notional_usd=25,
+        estimated_transaction_cost_bps=0,
+        estimated_transaction_cost_fixed_usd=0,
+    )
+
+    assert filtered == trades
+    assert warnings == []
 
 
 def test_enforce_buying_power_allows_net_buys_within_cash() -> None:
