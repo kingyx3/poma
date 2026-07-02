@@ -6,6 +6,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ HELPER_SCRIPTS = [
     "ops/scripts/diagnose_ib_gateway_runtime.py",
     "ops/scripts/wait_ib_gateway_2fa.py",
 ]
+HELPER_ARCHIVE_NAME = "poma-gateway-helpers.tar.gz"
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -85,6 +87,16 @@ def helper_revision() -> str:
     return digest.hexdigest()
 
 
+def build_helper_archive() -> Path:
+    archive_path = Path(tempfile.gettempdir()) / HELPER_ARCHIVE_NAME
+    archive_path.unlink(missing_ok=True)
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for script in HELPER_SCRIPTS:
+            path = Path(script)
+            archive.add(path, arcname=path.name)
+    return archive_path
+
+
 def main() -> int:
     deploy_environment = env("DEPLOY_ENVIRONMENT")
     action = env("INPUT_ACTION")
@@ -132,11 +144,24 @@ def main() -> int:
             print(f"Gateway runtime helpers already current ({revision}); skipping repair/install.")
             return 0
         print("Gateway runtime sentinel missing or stale; fail-open by running repair/install.")
-        upload = gcloud("compute", "scp", *HELPER_SCRIPTS, f"{vm_name}:/tmp/", *ssh_common, timeout=90)
-        print(f"TIMING Upload gateway helper scripts: status={upload}")
+        helper_archive = build_helper_archive()
+        try:
+            upload = gcloud(
+                "compute",
+                "scp",
+                str(helper_archive),
+                f"{vm_name}:/tmp/{HELPER_ARCHIVE_NAME}",
+                *ssh_common,
+                timeout=240,
+            )
+        finally:
+            helper_archive.unlink(missing_ok=True)
+        print(f"TIMING Upload gateway helper bundle: status={upload}")
         if upload != 0:
             return upload
         install = (
+            f"sudo tar -xzf /tmp/{HELPER_ARCHIVE_NAME} -C /tmp && "
+            f"sudo rm -f /tmp/{HELPER_ARCHIVE_NAME} && "
             "sudo python3 /tmp/repair_ib_gateway_runtime.py && "
             "sudo python3 /tmp/install_ibc_config_helper.py && "
             "sudo install -m 755 /tmp/diagnose_ib_gateway_runtime.py /usr/local/bin/poma-diagnose-ibgateway && "

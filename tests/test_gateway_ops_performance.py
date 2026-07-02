@@ -90,6 +90,12 @@ def test_gateway_runtime_repair_installs_helpers_idempotently() -> None:
 
     for snippet in (
         "revision = helper_revision()",
+        "HELPER_ARCHIVE_NAME = \"poma-gateway-helpers.tar.gz\"",
+        "def build_helper_archive()",
+        "tarfile.open",
+        "Upload gateway helper bundle",
+        "timeout=240",
+        "sudo tar -xzf /tmp/{HELPER_ARCHIVE_NAME} -C /tmp",
         "/var/lib/poma/ib-gateway-runtime-revision",
         "poma-diagnose-ibgateway",
         "poma-wait-ibgateway-2fa",
