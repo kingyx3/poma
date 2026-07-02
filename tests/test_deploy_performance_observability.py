@@ -16,6 +16,7 @@ def test_upload_install_step_reports_stage_timings() -> None:
         "Packaged runtime archive:",
         "timed \"VM readiness\" ensure_vm_ready",
         "timed \"Deployment bundle upload\"",
+        "retry_with_backoff 4m \"Deployment bundle upload\" 2",
         "timed \"Remote install, Docker pull, optional smoke, cron\"",
         "REMOTE TIMING BEGIN",
         "trap remote_failure_diagnostics EXIT",

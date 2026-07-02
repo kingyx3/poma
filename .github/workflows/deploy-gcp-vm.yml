@@ -555,7 +555,7 @@ jobs:
 
           timed "VM readiness" ensure_vm_ready
 
-          timed "Deployment bundle upload" retry_with_backoff 2m "Deployment bundle upload" 2 \
+          timed "Deployment bundle upload" retry_with_backoff 4m "Deployment bundle upload" 2 \
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
 
           timed "Remote install, Docker pull, optional smoke, cron" run_with_timeout 15m \
