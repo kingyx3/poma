@@ -136,7 +136,11 @@ class RebalanceEngine:
             min_weight_delta_pct=settings.min_weight_delta_pct,
             limit_offset_bps=settings.limit_offset_bps,
         )
-        trades, execution_policy_warnings = apply_execution_policy(trades, settings.execution_rules())
+        trades, execution_policy_warnings = apply_execution_policy(
+            trades,
+            settings.execution_rules(),
+            default_rule=settings.default_execution_rule(),
+        )
 
         warnings.extend(validate_targets(targets, settings.max_position_pct))
         warnings.extend(trade_warnings)

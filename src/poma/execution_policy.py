@@ -6,6 +6,14 @@ from dataclasses import replace
 from poma.models import InstrumentExecutionRule, ProposedTrade
 
 DEFAULT_EXECUTION_RULE = InstrumentExecutionRule(ticker="*")
+# FRACTIONAL_ORDER_MODE=whole_shares applies this to every ticker: each trade is floored to a
+# whole-share quantity and dropped when it rounds below one share.
+WHOLE_SHARE_EXECUTION_RULE = InstrumentExecutionRule(
+    ticker="*",
+    allows_fractional=False,
+    min_quantity=1.0,
+    quantity_increment=1.0,
+)
 
 
 def build_execution_rules(non_fractional_tickers: str) -> dict[str, InstrumentExecutionRule]:
@@ -37,17 +45,21 @@ def _rounded_quantity(quantity: float, rule: InstrumentExecutionRule) -> float:
 def apply_execution_policy(
     trades: list[ProposedTrade],
     rules: dict[str, InstrumentExecutionRule],
+    default_rule: InstrumentExecutionRule = DEFAULT_EXECUTION_RULE,
 ) -> tuple[list[ProposedTrade], list[str]]:
     """Round each trade to what its instrument can actually execute.
 
     Rounding only ever moves toward zero (floor), never up, so a trade never grows past the
     sizing the risk engine already approved. Trades that round below their tradable minimum
     are dropped with a warning instead of being sent to the broker as an invalid order.
+
+    ``default_rule`` applies to every ticker without an explicit per-ticker rule; it stays
+    fractional-friendly unless the operator selects ``FRACTIONAL_ORDER_MODE=whole_shares``.
     """
     adjusted: list[ProposedTrade] = []
     warnings: list[str] = []
     for trade in trades:
-        rule = rules.get(trade.ticker, DEFAULT_EXECUTION_RULE)
+        rule = rules.get(trade.ticker, default_rule)
         quantity = _rounded_quantity(trade.quantity, rule)
         if quantity <= 0 or quantity < rule.min_quantity:
             warnings.append(

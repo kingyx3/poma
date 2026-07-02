@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 
 import pytest
 from conftest import make_settings
+from ib_insync.util import UNSET_DOUBLE
 
 from poma.broker import IbkrBroker, order_results_have_issues, order_results_have_no_accepted_orders
-from poma.models import OrderResult, OrderSide
+from poma.models import OrderResult, OrderSide, ProposedTrade
 
 
 @dataclass
@@ -250,6 +251,91 @@ def test_replace_order_cancels_old_order_and_places_a_new_one(monkeypatch: pytes
     assert snapshot.order_ref == "poma:run-1:0:AAPL:BUY:r1"
     assert snapshot.ticker == "AAPL"
     assert len(fake_ib.placed_orders) == 1
+
+
+def _proposed_trade(quantity: float, *, limit_price: float | None = 100.0) -> ProposedTrade:
+    return ProposedTrade(
+        ticker="AAPL",
+        side=OrderSide.BUY,
+        quantity=quantity,
+        notional=quantity * 100.0,
+        reference_price=100.0,
+        limit_price=limit_price,
+        reason="rebalance_to_target_weight",
+        order_ref="poma:run-1:0:AAPL:BUY",
+    )
+
+
+def test_fractional_sized_orders_are_built_as_cash_quantity_orders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IBKR's API cancels fractional share quantities with error 10243; the dollar amount
+    must carry the sizing instead."""
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    order = broker._build_order(_proposed_trade(0.571983, limit_price=101.5))
+
+    assert order.totalQuantity == 0.0
+    assert order.cashQty == round(0.571983 * 101.5, 2)
+    assert order.orderRef == "poma:run-1:0:AAPL:BUY"
+
+
+def test_whole_share_quantities_stay_plain_share_orders_in_cash_quantity_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    order = broker._build_order(_proposed_trade(5.0))
+
+    assert order.totalQuantity == 5.0
+    assert order.cashQty == UNSET_DOUBLE
+
+
+def test_share_quantity_mode_submits_fractional_share_quantities_as_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker = IbkrBroker(_settings(monkeypatch, FRACTIONAL_ORDER_MODE="share_quantity"))
+
+    order = broker._build_order(_proposed_trade(0.571983))
+
+    assert order.totalQuantity == 0.571983
+    assert order.cashQty == UNSET_DOUBLE
+
+
+def test_market_orders_size_cash_quantity_from_the_reference_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    broker = IbkrBroker(_settings(monkeypatch, ORDER_TYPE="market", ALLOW_MARKET_ORDERS="true"))
+
+    order = broker._build_order(_proposed_trade(0.25, limit_price=None))
+
+    assert order.totalQuantity == 0.0
+    assert order.cashQty == 25.0
+
+
+def test_replace_order_keeps_fractional_replacements_as_cash_quantity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ib = FakeIB(
+        open_trades=[
+            FakeTrade(
+                order=FakeOrder(orderId=7, action="BUY", orderRef="poma:run-1:0:AAPL:BUY", account="DU1234567"),
+                orderStatus=FakeOrderStatus(status="Submitted"),
+                contract=FakeContract(symbol="AAPL"),
+            ),
+        ]
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    broker.replace_order(
+        order_id=7,
+        ticker="AAPL",
+        side=OrderSide.BUY,
+        quantity=0.571983,
+        new_limit_price=101.5,
+        order_ref="poma:run-1:0:AAPL:BUY:r1",
+    )
+
+    _, placed = fake_ib.placed_orders[0]
+    assert placed.totalQuantity == 0.0
+    assert placed.cashQty == round(0.571983 * 101.5, 2)
 
 
 def test_execution_quotes_reads_bid_ask_and_marks_freshness(monkeypatch: pytest.MonkeyPatch) -> None:

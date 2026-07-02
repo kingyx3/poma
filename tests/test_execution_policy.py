@@ -1,4 +1,8 @@
-from poma.execution_policy import apply_execution_policy, build_execution_rules
+from poma.execution_policy import (
+    WHOLE_SHARE_EXECUTION_RULE,
+    apply_execution_policy,
+    build_execution_rules,
+)
 from poma.models import OrderSide, ProposedTrade
 
 
@@ -61,3 +65,18 @@ def test_quantity_increment_rounds_down_to_nearest_increment() -> None:
 def test_build_execution_rules_empty_string_yields_no_rules() -> None:
     assert build_execution_rules("") == {}
     assert build_execution_rules("   ") == {}
+
+
+def test_whole_share_default_rule_floors_every_ticker() -> None:
+    trades = [_trade("AAPL", OrderSide.BUY, 5.9), _trade("MSFT", OrderSide.SELL, 2.4)]
+    adjusted, warnings = apply_execution_policy(trades, rules={}, default_rule=WHOLE_SHARE_EXECUTION_RULE)
+    assert warnings == []
+    assert [trade.quantity for trade in adjusted] == [5, 2]
+
+
+def test_whole_share_default_rule_drops_trades_below_one_share() -> None:
+    trades = [_trade("ASML", OrderSide.BUY, 0.07)]
+    adjusted, warnings = apply_execution_policy(trades, rules={}, default_rule=WHOLE_SHARE_EXECUTION_RULE)
+    assert adjusted == []
+    assert "ASML" in warnings[0]
+    assert "skipping trade" in warnings[0]

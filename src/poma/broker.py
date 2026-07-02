@@ -10,7 +10,7 @@ from typing import Protocol
 
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
-from poma.config import ExecutionPriceSource, OrderType, Settings, TradingMode
+from poma.config import ExecutionPriceSource, FractionalOrderMode, OrderType, Settings, TradingMode
 from poma.execution_pricing import compute_spread_bps
 from poma.models import (
     AccountSnapshot,
@@ -59,6 +59,7 @@ BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
 ORDER_NOT_ACCEPTED_STATUS = "OrderNotAccepted"
 TRADING_PERMISSION_PROBE_SYMBOL = "AAPL"
 TRADING_PERMISSION_PROBE_LIMIT_PRICE = 1.0
+FRACTIONAL_PROBE_CASH_USD = 25.0
 MARKET_DATA_PROBE_SYMBOL = TRADING_PERMISSION_PROBE_SYMBOL
 USD_CASH_TAGS = ("TotalCashValue", "TotalCashBalance", "CashBalance", "SettledCash")
 NET_LIQUIDATION_TAGS = ("NetLiquidation", "NetLiquidationByCurrency")
@@ -733,16 +734,27 @@ class IbkrBroker:
         )
 
     def _build_order(self, trade: ProposedTrade) -> MarketOrder | LimitOrder:
+        quantity = abs(trade.quantity)
         if self.settings.order_type == OrderType.MARKET:
-            order: MarketOrder | LimitOrder = MarketOrder(trade.side.value, abs(trade.quantity))
+            order: MarketOrder | LimitOrder = MarketOrder(trade.side.value, quantity)
+            sizing_price = trade.reference_price
         else:
             if trade.limit_price is None:
                 raise ValueError(f"missing limit price for {trade.ticker}")
-            order = LimitOrder(trade.side.value, abs(trade.quantity), trade.limit_price)
+            order = LimitOrder(trade.side.value, quantity, trade.limit_price)
+            sizing_price = trade.limit_price
+        if self._submit_as_cash_quantity(quantity):
+            _convert_to_cash_quantity(order, quantity * sizing_price)
         order.tif = self.settings.order_time_in_force
         if trade.order_ref:
             order.orderRef = trade.order_ref
         return order
+
+    def _submit_as_cash_quantity(self, quantity: float) -> bool:
+        return (
+            self.settings.fractional_order_mode == FractionalOrderMode.CASH_QUANTITY
+            and _is_fractional_quantity(quantity)
+        )
 
     def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
         """Poll for currently open orders placed with a POMA orderRef, for reconciliation.
@@ -860,6 +872,8 @@ class IbkrBroker:
                 ib.sleep(1.0)
             contract = Stock(ticker, "SMART", "USD")
             order = LimitOrder(side.value, abs(quantity), new_limit_price)
+            if self._submit_as_cash_quantity(abs(quantity)):
+                _convert_to_cash_quantity(order, abs(quantity) * new_limit_price)
             order.tif = self.settings.order_time_in_force
             order.orderRef = order_ref
             if self.settings.ibkr_account:
@@ -946,6 +960,22 @@ def _parse_account_value(value: object) -> float | None:
     return parsed
 
 
+def _is_fractional_quantity(quantity: float) -> bool:
+    return abs(quantity - round(quantity)) > 1e-9
+
+
+def _convert_to_cash_quantity(order: MarketOrder | LimitOrder, cash_usd: float) -> None:
+    """Re-express the order as an IBKR cash-quantity order.
+
+    The TWS/Gateway API rejects fractional share quantities outright (error 10243), even for
+    accounts with fractional share permission; a cash-quantity order is the API-supported way
+    to get a fractional fill. The dollar amount carries the sizing, so the share quantity must
+    be zeroed -- IBKR derives the (fractional) share count from ``cashQty`` at execution.
+    """
+    order.totalQuantity = 0.0
+    order.cashQty = round(cash_usd, 2)
+
+
 def _probe_trading_permissions(ib: IB, settings: Settings) -> tuple[bool, str]:
     """Verify the current session can validate orders without transmitting a live order."""
     contract = Stock(TRADING_PERMISSION_PROBE_SYMBOL, "SMART", "USD")
@@ -975,7 +1005,41 @@ def _probe_trading_permissions(ib: IB, settings: Settings) -> tuple[bool, str]:
         detail_parts.append(f"init_margin_change={init_margin}")
     if warning:
         detail_parts.append(f"warning={warning}")
+    if settings.fractional_order_mode == FractionalOrderMode.CASH_QUANTITY:
+        fractional_ok, fractional_detail = _probe_fractional_cash_quantity(ib, settings)
+        if not fractional_ok:
+            return False, fractional_detail
+        detail_parts.append(fractional_detail)
     return True, ", ".join(detail_parts)
+
+
+def _probe_fractional_cash_quantity(ib: IB, settings: Settings) -> tuple[bool, str]:
+    """What-if a cash-quantity order to prove fractional sizing is accepted up front.
+
+    A session that cannot place cash-quantity orders (missing fractional share permission on
+    the account, or an ineligible account type) would otherwise cancel order after order
+    mid-rebalance until the consecutive-failure breaker trips; failing the readiness probe
+    turns that into one actionable preflight error.
+    """
+    contract = Stock(TRADING_PERMISSION_PROBE_SYMBOL, "SMART", "USD")
+    order = LimitOrder("BUY", 0, TRADING_PERMISSION_PROBE_LIMIT_PRICE)
+    order.cashQty = FRACTIONAL_PROBE_CASH_USD
+    order.whatIf = True
+    order.transmit = True
+    if settings.ibkr_account:
+        order.account = settings.ibkr_account
+    try:
+        ib.whatIfOrder(contract, order)
+    except Exception as exc:  # noqa: BLE001 - return the broker's readiness reason to ops/doctor
+        detail = str(exc) or exc.__class__.__name__
+        return (
+            False,
+            "IBKR rejected the cash-quantity what-if probe, so fractional-sized orders cannot "
+            "be submitted by this session. Enable fractional share trading for the account "
+            "(Client Portal -> Settings -> Account Settings -> Trading Experience & "
+            f"Permissions) or set FRACTIONAL_ORDER_MODE=whole_shares: {detail}",
+        )
+    return True, f"cash-quantity what-if probe accepted for {TRADING_PERMISSION_PROBE_SYMBOL}"
 
 
 def _looks_like_connection_failure(ib: IB, exc: Exception) -> bool:

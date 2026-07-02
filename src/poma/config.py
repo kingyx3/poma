@@ -6,7 +6,11 @@ from pathlib import Path
 from pydantic import Field, PositiveFloat, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from poma.execution_policy import build_execution_rules
+from poma.execution_policy import (
+    DEFAULT_EXECUTION_RULE,
+    WHOLE_SHARE_EXECUTION_RULE,
+    build_execution_rules,
+)
 from poma.models import InstrumentExecutionRule
 from poma.portfolio import CASH_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, parse_strategy_allocations
 from poma.strategies import default_registry
@@ -21,6 +25,28 @@ class TradingMode(StrEnum):
 class OrderType(StrEnum):
     LIMIT = "limit"
     MARKET = "market"
+
+
+class FractionalOrderMode(StrEnum):
+    """How a fractional-sized trade quantity is expressed to the broker.
+
+    IBKR's TWS/Gateway API rejects fractional share quantities outright (error 10243
+    "Fractional-sized order cannot be placed via API"), even for accounts with fractional
+    share permission. The API-supported way to get a fractional fill is a cash-quantity
+    order: the order carries a dollar amount and IBKR derives the (fractional) share count.
+    """
+
+    # Submit fractional-sized trades as cash-quantity orders; whole-share quantities are
+    # still submitted as plain share orders. Requires fractional share trading permission
+    # on the account (Client Portal -> Settings -> Trading Experience & Permissions).
+    CASH_QUANTITY = "cash_quantity"
+    # Floor every trade to a whole-share quantity and drop trades below one share. Safe
+    # everywhere, but a small managed cap cannot hold anything priced above its per-position
+    # notional in this mode.
+    WHOLE_SHARES = "whole_shares"
+    # Submit fractional share quantities as-is. IBKR cancels these with error 10243 today;
+    # kept only as an escape hatch should IBKR enable fractional share quantities via API.
+    SHARE_QUANTITY = "share_quantity"
 
 
 class ManagedCapMode(StrEnum):
@@ -106,6 +132,10 @@ class Settings(BaseSettings):
         alias="MAX_ORDER_NOTIONAL_USD",
     )
     max_daily_trades: PositiveInt = Field(default=100, alias="MAX_DAILY_TRADES")
+    fractional_order_mode: FractionalOrderMode = Field(
+        default=FractionalOrderMode.CASH_QUANTITY,
+        alias="FRACTIONAL_ORDER_MODE",
+    )
     non_fractional_tickers: str = Field(default="", alias="NON_FRACTIONAL_TICKERS")
     order_status_timeout_seconds: PositiveInt = Field(
         default=60,
@@ -241,6 +271,12 @@ class Settings(BaseSettings):
 
     def execution_rules(self) -> dict[str, InstrumentExecutionRule]:
         return build_execution_rules(self.non_fractional_tickers)
+
+    def default_execution_rule(self) -> InstrumentExecutionRule:
+        """The sizing rule applied to every ticker without a NON_FRACTIONAL_TICKERS override."""
+        if self.fractional_order_mode == FractionalOrderMode.WHOLE_SHARES:
+            return WHOLE_SHARE_EXECUTION_RULE
+        return DEFAULT_EXECUTION_RULE
 
     def assert_safe_for_execution(self) -> None:
         if self.trading_mode in {TradingMode.PAPER, TradingMode.LIVE} and not self.ibkr_account:

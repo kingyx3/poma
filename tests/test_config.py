@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from poma.config import Settings
+from poma.config import FractionalOrderMode, Settings
+from poma.execution_policy import DEFAULT_EXECUTION_RULE, WHOLE_SHARE_EXECUTION_RULE
 from poma.portfolio import CASH_STRATEGY_NAME, CURRENT_STRATEGY_NAME
 
 
@@ -52,6 +53,24 @@ def test_non_fractional_tickers_builds_whole_share_rules() -> None:
     rules = settings.execution_rules()
     assert set(rules) == {"AAPL", "MSFT"}
     assert rules["AAPL"].allows_fractional is False
+
+
+def test_fractional_order_mode_defaults_to_cash_quantity_with_fractional_sizing() -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+    )
+    assert settings.fractional_order_mode == FractionalOrderMode.CASH_QUANTITY
+    assert settings.default_execution_rule() == DEFAULT_EXECUTION_RULE
+
+
+def test_whole_shares_mode_forces_whole_share_default_rule() -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        FRACTIONAL_ORDER_MODE="whole_shares",
+    )
+    assert settings.default_execution_rule() == WHOLE_SHARE_EXECUTION_RULE
 
 
 def test_strategy_allocations_reject_unregistered_strategy_names() -> None:

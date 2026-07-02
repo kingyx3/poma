@@ -29,7 +29,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Run at least one full week in `paper`.
 - [ ] Review IBKR orders/fills against POMA reports.
 - [ ] Confirm no unresolved `completed_with_order_issues`, `blocked`, `failed`, cancelled, timed-out, or partial-fill runs remain unexplained.
-- [ ] Confirm order type policy and fractional-share behavior in the IBKR account. POMA sizes and submits fractional quantities by default; list any ticker IBKR rejects fractional orders for in `NON_FRACTIONAL_TICKERS`.
+- [ ] Confirm order type policy and fractional-share behavior in the IBKR account. POMA sizes fractionally by default and submits fractional-sized trades as cash-quantity orders (`FRACTIONAL_ORDER_MODE=cash_quantity`), because the IBKR API rejects fractional share quantities outright (error 10243). Enable fractional share trading for the account — including the paper account — in Client Portal → Settings → Account Settings → Trading Experience & Permissions, and confirm `poma ibkr-check` reports `cash-quantity what-if probe accepted`. If the account cannot get fractional permission, set `FRACTIONAL_ORDER_MODE=whole_shares` and size the portfolio so each position affords at least one share. List any ticker IBKR rejects fractional orders for in `NON_FRACTIONAL_TICKERS`.
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
 - [ ] Add live Gateway login settings before running live Gateway configuration.
 - [ ] Add the live account id before switching to `TRADING_MODE=live`.
