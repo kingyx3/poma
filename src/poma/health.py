@@ -91,7 +91,8 @@ def check_ibkr(settings: Settings) -> Check:
                 "ibkr",
                 result.connected,
                 detail
-                + ", market_data_warning=non-fatal configure-time probe; execution still requires fresh quotes before orders",
+                + ", market_data_warning=non-fatal configure-time probe; "
+                + "execution still requires fresh quotes before orders",
             )
         return Check("ibkr", False, detail)
     return Check("ibkr", result.connected, detail)
