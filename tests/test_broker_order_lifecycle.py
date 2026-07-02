@@ -306,14 +306,14 @@ def test_execution_quotes_treats_missing_tick_time_as_unknown_age(monkeypatch: p
         }
     )
     monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
-    broker = IbkrBroker(_settings(monkeypatch))
+    broker = IbkrBroker(_settings(monkeypatch, ALLOW_DELAYED_EXECUTION_QUOTES="false"))
 
     quotes = broker.execution_quotes(["NVDA"])
 
     assert quotes["NVDA"].age_seconds is None
     assert quotes["NVDA"].selected_price_as_of_utc is None
-    # ALLOW_DELAYED_EXECUTION_QUOTES defaults to false: no delayed retry is attempted, so only
-    # the live-mode request from _connect() is ever issued.
+    # With ALLOW_DELAYED_EXECUTION_QUOTES=false no delayed retry is attempted, so only the
+    # live-mode request from _connect() is ever issued.
     assert fake_ib.market_data_type_requests == [1]
 
 
@@ -384,7 +384,7 @@ def test_execution_quotes_captures_ibkr_error_when_no_tick_arrives(monkeypatch: 
         market_data_errors_by_symbol={"AAPL": (354, "Requested market data is not subscribed.")},
     )
     monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
-    broker = IbkrBroker(_settings(monkeypatch))
+    broker = IbkrBroker(_settings(monkeypatch, ALLOW_DELAYED_EXECUTION_QUOTES="false"))
 
     quotes = broker.execution_quotes(["AAPL"])
 

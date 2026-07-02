@@ -189,7 +189,7 @@ jobs:
           esac
           set_default UNIVERSE "us_top_market_cap"
           set_default RANK_LOOKBACK_DAYS "90"
-          set_default MAX_HOLDINGS "100"
+          set_default MAX_HOLDINGS "50"
           set_default STRATEGY_ALLOCATIONS "rank_velocity_size_equal_weight=0.98,cash=0.02"
           set_default DRY_RUN_PORTFOLIO_VALUE_USD "10000"
           set_default MANAGED_CAP_MODE "broker_total"
@@ -203,6 +203,9 @@ jobs:
           set_default LIMIT_OFFSET_BPS "10"
           set_default MAX_ORDER_NOTIONAL_USD "2000"
           set_default MAX_DAILY_TRADES "100"
+          # IBKR rejects fractional-sized API orders (error 10243); whole-share sizing is the
+          # default everywhere.
+          set_default FRACTIONAL_SHARES "false"
           set_default EXECUTION_PRICE_SOURCE "ibkr"
           set_default EXECUTION_PRICE_BASIS "side_of_market"
           set_default EXECUTION_QUOTE_MAX_AGE_SECONDS "60"

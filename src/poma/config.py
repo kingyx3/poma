@@ -75,7 +75,7 @@ class Settings(BaseSettings):
 
     universe: str = Field(default="us_top_market_cap", alias="UNIVERSE")
     rank_lookback_days: PositiveInt = Field(default=90, alias="RANK_LOOKBACK_DAYS")
-    max_holdings: PositiveInt = Field(default=100, alias="MAX_HOLDINGS")
+    max_holdings: PositiveInt = Field(default=50, alias="MAX_HOLDINGS")
     strategy_allocations: str = Field(
         default=DEFAULT_STRATEGY_ALLOCATIONS,
         alias="STRATEGY_ALLOCATIONS",
@@ -106,6 +106,10 @@ class Settings(BaseSettings):
         alias="MAX_ORDER_NOTIONAL_USD",
     )
     max_daily_trades: PositiveInt = Field(default=100, alias="MAX_DAILY_TRADES")
+    # IBKR rejects fractional-sized API orders (error 10243), so whole-share sizing is the
+    # default. FRACTIONAL_SHARES=true restores fractional sizing for accounts confirmed to
+    # accept fractional API orders, with NON_FRACTIONAL_TICKERS as per-ticker exceptions.
+    fractional_shares: bool = Field(default=False, alias="FRACTIONAL_SHARES")
     non_fractional_tickers: str = Field(default="", alias="NON_FRACTIONAL_TICKERS")
     order_status_timeout_seconds: PositiveInt = Field(
         default=60,
@@ -137,7 +141,14 @@ class Settings(BaseSettings):
         alias="EXECUTION_QUOTE_MAX_AGE_SECONDS",
     )
     execution_max_spread_bps: PositiveFloat = Field(default=50.0, alias="EXECUTION_MAX_SPREAD_BPS")
-    allow_delayed_execution_quotes: bool = Field(default=False, alias="ALLOW_DELAYED_EXECUTION_QUOTES")
+    # Whether a delayed broker quote may price an order. Defaults by trading mode when unset:
+    # true for dry_run/paper (accounts commonly lack the separate IBKR "API market data"
+    # real-time opt-in even when delayed data is available), false for live (deploy validation
+    # additionally hard-fails live with this set to true).
+    allow_delayed_execution_quotes: bool | None = Field(
+        default=None,
+        alias="ALLOW_DELAYED_EXECUTION_QUOTES",
+    )
     # When true, `poma ibkr-check` hard-fails unless the market data probe receives a
     # real-time-class tick (live or frozen); delayed-only or silent probes are never soft-passed.
     # Turn on to prove an account's real-time API market data entitlement actually works.
@@ -194,6 +205,9 @@ class Settings(BaseSettings):
         if not self.telegram_bot_token or not self.telegram_chat_id:
             raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
 
+        if self.allow_delayed_execution_quotes is None:
+            self.allow_delayed_execution_quotes = self.trading_mode != TradingMode.LIVE
+
         allocations = parse_strategy_allocations(self.strategy_allocations)
         registry = default_registry()
         unknown = sorted(
@@ -240,7 +254,10 @@ class Settings(BaseSettings):
         return parse_strategy_allocations(self.strategy_allocations)
 
     def execution_rules(self) -> dict[str, InstrumentExecutionRule]:
-        return build_execution_rules(self.non_fractional_tickers)
+        return build_execution_rules(
+            self.non_fractional_tickers,
+            fractional_shares=self.fractional_shares,
+        )
 
     def assert_safe_for_execution(self) -> None:
         if self.trading_mode in {TradingMode.PAPER, TradingMode.LIVE} and not self.ibkr_account:

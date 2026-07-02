@@ -175,7 +175,10 @@ def _retry_missing_quotes_as_delayed(ib: IB, market_data_by_ticker: dict[str, ob
     ib.reqMarketDataType(DELAYED_MARKET_DATA_TYPE)
     for ticker in missing_tickers:
         market_data_by_ticker[ticker] = ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
-    ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
+    # Delayed subscriptions take noticeably longer than live ones to produce a first tick (see
+    # DELAYED_PROBE_WAIT_MULTIPLIER); a live-sized wait here reads as "still no quote" and blocks
+    # every fallback ticker even though delayed data was about to arrive.
+    ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS * DELAYED_PROBE_WAIT_MULTIPLIER)
     ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
 
 

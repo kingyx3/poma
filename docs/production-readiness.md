@@ -29,7 +29,8 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Run at least one full week in `paper`.
 - [ ] Review IBKR orders/fills against POMA reports.
 - [ ] Confirm no unresolved `completed_with_order_issues`, `blocked`, `failed`, cancelled, timed-out, or partial-fill runs remain unexplained.
-- [ ] Confirm order type policy and fractional-share behavior in the IBKR account. POMA sizes and submits fractional quantities by default; list any ticker IBKR rejects fractional orders for in `NON_FRACTIONAL_TICKERS`.
+- [ ] Confirm order type policy in the IBKR account. POMA sizes and submits whole-share quantities by default (`FRACTIONAL_SHARES=false`) because the IBKR API rejects fractional order sizes (error 10243); only set `FRACTIONAL_SHARES=true` for accounts confirmed to accept fractional API orders.
+- [ ] Enable the account's real-time API market data entitlement before going live: subscribe to the relevant market data package in IBKR Account Management (e.g. US Securities Snapshot and Futures Value Bundle) and accept the exchange agreements, then verify with `poma ibkr-check` (`realtime_entitlement=yes`). Live trading blocks delayed quotes (`ALLOW_DELAYED_EXECUTION_QUOTES` must stay false), so without the entitlement every live order is quote-blocked (IBKR errors 10089/10167).
 - [ ] Confirm tax, FX, commission, and slippage assumptions.
 - [ ] Add live Gateway login settings before running live Gateway configuration.
 - [ ] Add the live account id before switching to `TRADING_MODE=live`.

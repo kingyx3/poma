@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 
 from poma.config import ExecutionPriceBasis, Settings
-from poma.models import ExecutionQuote, OrderSide, ProposedTrade
+from poma.execution_policy import resolve_execution_rule, rounded_execution_quantity
+from poma.models import ExecutionQuote, InstrumentExecutionRule, OrderSide, ProposedTrade
 
 # --- Limit price construction ----------------------------------------------------------------
 
@@ -105,11 +106,15 @@ def apply_execution_quotes(
     trades: list[ProposedTrade],
     quotes: dict[str, ExecutionQuote],
     settings: Settings,
+    rules: dict[str, InstrumentExecutionRule] | None = None,
 ) -> tuple[list[ProposedTrade], list[str]]:
     """Reprice every trade off a fresh broker quote, dropping any that fail a safety check.
 
     Quantity is recomputed from the trade's already-approved notional divided by the newly
     selected reference price, so a moved quote changes share count rather than order size.
+    When ``rules`` is provided, the recomputed quantity is re-rounded to what the instrument
+    can execute (whole shares by default), so repricing never reintroduces a fractional size
+    the broker would reject.
     """
     repriced: list[ProposedTrade] = []
     warnings: list[str] = []
@@ -129,10 +134,20 @@ def apply_execution_quotes(
 
         spread_bps = quote.spread_bps if quote.spread_bps is not None else compute_spread_bps(quote.bid, quote.ask)
         quantity = trade.notional / price
+        if rules is not None:
+            rule = resolve_execution_rule(trade.ticker, rules)
+            quantity = rounded_execution_quantity(quantity, trade.side, rule)
+            if quantity <= 0 or quantity < rule.min_quantity:
+                warnings.append(
+                    f"{trade.ticker}: repriced quantity {trade.notional / price:.6f} rounds "
+                    "below the tradable minimum for this instrument; skipping trade"
+                )
+                continue
         repriced.append(
             replace(
                 trade,
                 quantity=quantity,
+                notional=quantity * price,
                 reference_price=price,
                 limit_price=build_limit_price(trade.side, price, settings.limit_offset_bps),
                 reference_price_source=settings.execution_price_source.value,

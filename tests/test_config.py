@@ -19,14 +19,14 @@ def test_settings_accepts_telegram_config() -> None:
     assert settings.telegram_chat_id == "chat"
 
 
-def test_default_strategy_is_us_top_market_cap_top_100() -> None:
+def test_default_strategy_is_us_top_market_cap_top_50() -> None:
     settings = Settings(
         TELEGRAM_BOT_TOKEN="token",
         TELEGRAM_CHAT_ID="chat",
     )
     assert settings.universe == "us_top_market_cap"
     assert settings.rank_lookback_days == 90
-    assert settings.max_holdings == 100
+    assert settings.max_holdings == 50
     assert settings.strategy_allocation_map() == {
         CURRENT_STRATEGY_NAME: 0.98,
         CASH_STRATEGY_NAME: 0.02,
@@ -35,22 +35,28 @@ def test_default_strategy_is_us_top_market_cap_top_100() -> None:
     assert settings.min_weight_delta_pct == 0.0025
 
 
-def test_non_fractional_tickers_default_to_no_overrides() -> None:
+def test_execution_rules_default_every_instrument_to_whole_shares() -> None:
     settings = Settings(
         TELEGRAM_BOT_TOKEN="token",
         TELEGRAM_CHAT_ID="chat",
     )
-    assert settings.execution_rules() == {}
+    assert settings.fractional_shares is False
+    rules = settings.execution_rules()
+    assert set(rules) == {"*"}
+    assert rules["*"].allows_fractional is False
+    assert rules["*"].min_quantity == 1.0
 
 
-def test_non_fractional_tickers_builds_whole_share_rules() -> None:
+def test_fractional_shares_mode_restores_fractional_default_with_ticker_overrides() -> None:
     settings = Settings(
         TELEGRAM_BOT_TOKEN="token",
         TELEGRAM_CHAT_ID="chat",
+        FRACTIONAL_SHARES="true",
         NON_FRACTIONAL_TICKERS="aapl, MSFT",
     )
     rules = settings.execution_rules()
-    assert set(rules) == {"AAPL", "MSFT"}
+    assert set(rules) == {"*", "AAPL", "MSFT"}
+    assert rules["*"].allows_fractional is True
     assert rules["AAPL"].allows_fractional is False
 
 
@@ -108,8 +114,36 @@ def test_execution_pricing_defaults_favor_fresh_side_of_market_ibkr_quotes() -> 
     assert settings.execution_price_basis.value == "side_of_market"
     assert settings.execution_quote_max_age_seconds == 60
     assert settings.execution_max_spread_bps == 50.0
-    assert settings.allow_delayed_execution_quotes is False
+    # Unset, delayed-quote tolerance defaults per trading mode: dry_run/paper accounts commonly
+    # lack the separate IBKR "API market data" real-time opt-in, live must never price off
+    # delayed data.
+    assert settings.allow_delayed_execution_quotes is True
     assert settings.allow_last_price_fallback is False
+
+
+def test_delayed_execution_quotes_default_by_trading_mode() -> None:
+    paper = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        TRADING_MODE="paper",
+    )
+    assert paper.allow_delayed_execution_quotes is True
+
+    live = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        TRADING_MODE="live",
+        ALLOW_LIVE_TRADING=True,
+    )
+    assert live.allow_delayed_execution_quotes is False
+
+    explicit = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        TRADING_MODE="paper",
+        ALLOW_DELAYED_EXECUTION_QUOTES=False,
+    )
+    assert explicit.allow_delayed_execution_quotes is False
 
 
 def test_last_price_basis_requires_explicit_fallback_opt_in() -> None:
