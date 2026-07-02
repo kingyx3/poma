@@ -9,6 +9,8 @@ DEFAULT_IMAGE_REPOSITORY="${DEFAULT_IMAGE_REPOSITORY:-kingyx3/poma}"
 DEFAULT_IMAGE_TAG="${DEFAULT_IMAGE_TAG:-main}"
 EXPECTED_APP_UID="${EXPECTED_APP_UID:-1000}"
 EXPECTED_APP_GID="${EXPECTED_APP_GID:-1000}"
+DOCKER_DIAGNOSTIC_TIMEOUT="${DOCKER_DIAGNOSTIC_TIMEOUT:-30s}"
+DOCKER_PRUNE_TIMEOUT="${DOCKER_PRUNE_TIMEOUT:-2m}"
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -41,6 +43,14 @@ timeout_compose() {
   shift
 
   timeout --kill-after=30s "${duration}" docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+}
+
+bounded_docker_diagnostics() {
+  local label="$1"
+
+  log "Docker disk/cache usage ${label}:"
+  timeout --kill-after=10s "${DOCKER_DIAGNOSTIC_TIMEOUT}" docker system df || \
+    log "Docker disk/cache usage ${label} unavailable within ${DOCKER_DIAGNOSTIC_TIMEOUT}; continuing."
 }
 
 ensure_runtime_identity() {
@@ -98,13 +108,11 @@ COMPOSE
 
 pull_image() {
   docker compose version >/dev/null
-  log "Docker disk/cache usage before image pull:"
-  docker system df || true
+  bounded_docker_diagnostics "before image pull"
 
   timeout_compose 8m pull poma
 
-  log "Docker disk/cache usage after image pull:"
-  docker system df || true
+  bounded_docker_diagnostics "after image pull"
 }
 
 run_deploy_smoke() {
@@ -126,7 +134,9 @@ run_deploy_smoke() {
 prune_dangling_images() {
   # Repeated image deploys can leave dangling layers from older app images.
   # Remove only untagged leftovers so rollback candidates and useful pull cache remain.
-  docker image prune -f >/dev/null
+  # This is post-deploy cleanup only: bound it and keep deploy success if Docker is slow.
+  timeout --kill-after=30s "${DOCKER_PRUNE_TIMEOUT}" docker image prune -f >/dev/null || \
+    log "Dangling image prune unavailable within ${DOCKER_PRUNE_TIMEOUT}; deploy already completed."
 }
 
 script_start="$(date +%s)"
