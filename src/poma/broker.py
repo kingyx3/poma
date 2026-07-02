@@ -29,8 +29,12 @@ MARKET_DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed_froz
 DELAYED_MARKET_DATA_TYPES = {"delayed", "delayed_frozen"}
 LIVE_MARKET_DATA_TYPE = 1
 DELAYED_MARKET_DATA_TYPE = 3
-EXECUTION_QUOTE_WAIT_SECONDS = 2.0
-MARKET_DATA_PROBE_WAIT_SECONDS = 3.0
+# Delayed-data subscriptions can take noticeably longer than live ones to start ticking,
+# especially right after a Gateway restart before market data farm connections have settled.
+# A too-short wait here reads identically to "no entitlement at all" (no tick, no error), so err
+# generous: this runs once per rebalance/probe, not per symbol.
+EXECUTION_QUOTE_WAIT_SECONDS = 5.0
+MARKET_DATA_PROBE_WAIT_SECONDS = 5.0
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}

@@ -47,6 +47,13 @@ The failure was only visible after the fact, per order, in Telegram, with no ind
   `ALLOW_DELAYED_EXECUTION_QUOTES=true` for every `TRADING_MODE` except `live` (which keeps the
   conservative `false` default), so dev/stg paper trading uses delayed quotes for execution pricing
   out of the box instead of requiring a manual account-side fix before trading can work at all.
+- With delayed quotes enabled, a follow-up CI run still failed the market data check with no tick
+  and no captured error at all ("IBKR reported no error, request may still be warming up") --
+  delayed-data subscriptions take noticeably longer to start ticking than live ones, especially
+  right after the readiness loop's forced Gateway restart, and the combined wait (a 3s live attempt
+  plus a 2s delayed retry) wasn't long enough. `EXECUTION_QUOTE_WAIT_SECONDS` and
+  `MARKET_DATA_PROBE_WAIT_SECONDS` are now 5s each; this runs once per rebalance/probe, not per
+  symbol, so the extra wait is cheap next to a false "not entitled" verdict.
 
 ## Consequences
 
