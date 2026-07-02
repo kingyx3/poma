@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 import pytest
 from conftest import make_settings
 
-from poma.broker import probe_ibkr
+from poma.broker import IbkrHealth, probe_ibkr
+from poma.health import check_ibkr
 
 
 @dataclass
@@ -173,3 +174,51 @@ def test_probe_ibkr_skips_market_data_check_when_execution_price_source_is_snaps
 
     assert health.market_data_ok is True
     assert "skipped" in health.market_data_message
+
+
+def test_check_ibkr_treats_inconclusive_market_data_probe_as_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_probe(_settings):
+        return IbkrHealth(
+            connected=True,
+            accounts=["DU1234567"],
+            server_time="2026-07-02T04:02:09Z",
+            stock_positions=0,
+            trading_permissions_ok=True,
+            trading_permissions_message="what-if order preview accepted for AAPL",
+            market_data_ok=False,
+            market_data_message=(
+                "no market data tick received for AAPL after 5s "
+                "(ALLOW_DELAYED_EXECUTION_QUOTES=true); IBKR reported no error, request may still be warming up"
+            ),
+        )
+
+    monkeypatch.setattr("poma.broker.probe_ibkr", fake_probe)
+
+    check = check_ibkr(_settings(monkeypatch, ALLOW_DELAYED_EXECUTION_QUOTES="true"))
+
+    assert check.ok is True
+    assert "market_data_warning=non-fatal" in check.detail
+
+
+def test_check_ibkr_keeps_explicit_market_data_error_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_probe(_settings):
+        return IbkrHealth(
+            connected=True,
+            accounts=["DU1234567"],
+            server_time="2026-07-02T04:02:09Z",
+            stock_positions=0,
+            trading_permissions_ok=True,
+            trading_permissions_message="what-if order preview accepted for AAPL",
+            market_data_ok=False,
+            market_data_message=(
+                "no market data tick received for AAPL after 5s; "
+                "ibkr said: 354: Requested market data is not subscribed."
+            ),
+        )
+
+    monkeypatch.setattr("poma.broker.probe_ibkr", fake_probe)
+
+    check = check_ibkr(_settings(monkeypatch))
+
+    assert check.ok is False
+    assert "354: Requested market data is not subscribed." in check.detail

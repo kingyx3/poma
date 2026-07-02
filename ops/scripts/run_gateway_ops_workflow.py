@@ -26,6 +26,23 @@ def env(name: str, default: str | None = None) -> str:
     return value
 
 
+def _github_escape(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _emit_github_error(title: str, message: str) -> None:
+    print(f"::error title={_github_escape(title)}::{_github_escape(message)}", file=sys.stderr)
+
+
+def _append_step_summary(markdown: str) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    with Path(summary_path).open("a", encoding="utf-8") as handle:
+        handle.write(markdown.rstrip())
+        handle.write("\n")
+
+
 def run(command: list[str], *, timeout: int = 180, input_text: str | None = None) -> int:
     print("+", " ".join(command), flush=True)
     try:
@@ -107,14 +124,41 @@ def main() -> int:
         )
         return timed("Runtime repair/install", lambda: remote(install, timeout=900))
 
-    def diagnose() -> None:
+    def record_failure(stage: str, reason: str, next_action: str) -> None:
+        summary = (
+            "===== Gateway failure summary =====\n"
+            f"GATEWAY_FAILURE_STAGE={stage}\n"
+            f"GATEWAY_FAILURE_REASON={reason}\n"
+            f"GATEWAY_NEXT_ACTION={next_action}"
+        )
+        print(summary, file=sys.stderr)
+        _emit_github_error("Gateway configure failed", f"{stage}: {reason} Next action: {next_action}")
+        _append_step_summary(
+            "\n".join(
+                [
+                    "## Gateway configure failure",
+                    "",
+                    f"- **Environment:** `{deploy_environment}`",
+                    f"- **Action:** `{action}`",
+                    f"- **Stage:** `{stage}`",
+                    f"- **Reason:** {reason}",
+                    f"- **Next action:** {next_action}",
+                    "",
+                    "Full redacted diagnostics remain in the `Collect post-failure diagnostics` log group.",
+                ]
+            )
+        )
+
+    def diagnose(stage: str, reason: str, next_action: str) -> None:
+        record_failure(stage, reason, next_action)
         command = (
             f"sudo poma-diagnose-ibgateway startup-check --log-lines 80 --elapsed-seconds {twofa_timeout} "
             f"--fail-no-progress-after {no_progress_after} || true; "
             "sudo poma-diagnose-ibgateway progress --log-lines 80 || true; "
             f"sudo poma-diagnose-ibgateway diagnose --log-lines {log_lines}"
         )
-        timed("Collect gateway diagnostics", lambda: remote(command, timeout=240))
+        timed("Collect post-failure diagnostics", lambda: remote(command, timeout=240))
+        print(f"Diagnostics collected successfully; original failure remains: {stage} - {reason}")
 
     def restart_gateway_for_trading_login(reason: str) -> None:
         print(reason)
@@ -174,18 +218,26 @@ def main() -> int:
                     )
                     check_status = remote(check, timeout=240)
                     if check_status == 0:
-                        print("IBKR API handshake and trading permission preview succeeded; Gateway is ready to submit orders.")
+                        print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
                         return 0
                     if restarts >= max_trading_login_restarts:
+                        reason = (
+                            "IBKR API socket is open, but poma ibkr-check still fails after "
+                            f"{restarts} forced fresh-login restart(s)."
+                        )
                         print(
-                            "ERROR: the IBKR API socket is open but the what-if trading preview still fails "
-                            f"after {restarts} forced fresh-login restart(s). The Gateway keeps logging in "
-                            "read-only or without Trading/Market-Data permissions, which a restart cannot fix. "
-                            "Verify the IBKR account's API settings have 'Read-Only API' disabled and that "
-                            f"Trading and Market Data subscriptions are active for the {mode} account.",
+                            "ERROR: "
+                            + reason
+                            + " Verify the account's API settings have 'Read-Only API' disabled and that Trading and Market Data subscriptions are active for the "
+                            + mode
+                            + " account.",
                             file=sys.stderr,
                         )
-                        diagnose()
+                        diagnose(
+                            "ibkr-check",
+                            reason,
+                            "Read the ibkr fail line immediately above this summary. If it says unreachable/TimeoutError with the socket open, rerun after the VM settles; if it cites IBKR market-data/trading permissions, fix the IBKR account setting.",
+                        )
                         return 1
                     restarts += 1
                     restart_gateway_for_trading_login(
@@ -205,18 +257,26 @@ def main() -> int:
                         "ERROR: Gateway startup stalled before opening the API socket; collecting diagnostics.",
                         file=sys.stderr,
                     )
-                    diagnose()
+                    diagnose(
+                        "gateway-startup",
+                        "Gateway startup stalled before opening the API socket.",
+                        "Inspect the visible startup diagnostic and recent IBC/Gateway log hints in the diagnostics group.",
+                    )
                     return 1
             else:
                 stable = 0
             time.sleep(poll_interval_seconds)
             attempt += 1
-        print(
-            "ERROR: broker auth, Gateway API, or trading-permission readiness timed out before the API "
-            f"socket became stably tradable ({restarts} forced restart(s) used); collecting diagnostics.",
-            file=sys.stderr,
+        reason = (
+            "Broker auth, Gateway API, or trading-permission readiness timed out before the API "
+            f"socket became stably tradable ({restarts} forced restart(s) used)."
         )
-        diagnose()
+        print(f"ERROR: {reason} Collecting diagnostics.", file=sys.stderr)
+        diagnose(
+            "readiness-timeout",
+            reason,
+            "Check whether Gateway reached login/2FA, whether port 7497 opened, and whether the VM was CPU/memory constrained during poma ibkr-check.",
+        )
         return 1
 
     if timed("GCP project configuration", lambda: gcloud("config", "set", "project", project_id, timeout=60)) != 0:
@@ -307,7 +367,11 @@ def main() -> int:
     print("Force fresh ibgateway login after IBC configuration")
     # Fresh 2FA challenge wait is enforced for live configure only; paper skips it.
     if timed("Restart ibgateway after IBC configuration", lambda: remote("sudo systemctl restart ibgateway", timeout=240)) != 0:
-        diagnose()
+        diagnose(
+            "gateway-restart",
+            "ibgateway service restart failed after IBC configuration.",
+            "Inspect systemctl status and journalctl in the diagnostics group, then rerun configure after the service is repaired.",
+        )
         return 1
     if mode == "paper":
         print("Paper Gateway configure will verify API and trading readiness directly.")
@@ -319,7 +383,11 @@ def main() -> int:
     )
     if timed("Fresh live 2FA challenge wait", lambda: remote(wait_command, timeout=480)) != 0:
         print("No fresh IBKR mobile 2FA evidence appeared; refusing live configure success.", file=sys.stderr)
-        diagnose()
+        diagnose(
+            "live-2fa",
+            "Fresh live 2FA approval evidence was not observed before the timeout.",
+            "Approve the IBKR Mobile prompt and rerun configure-live. If no prompt appears, inspect the IBC login-stage diagnostics.",
+        )
         return 1
     return api_ready(mode, required=True)
 

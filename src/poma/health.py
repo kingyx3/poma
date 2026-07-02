@@ -5,12 +5,28 @@ from dataclasses import dataclass
 from poma.config import Settings, TradingMode
 from poma.data import build_data_client
 
+_SOFT_MARKET_DATA_FAILURE_HINTS = (
+    "IBKR reported no error",
+    "request may still be warming up",
+)
+
 
 @dataclass(frozen=True)
 class Check:
     name: str
     ok: bool
     detail: str
+
+
+def _market_data_failure_is_soft(message: str) -> bool:
+    """Return true for inconclusive market-data probes that should not fail configure.
+
+    During Gateway configure the US market is often closed and the tiny dev VM may still be
+    warming up after a Gateway restart. A missing tick with an explicit IBKR entitlement/trading
+    error remains a hard failure, but a missing tick with no broker error is not actionable enough
+    to block configure; live execution still requires fresh quotes before any order is submitted.
+    """
+    return any(hint in message for hint in _SOFT_MARKET_DATA_FAILURE_HINTS)
 
 
 def check_runtime_config(settings: Settings) -> Check:
@@ -70,6 +86,14 @@ def check_ibkr(settings: Settings) -> Check:
     if not result.trading_permissions_ok:
         return Check("ibkr", False, detail)
     if not result.market_data_ok:
+        if _market_data_failure_is_soft(result.market_data_message):
+            return Check(
+                "ibkr",
+                result.connected,
+                detail
+                + ", market_data_warning=non-fatal configure-time probe; "
+                + "execution still requires fresh quotes before orders",
+            )
         return Check("ibkr", False, detail)
     return Check("ibkr", result.connected, detail)
 
