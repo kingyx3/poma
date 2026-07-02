@@ -51,6 +51,26 @@ class FakeMarketData:
 
 
 @dataclass
+class FakeEvent:
+    """Minimal stand-in for eventkit's ``Event``: supports ``+=``/``-=`` and firing listeners."""
+
+    listeners: list = field(default_factory=list)
+
+    def __iadd__(self, listener):
+        self.listeners.append(listener)
+        return self
+
+    def __isub__(self, listener):
+        if listener in self.listeners:
+            self.listeners.remove(listener)
+        return self
+
+    def emit(self, *args) -> None:
+        for listener in list(self.listeners):
+            listener(*args)
+
+
+@dataclass
 class FakeIB:
     open_trades: list[FakeTrade] = field(default_factory=list)
     connected: bool = False
@@ -63,6 +83,10 @@ class FakeIB:
     cancelled_market_data_symbols: list[str] = field(default_factory=list)
     market_data_type_requests: list[int] = field(default_factory=list)
     current_market_data_type: int = 1
+    market_data_errors_by_symbol: dict[str, tuple[int, str]] = field(default_factory=dict)
+    general_market_data_errors: list[tuple[int, str]] = field(default_factory=list)
+    general_errors_emitted: bool = False
+    errorEvent: FakeEvent = field(default_factory=FakeEvent)
 
     def connect(self, *_args, **_kwargs) -> None:
         self.connected = True
@@ -101,6 +125,14 @@ class FakeIB:
         return None
 
     def reqMktData(self, contract, *_args, **_kwargs):  # noqa: N802, ANN201 - mirrors ib_insync API
+        if not self.general_errors_emitted and self.general_market_data_errors:
+            for code, message in self.general_market_data_errors:
+                self.errorEvent.emit(-1, code, message, None)
+            self.general_errors_emitted = True
+        error = self.market_data_errors_by_symbol.get(contract.symbol)
+        if error is not None:
+            code, message = error
+            self.errorEvent.emit(-1, code, message, contract)
         if self.current_market_data_type == 3 and contract.symbol in self.market_data_after_delayed_by_symbol:
             return self.market_data_after_delayed_by_symbol[contract.symbol]
         return self.market_data_by_symbol[contract.symbol]
@@ -339,6 +371,59 @@ def test_execution_quotes_does_not_retry_tickers_that_already_have_a_live_tick(
     assert quotes["AAPL"].is_delayed is False
     # No missing tickers, so the delayed-data retry path is never entered.
     assert fake_ib.market_data_type_requests == [1]
+
+
+def test_execution_quotes_captures_ibkr_error_when_no_tick_arrives(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "AAPL": FakeMarketData(contract=FakeContract(symbol="AAPL"), time=None),
+        },
+        market_data_errors_by_symbol={"AAPL": (354, "Requested market data is not subscribed.")},
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    quotes = broker.execution_quotes(["AAPL"])
+
+    assert quotes["AAPL"].age_seconds is None
+    assert quotes["AAPL"].broker_error == "354: Requested market data is not subscribed."
+
+
+def test_execution_quotes_falls_back_to_general_broker_error_when_no_per_symbol_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "AAPL": FakeMarketData(contract=FakeContract(symbol="AAPL"), time=None),
+        },
+        general_market_data_errors=[(2103, "Market data farm connection is broken:usfarm")],
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    quotes = broker.execution_quotes(["AAPL"])
+
+    assert quotes["AAPL"].age_seconds is None
+    assert quotes["AAPL"].broker_error == "2103: Market data farm connection is broken:usfarm"
+
+
+def test_execution_quotes_does_not_report_broker_error_when_a_tick_arrives(monkeypatch: pytest.MonkeyPatch) -> None:
+    tick_time = datetime.now(UTC)
+    fake_ib = FakeIB(
+        market_data_by_symbol={
+            "AAPL": FakeMarketData(
+                contract=FakeContract(symbol="AAPL"), bid=199.90, ask=200.10, last=200.00, time=tick_time
+            ),
+        },
+        general_market_data_errors=[(2104, "Market data farm connection is OK:usfarm")],
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    quotes = broker.execution_quotes(["AAPL"])
+
+    assert quotes["AAPL"].age_seconds is not None
+    assert quotes["AAPL"].broker_error is None
 
 
 def _result(status: str, *, filled: float = 0.0, message: str | None = None) -> OrderResult:

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 
 from ib_insync import IB, LimitOrder, MarketOrder, Stock, Trade
 
-from poma.config import OrderType, Settings, TradingMode
+from poma.config import ExecutionPriceSource, OrderType, Settings, TradingMode
 from poma.execution_pricing import compute_spread_bps
 from poma.models import (
     AccountSnapshot,
@@ -28,7 +29,12 @@ MARKET_DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed_froz
 DELAYED_MARKET_DATA_TYPES = {"delayed", "delayed_frozen"}
 LIVE_MARKET_DATA_TYPE = 1
 DELAYED_MARKET_DATA_TYPE = 3
-EXECUTION_QUOTE_WAIT_SECONDS = 2.0
+# Delayed-data subscriptions can take noticeably longer than live ones to start ticking,
+# especially right after a Gateway restart before market data farm connections have settled.
+# A too-short wait here reads identically to "no entitlement at all" (no tick, no error), so err
+# generous: this runs once per rebalance/probe, not per symbol.
+EXECUTION_QUOTE_WAIT_SECONDS = 5.0
+MARKET_DATA_PROBE_WAIT_SECONDS = 5.0
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
@@ -37,6 +43,7 @@ BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
 ORDER_NOT_ACCEPTED_STATUS = "OrderNotAccepted"
 TRADING_PERMISSION_PROBE_SYMBOL = "AAPL"
 TRADING_PERMISSION_PROBE_LIMIT_PRICE = 1.0
+MARKET_DATA_PROBE_SYMBOL = TRADING_PERMISSION_PROBE_SYMBOL
 USD_CASH_TAGS = ("TotalCashValue", "TotalCashBalance", "CashBalance", "SettledCash")
 NET_LIQUIDATION_TAGS = ("NetLiquidation", "NetLiquidationByCurrency")
 GROSS_POSITION_VALUE_TAGS = ("GrossPositionValue",)
@@ -60,6 +67,128 @@ class IbkrHealth:
     stock_positions: int
     trading_permissions_ok: bool
     trading_permissions_message: str
+    market_data_ok: bool
+    market_data_message: str
+
+
+@dataclass
+class _MarketDataErrors:
+    """IBKR API error/warning callbacks captured while market data was being requested."""
+
+    per_symbol: dict[str, list[str]] = field(default_factory=dict)
+    general: list[str] = field(default_factory=list)
+
+
+@contextmanager
+def _collect_market_data_errors(ib: IB) -> Iterator[_MarketDataErrors]:
+    """Capture ``ib.errorEvent`` callbacks fired while a market data request is outstanding.
+
+    ib_insync logs these (e.g. error 354 "not subscribed", warning 10167 "delayed market data
+    not available", 2103-2108 market data farm connection status) without raising, so a ticker
+    that never receives a tick looks identical whether the account lacks entitlements, the data
+    farm connection is down, or the request is merely still warming up. Surfacing the raw IBKR
+    text turns that silence into an actionable reason.
+    """
+    errors = _MarketDataErrors()
+
+    def on_error(_req_id: int, error_code: int, error_string: str, contract: object) -> None:
+        message = f"{error_code}: {error_string}"
+        symbol = getattr(contract, "symbol", None) if contract is not None else None
+        if symbol:
+            errors.per_symbol.setdefault(str(symbol).upper(), []).append(message)
+        else:
+            errors.general.append(message)
+
+    ib.errorEvent += on_error
+    try:
+        yield errors
+    finally:
+        ib.errorEvent -= on_error
+
+
+def _connect_ib(settings: Settings, *, client_id: int, timeout: float) -> IB:
+    """Connect to IBKR and explicitly request live market data on this session.
+
+    Gateway remembers whichever market data type was last requested on a client id rather than
+    defaulting to live every session, so a fresh connection can otherwise silently return no
+    ticks at all even with live entitlements in place.
+    """
+    ib = IB()
+    try:
+        ib.connect(
+            settings.ibkr_host,
+            settings.ibkr_port,
+            clientId=client_id,
+            account=settings.ibkr_account or "",
+            timeout=timeout,
+        )
+        ib.RequestTimeout = timeout
+        ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
+    except Exception:
+        ib.disconnect()
+        raise
+    return ib
+
+
+def _retry_missing_quotes_as_delayed(ib: IB, market_data_by_ticker: dict[str, object], *, allow_delayed: bool) -> None:
+    """Re-request, as delayed data, any ticker that got no tick at all from the live request.
+
+    `reqMarketDataType` only affects subsequent requests, so tickers that already received a
+    live tick keep it; only the ones with no tick are cancelled and re-subscribed under delayed
+    data. Selection still enforces `ALLOW_DELAYED_EXECUTION_QUOTES` per quote, so a symbol
+    without even delayed data available still blocks execution as before.
+    """
+    if not allow_delayed:
+        return
+    missing_tickers = [
+        ticker
+        for ticker, market_data in market_data_by_ticker.items()
+        if not isinstance(getattr(market_data, "time", None), datetime)
+    ]
+    if not missing_tickers:
+        return
+    for ticker in missing_tickers:
+        ib.cancelMktData(getattr(market_data_by_ticker[ticker], "contract"))  # noqa: B009
+    ib.reqMarketDataType(DELAYED_MARKET_DATA_TYPE)
+    for ticker in missing_tickers:
+        market_data_by_ticker[ticker] = ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
+    ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
+    ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
+
+
+def _probe_market_data(ib: IB, settings: Settings) -> tuple[bool, str]:
+    """Confirm the session actually receives a market data tick, not just an open socket.
+
+    A Gateway session can be fully authenticated and trade-enabled while still returning no
+    ticks at all -- e.g. a paper account whose market data sharing was never fully enabled, or
+    an exchange data agreement that was never accepted for this account. Checking this at
+    Gateway-configure time turns a silent per-order "missing quote timestamp" block during
+    every future rebalance into a loud, actionable readiness failure instead.
+    """
+    contract = Stock(MARKET_DATA_PROBE_SYMBOL, "SMART", "USD")
+    with _collect_market_data_errors(ib) as errors:
+        market_data_by_ticker: dict[str, object] = {
+            MARKET_DATA_PROBE_SYMBOL: ib.reqMktData(contract, "", False, False)
+        }
+        ib.sleep(MARKET_DATA_PROBE_WAIT_SECONDS)
+        _retry_missing_quotes_as_delayed(
+            ib, market_data_by_ticker, allow_delayed=settings.allow_delayed_execution_quotes
+        )
+        market_data = market_data_by_ticker[MARKET_DATA_PROBE_SYMBOL]
+        ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
+
+    tick_time = getattr(market_data, "time", None)
+    if isinstance(tick_time, datetime):
+        market_data_type = MARKET_DATA_TYPE_NAMES.get(getattr(market_data, "marketDataType", None), "unknown")
+        return True, f"received {market_data_type} tick for {MARKET_DATA_PROBE_SYMBOL}"
+
+    detail = "; ".join(errors.per_symbol.get(MARKET_DATA_PROBE_SYMBOL, []) or errors.general)
+    reason = f"; ibkr said: {detail}" if detail else "; IBKR reported no error, request may still be warming up"
+    return False, (
+        f"no market data tick received for {MARKET_DATA_PROBE_SYMBOL} after "
+        f"{MARKET_DATA_PROBE_WAIT_SECONDS:.0f}s (ALLOW_DELAYED_EXECUTION_QUOTES="
+        f"{str(settings.allow_delayed_execution_quotes).lower()}){reason}"
+    )
 
 
 def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
@@ -67,20 +196,19 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
 
     Places no orders. Used by the ``doctor`` command and ops verification.
     """
-    ib = IB()
-    ib.connect(
-        settings.ibkr_host,
-        settings.ibkr_port,
-        clientId=settings.ibkr_client_id + HEALTH_CLIENT_ID_OFFSET,
-        account=settings.ibkr_account or "",
-        timeout=timeout,
-    )
-    ib.RequestTimeout = timeout
+    ib = _connect_ib(settings, client_id=settings.ibkr_client_id + HEALTH_CLIENT_ID_OFFSET, timeout=timeout)
     try:
         accounts = [account for account in ib.managedAccounts() if account]
         server_time = str(ib.reqCurrentTime())
         stock_positions = sum(1 for item in ib.portfolio() if item.contract.secType == "STK")
         trading_permissions_ok, trading_permissions_message = _probe_trading_permissions(ib, settings)
+        if settings.execution_price_source == ExecutionPriceSource.IBKR:
+            market_data_ok, market_data_message = _probe_market_data(ib, settings)
+        else:
+            market_data_ok, market_data_message = (
+                True,
+                f"skipped (EXECUTION_PRICE_SOURCE={settings.execution_price_source.value})",
+            )
         return IbkrHealth(
             connected=ib.isConnected(),
             accounts=accounts,
@@ -88,6 +216,8 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
             stock_positions=stock_positions,
             trading_permissions_ok=trading_permissions_ok,
             trading_permissions_message=trading_permissions_message,
+            market_data_ok=market_data_ok,
+            market_data_message=market_data_message,
         )
     finally:
         ib.disconnect()
@@ -200,23 +330,9 @@ class IbkrBroker:
         self.settings = settings
 
     def _connect(self) -> IB:
-        ib = IB()
+        ib = _connect_ib(self.settings, client_id=self.settings.ibkr_client_id, timeout=IBKR_CONNECT_TIMEOUT_SECONDS)
         try:
-            ib.connect(
-                self.settings.ibkr_host,
-                self.settings.ibkr_port,
-                clientId=self.settings.ibkr_client_id,
-                account=self.settings.ibkr_account or "",
-                timeout=IBKR_CONNECT_TIMEOUT_SECONDS,
-            )
-            ib.RequestTimeout = IBKR_CONNECT_TIMEOUT_SECONDS
             self._assert_connected(ib)
-            # Gateway remembers whichever market data type was last requested on this client id
-            # rather than defaulting to live every session, so a fresh connection can silently
-            # return no ticks at all even once the account has live entitlements. Request live
-            # data explicitly every connection instead of relying on Gateway's session state or
-            # a one-time TWS/Gateway UI setting.
-            ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
         except Exception:
             ib.disconnect()
             raise
@@ -572,46 +688,27 @@ class IbkrBroker:
         ib = self._connect()
         try:
             self._assert_connected(ib)
-            market_data_by_ticker = {
-                ticker: ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
-                for ticker in unique_tickers
-            }
-            ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
-            if self.settings.allow_delayed_execution_quotes:
-                self._retry_missing_quotes_as_delayed(ib, market_data_by_ticker)
-            retrieved_at = datetime.now(UTC)
-            quotes = {
-                ticker: _execution_quote_from_market_data(ticker, market_data, retrieved_at)
-                for ticker, market_data in market_data_by_ticker.items()
-            }
+            with _collect_market_data_errors(ib) as errors:
+                market_data_by_ticker: dict[str, object] = {
+                    ticker: ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
+                    for ticker in unique_tickers
+                }
+                ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
+                _retry_missing_quotes_as_delayed(
+                    ib, market_data_by_ticker, allow_delayed=self.settings.allow_delayed_execution_quotes
+                )
+                retrieved_at = datetime.now(UTC)
+                quotes = {
+                    ticker: _execution_quote_from_market_data(
+                        ticker, market_data, retrieved_at, errors.per_symbol.get(ticker), errors.general
+                    )
+                    for ticker, market_data in market_data_by_ticker.items()
+                }
             for market_data in market_data_by_ticker.values():
-                ib.cancelMktData(market_data.contract)
+                ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
             return quotes
         finally:
             ib.disconnect()
-
-    def _retry_missing_quotes_as_delayed(self, ib: IB, market_data_by_ticker: dict[str, object]) -> None:
-        """Re-request, as delayed data, any ticker that got no tick at all from the live request.
-
-        `reqMarketDataType` only affects subsequent requests, so tickers that already received a
-        live tick keep it; only the ones with no tick are cancelled and re-subscribed under
-        delayed data. Selection still enforces `ALLOW_DELAYED_EXECUTION_QUOTES` per quote, so a
-        symbol without even delayed data available still blocks execution as before.
-        """
-        missing_tickers = [
-            ticker
-            for ticker, market_data in market_data_by_ticker.items()
-            if not isinstance(getattr(market_data, "time", None), datetime)
-        ]
-        if not missing_tickers:
-            return
-        for ticker in missing_tickers:
-            ib.cancelMktData(getattr(market_data_by_ticker[ticker], "contract"))  # noqa: B009
-        ib.reqMarketDataType(DELAYED_MARKET_DATA_TYPE)
-        for ticker in missing_tickers:
-            market_data_by_ticker[ticker] = ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
-        ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
-        ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
 
     def cancel_order(self, order_id: int) -> bool:
         ib = self._connect()
@@ -832,7 +929,13 @@ def _valid_price(value: float | None) -> float | None:
     return parsed
 
 
-def _execution_quote_from_market_data(ticker: str, market_data: object, retrieved_at: datetime) -> ExecutionQuote:
+def _execution_quote_from_market_data(
+    ticker: str,
+    market_data: object,
+    retrieved_at: datetime,
+    per_symbol_errors: list[str] | None,
+    general_errors: list[str],
+) -> ExecutionQuote:
     bid = _valid_price(getattr(market_data, "bid", None))
     ask = _valid_price(getattr(market_data, "ask", None))
     last = _valid_price(getattr(market_data, "last", None))
@@ -841,6 +944,13 @@ def _execution_quote_from_market_data(ticker: str, market_data: object, retrieve
     tick_time_iso = tick_time.isoformat() if isinstance(tick_time, datetime) else None
     age_seconds = (retrieved_at - tick_time).total_seconds() if isinstance(tick_time, datetime) else None
     market_data_type = MARKET_DATA_TYPE_NAMES.get(getattr(market_data, "marketDataType", None))
+    broker_error = None
+    if age_seconds is None:
+        # A farm-wide connectivity/entitlement problem fires without a per-symbol contract, so
+        # every ticker in the batch falls back to the same general reason rather than reporting
+        # nothing just because IBKR didn't attribute the error to this specific symbol.
+        combined = per_symbol_errors or general_errors
+        broker_error = "; ".join(combined) if combined else None
     return ExecutionQuote(
         ticker=ticker,
         source="ibkr",
@@ -854,6 +964,7 @@ def _execution_quote_from_market_data(ticker: str, market_data: object, retrieve
         spread_bps=compute_spread_bps(bid, ask),
         is_delayed=market_data_type in DELAYED_MARKET_DATA_TYPES,
         raw_market_data_type=market_data_type,
+        broker_error=broker_error,
     )
 
 

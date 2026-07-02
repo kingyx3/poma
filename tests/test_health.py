@@ -38,6 +38,8 @@ def test_check_ibkr_success_when_account_matches_and_session_is_trade_enabled(mo
             3,
             True,
             "what-if order preview accepted for AAPL",
+            True,
+            "received live tick for AAPL",
         ),
     )
     check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
@@ -56,6 +58,8 @@ def test_check_ibkr_fails_when_session_is_not_trade_enabled(monkeypatch) -> None
             3,
             False,
             "IBKR session is connected but not trading-enabled",
+            True,
+            "received live tick for AAPL",
         ),
     )
     check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
@@ -73,11 +77,32 @@ def test_check_ibkr_fails_on_account_mismatch(monkeypatch) -> None:
             0,
             True,
             "what-if order preview accepted for AAPL",
+            True,
+            "received live tick for AAPL",
         ),
     )
     check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
     assert not check.ok
     assert "not in" in check.detail
+
+
+def test_check_ibkr_fails_when_market_data_never_arrives(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "poma.broker.probe_ibkr",
+        lambda settings, *, timeout=20.0: IbkrHealth(
+            True,
+            ["DU123"],
+            "now",
+            3,
+            True,
+            "what-if order preview accepted for AAPL",
+            False,
+            "no market data tick received for AAPL after 3s; ibkr said: 354: Requested market data is not subscribed.",
+        ),
+    )
+    check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
+    assert not check.ok
+    assert "354: Requested market data is not subscribed" in check.detail
 
 
 def test_run_checks_covers_runtime_config_provider_and_ibkr() -> None:

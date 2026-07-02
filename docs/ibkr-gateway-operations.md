@@ -58,6 +58,15 @@ The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECR
 
 The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Pull-request Auto CI/CD uses `configure-paper` for the dev Gateway check so paper broker-login and authenticated API regressions are caught before merge. Configure and socket verification wait for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, print the redacted handshake tail on failure, and tolerate a transient post-socket service restart until the bounded readiness deadline. Gateway Ops allows up to 600 seconds for the IBC/Gateway login path so slow first starts do not fail while Gateway is still progressing. Live configure also waits for fresh mobile-approval evidence before the authenticated API check.
 
+`poma ibkr-check` also requests a live market data tick for a probe symbol (falling back to
+delayed data when `ALLOW_DELAYED_EXECUTION_QUOTES=true`), not just the account/trading-permission
+handshake. A Gateway session can be fully authenticated and trade-enabled while the account still
+has no market data entitlement -- e.g. a paper account whose market data sharing was enabled but
+has not fully propagated yet. Configure now fails loudly on that with the underlying IBKR error
+text (e.g. `354: Requested market data is not subscribed.`) instead of silently succeeding and
+only surfacing the gap later as a `QuoteBlocked` order during the next rebalance. See
+[`adr/0003-ibkr-market-data-readiness-check.md`](adr/0003-ibkr-market-data-readiness-check.md).
+
 The service starts raw IB Gateway until `/home/poma/ibc/config.ini` exists. After setup, it starts Gateway through IBC as one foreground systemd process and refuses to fall back to raw Gateway if the configured IBC launch path is broken. The service supervisor only treats the real Java Gateway process or API listener as meaningful startup progress, not wrapper shell commands that merely contain Gateway paths. It also pins `LoginDialogDisplayTimeout=240` before launch so slow e2-micro cold starts do not loop on IBC's default 60-second login-dialog timeout.
 
 ## Credential handling rules

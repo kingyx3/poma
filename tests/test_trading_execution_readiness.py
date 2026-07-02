@@ -133,6 +133,8 @@ def test_ibkr_health_fails_when_configured_account_is_not_managed(
             stock_positions=0,
             trading_permissions_ok=True,
             trading_permissions_message="what-if order preview accepted for AAPL",
+            market_data_ok=True,
+            market_data_message="received live tick for AAPL",
         )
 
     monkeypatch.setattr("poma.broker.probe_ibkr", fake_probe)

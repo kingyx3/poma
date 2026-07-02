@@ -53,7 +53,8 @@ def select_execution_price(
 
     max_age = settings.execution_quote_max_age_seconds
     if quote.age_seconds is None:
-        return None, [f"missing quote timestamp for {ticker}; block execution"]
+        reason = f" ({quote.broker_error})" if quote.broker_error else ""
+        return None, [f"missing quote timestamp for {ticker}{reason}; block execution"]
     if quote.age_seconds > max_age:
         return None, [
             f"stale {quote.source} quote for {ticker} age={quote.age_seconds:.0f}s "

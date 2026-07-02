@@ -57,7 +57,8 @@ def check_ibkr(settings: Settings) -> Check:
         f"connected to {settings.ibkr_host}:{settings.ibkr_port}, "
         f"accounts={result.accounts or ['none']}, "
         f"server_time={result.server_time}, stock_positions={result.stock_positions}, "
-        f"trading_permissions={result.trading_permissions_message}"
+        f"trading_permissions={result.trading_permissions_message}, "
+        f"market_data={result.market_data_message}"
     )
     account_ok = settings.ibkr_account in result.accounts
     if not account_ok:
@@ -67,6 +68,8 @@ def check_ibkr(settings: Settings) -> Check:
             f"configured IBKR_ACCOUNT={settings.ibkr_account} not in {result.accounts}",
         )
     if not result.trading_permissions_ok:
+        return Check("ibkr", False, detail)
+    if not result.market_data_ok:
         return Check("ibkr", False, detail)
     return Check("ibkr", result.connected, detail)
 

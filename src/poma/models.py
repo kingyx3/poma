@@ -137,6 +137,7 @@ class ExecutionQuote:
     spread_bps: float | None = None
     is_delayed: bool = False
     raw_market_data_type: str | None = None
+    broker_error: str | None = None
 
 
 @dataclass(frozen=True)

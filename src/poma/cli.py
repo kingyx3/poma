@@ -421,8 +421,9 @@ def doctor() -> None:
 def ibkr_check() -> None:
     """Probe only the IBKR API handshake (ignores the data provider); exit non-zero on failure.
 
-    Used by the IB Gateway Ops workflow to confirm the gateway is genuinely authenticated and
-    serving the API, not merely listening on the socket.
+    Used by the IB Gateway Ops workflow to confirm the gateway is genuinely authenticated,
+    trade-enabled, and (when EXECUTION_PRICE_SOURCE=ibkr) actually serving market data ticks --
+    not merely listening on the socket.
     """
     settings = get_settings()
     check = check_ibkr(settings)
