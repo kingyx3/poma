@@ -9,8 +9,8 @@ DEFAULT_IMAGE_REPOSITORY="${DEFAULT_IMAGE_REPOSITORY:-kingyx3/poma}"
 DEFAULT_IMAGE_TAG="${DEFAULT_IMAGE_TAG:-main}"
 EXPECTED_APP_UID="${EXPECTED_APP_UID:-1000}"
 EXPECTED_APP_GID="${EXPECTED_APP_GID:-1000}"
-DOCKER_DIAGNOSTIC_TIMEOUT="${DOCKER_DIAGNOSTIC_TIMEOUT:-30s}"
-DOCKER_PRUNE_TIMEOUT="${DOCKER_PRUNE_TIMEOUT:-2m}"
+DOCKER_DIAGNOSTIC_TIMEOUT="${DOCKER_DIAGNOSTIC_TIMEOUT:-10s}"
+DOCKER_PRUNE_TIMEOUT="${DOCKER_PRUNE_TIMEOUT:-45s}"
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -108,11 +108,15 @@ COMPOSE
 
 pull_image() {
   docker compose version >/dev/null
-  bounded_docker_diagnostics "before image pull"
+  if [ "${RUN_DOCKER_PULL_DIAGNOSTICS:-false}" = "true" ]; then
+    bounded_docker_diagnostics "before image pull"
+  fi
 
-  timeout_compose 8m pull poma
+  timeout_compose 5m pull poma
 
-  bounded_docker_diagnostics "after image pull"
+  if [ "${RUN_DOCKER_PULL_DIAGNOSTICS:-false}" = "true" ]; then
+    bounded_docker_diagnostics "after image pull"
+  fi
 }
 
 run_deploy_smoke() {
@@ -160,5 +164,9 @@ else
   timed "deploy smoke test" run_deploy_smoke
 fi
 
-timed "dangling image prune" prune_dangling_images
+if [ "${RUN_DOCKER_PRUNE:-true}" = "false" ]; then
+  log "Skipping dangling image prune (RUN_DOCKER_PRUNE=false)."
+else
+  timed "dangling image prune" prune_dangling_images
+fi
 log "Deploy complete in $(( $(date +%s) - script_start ))s. Install cron for scheduled checks; keep IB Gateway supervised separately."

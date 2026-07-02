@@ -20,9 +20,11 @@ def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     workflow = _workflow()
 
     assert "python3 ops/scripts/run_gateway_ops_workflow.py" in workflow
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 600" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
-    assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 540" in workflow
+    assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 180" in workflow
+    assert "IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS: 1" in workflow
+    assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS: 300" in workflow
     assert "Resolve broker login secrets" in workflow
 
 
@@ -31,7 +33,8 @@ def test_gateway_runner_checks_trading_readiness_and_startup_progress() -> None:
 
     for snippet in (
         "Paper Gateway configure will verify API and trading readiness directly.",
-        "Gateway startup progress check",
+        "VM-local socket/service wait attempt",
+        "Running VM-local Gateway startup progress check",
         "Gateway startup stalled before opening the API socket; collecting diagnostics.",
         "poma-diagnose-ibgateway startup-check",
         "poma ibkr-check",
@@ -52,8 +55,8 @@ def test_gateway_readiness_uses_pulled_vm_image_and_bounded_restarts() -> None:
     assert "docker compose run --rm" not in runner
     # A forced trading-login restart must reset the per-login budget and be bounded, then fail fast
     # with an actionable read-only/permissions message instead of silently timing out.
-    assert "max_trading_login_restarts = 2" in runner
-    assert "login_started = time.monotonic()" in runner
+    assert 'max_trading_login_restarts = int(env("IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS", "1"))' in runner
+    assert "hard_deadline = started + (max_trading_login_restarts + 1) * timeout_seconds" in runner
     assert "'Read-Only API' disabled" in runner
 
 
@@ -102,7 +105,8 @@ def test_gateway_socket_poll_combines_socket_and_service_checks() -> None:
 
     assert "nc -z 127.0.0.1 7497" in runner
     assert "systemctl is-active --quiet ibgateway" in runner
-    assert "stable >= 2" in runner
+    assert 'if [ \\"${stable}\\" -ge 2 ]; then exit 0; fi' in runner
+    assert "Waiting on VM for two stable Gateway API socket polls." in runner
 
 
 def test_gateway_wait_helper_runs_locally_on_vm_and_prints_progress() -> None:
@@ -168,9 +172,11 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
     workflow = _workflow()
     runner = _runner()
 
-    assert "timeout-minutes: 30" in workflow
-    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 600" in workflow
-    assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 540" in workflow
+    assert "timeout-minutes: 20" in workflow
+    assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
+    assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 180" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
-    assert "timeout=480" in runner
-    assert "timeout=900" in runner
+    assert "IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS" in workflow
+    assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS" in workflow
+    assert "ibkr_check_timeout_seconds" in runner
+    assert "timeout=600" in runner

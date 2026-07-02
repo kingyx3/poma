@@ -94,7 +94,7 @@ def test_gateway_ops_workflow_core_contract() -> None:
         "poma-configure-ibc",
         "repair_runtime",
         "poma ibkr-check",
-        "Socket/service poll attempt",
+        "VM-local socket/service wait attempt",
         "poma-wait-ibgateway-2fa",
     ):
         assert snippet in runner
@@ -163,6 +163,7 @@ def test_auto_cicd_builds_and_deploys_the_ref_under_test() -> None:
     # :main tag. Each deploy job depends on a build job and forwards its SHA-tagged image.
     workflow = _text(AUTO_CICD_WORKFLOW)
     deploy_workflow = _text(DEPLOY_WORKFLOW)
+    dev_deploy = workflow.split("  dev-deploy:", 1)[1].split("  dev-configure-gateway:", 1)[0]
 
     for snippet in (
         "  dev-build-image:",
@@ -176,6 +177,7 @@ def test_auto_cicd_builds_and_deploys_the_ref_under_test() -> None:
         "needs: prd-build-image",
     ):
         assert snippet in workflow
+    assert "deploy_smoke: false" in dev_deploy
 
     # Image-affecting changes must trigger the build+deploy path so a PR validates its own image.
     deploy_paths = workflow.split("is_deploy_path()", 1)[1].split("is_gateway_path()", 1)[0]
@@ -187,6 +189,9 @@ def test_auto_cicd_builds_and_deploys_the_ref_under_test() -> None:
     assert "image:" in deploy_workflow
     assert "INPUT_IMAGE: ${{ inputs.image }}" in deploy_workflow
     assert "Refusing to deploy malformed image ref" in deploy_workflow
+    assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" in deploy_workflow
+    assert "RUN_DOCKER_PULL_DIAGNOSTICS=${{ inputs.deploy_smoke }}" in deploy_workflow
+    assert "RUN_DOCKER_PRUNE=${{ inputs.deploy_smoke }}" in deploy_workflow
     assert "POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh" in deploy_workflow
 
 
