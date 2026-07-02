@@ -122,6 +122,23 @@ def test_gateway_ops_preserves_diagnostics_and_hardening() -> None:
     assert "gatewaystart.sh exited before Java/Gateway stayed alive" in ensure
 
 
+def test_gateway_ops_emits_compact_failure_summary_before_verbose_diagnostics() -> None:
+    runner = _runner()
+
+    for snippet in (
+        "GATEWAY_FAILURE_STAGE=",
+        "GATEWAY_FAILURE_REASON=",
+        "GATEWAY_NEXT_ACTION=",
+        "::error title=",
+        "Gateway configure failure",
+        "Collect post-failure diagnostics",
+        "Diagnostics collected successfully; original failure remains",
+        "Full redacted diagnostics remain",
+    ):
+        assert snippet in runner
+    assert "Collect gateway diagnostics" not in runner
+
+
 def test_gateway_ops_keeps_bounded_timeouts() -> None:
     workflow = _workflow()
     runner = _runner()
