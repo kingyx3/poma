@@ -197,6 +197,8 @@ jobs:
           set_default MAX_POSITION_PCT "0.10"
           set_default MAX_TURNOVER_PCT "1.0"
           set_default MIN_TRADE_NOTIONAL_USD "25"
+          set_default ESTIMATED_TRANSACTION_COST_BPS "0"
+          set_default ESTIMATED_TRANSACTION_COST_FIXED_USD "0"
           set_default MIN_WEIGHT_DELTA_PCT "0.0025"
           set_default ORDER_TYPE "limit"
           set_default ALLOW_MARKET_ORDERS "false"

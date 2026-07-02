@@ -60,6 +60,13 @@ def test_deploy_workflow_defaults_delayed_quotes_on_for_non_live_only() -> None:
     assert 'set_default ALLOW_DELAYED_EXECUTION_QUOTES "true"' in block
 
 
+def test_deploy_workflow_defaults_transaction_cost_estimates() -> None:
+    workflow = _text(DEPLOY_WORKFLOW)
+
+    assert 'set_default ESTIMATED_TRANSACTION_COST_BPS "0"' in workflow
+    assert 'set_default ESTIMATED_TRANSACTION_COST_FIXED_USD "0"' in workflow
+
+
 def test_gateway_ops_routes_paper_login_secrets_to_configure_paper() -> None:
     workflow = _text(GATEWAY_OPS_WORKFLOW)
     paper_block = workflow.split("configure-paper)", 1)[1].split(";;", 1)[0]
