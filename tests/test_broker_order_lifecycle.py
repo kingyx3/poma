@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 import pytest
 from conftest import make_settings
 
-from poma.broker import IbkrBroker, order_results_have_issues, order_results_have_no_accepted_orders
+from poma.broker import (
+    BrokerUnavailable,
+    IbkrBroker,
+    order_results_have_issues,
+    order_results_have_no_accepted_orders,
+)
 from poma.models import OrderResult, OrderSide
 
 
@@ -30,6 +35,24 @@ class FakeOrderStatus:
 @dataclass
 class FakeContract:
     symbol: str
+    secType: str = "STK"
+    currency: str = "USD"
+
+
+@dataclass
+class FakeAccountValue:
+    tag: str
+    value: str
+    currency: str
+    account: str = "DU1234567"
+
+
+@dataclass
+class FakePortfolioItem:
+    contract: FakeContract
+    position: float
+    marketValue: float
+    account: str = "DU1234567"
 
 
 @dataclass
@@ -87,6 +110,9 @@ class FakeIB:
     general_market_data_errors: list[tuple[int, str]] = field(default_factory=list)
     general_errors_emitted: bool = False
     errorEvent: FakeEvent = field(default_factory=FakeEvent)
+    account_summary_rows: list[FakeAccountValue] = field(default_factory=list)
+    account_value_rows: list[FakeAccountValue] = field(default_factory=list)
+    portfolio_items: list[FakePortfolioItem] = field(default_factory=list)
 
     def connect(self, *_args, **_kwargs) -> None:
         self.connected = True
@@ -143,6 +169,15 @@ class FakeIB:
 
     def cancelMktData(self, contract) -> None:  # noqa: N802
         self.cancelled_market_data_symbols.append(contract.symbol)
+
+    def accountSummary(self, _account: str = "") -> list[FakeAccountValue]:  # noqa: N802
+        return self.account_summary_rows
+
+    def accountValues(self, _account: str = "") -> list[FakeAccountValue]:  # noqa: N802
+        return self.account_value_rows
+
+    def portfolio(self) -> list[FakePortfolioItem]:
+        return self.portfolio_items
 
     def disconnect(self) -> None:
         self.connected = False
@@ -469,3 +504,97 @@ def test_a_real_failure_alongside_an_idempotent_replay_is_still_flagged_as_an_is
 
     assert order_results_have_issues(results) is True
     assert order_results_have_no_accepted_orders(results) is False
+
+
+def _sgd_account_rows(cash_sgd: str = "13100", net_liq_sgd: str = "13100") -> dict:
+    return {
+        "account_summary_rows": [
+            FakeAccountValue(tag="TotalCashValue", value=cash_sgd, currency="SGD"),
+            FakeAccountValue(tag="NetLiquidation", value=net_liq_sgd, currency="SGD"),
+        ],
+        "account_value_rows": [
+            FakeAccountValue(tag="ExchangeRate", value="1.31", currency="USD"),
+            FakeAccountValue(tag="ExchangeRate", value="1.0", currency="SGD"),
+        ],
+    }
+
+
+def test_account_snapshot_converts_sgd_base_balances_to_usd(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(**_sgd_account_rows())
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    snapshot = broker.account_snapshot()
+
+    assert snapshot.cash_usd == pytest.approx(13_100 / 1.31)
+    assert snapshot.net_liquidation_usd == pytest.approx(13_100 / 1.31)
+    assert snapshot.base_currency == "SGD"
+    assert snapshot.base_per_usd == pytest.approx(1.31)
+
+
+def test_account_snapshot_converts_base_currency_gross_position_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = _sgd_account_rows()
+    rows["account_summary_rows"].append(FakeAccountValue(tag="GrossPositionValue", value="6550", currency="SGD"))
+    fake_ib = FakeIB(
+        **rows,
+        portfolio_items=[FakePortfolioItem(contract=FakeContract(symbol="AAPL"), position=25.0, marketValue=5000.0)],
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    snapshot = broker.account_snapshot()
+
+    # USD-denominated stock positions pass through unchanged; the base-currency gross total
+    # (S$6,550 at 1.31) converts to the same $5,000, keeping both reads consistent.
+    assert snapshot.positions[0].market_value == 5000.0
+    assert snapshot.positions_market_value_usd == pytest.approx(5000.0)
+
+
+def test_account_snapshot_usd_base_account_needs_no_exchange_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(
+        account_summary_rows=[
+            FakeAccountValue(tag="TotalCashValue", value="10000", currency="USD"),
+            FakeAccountValue(tag="NetLiquidation", value="10000", currency="USD"),
+        ],
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    snapshot = broker.account_snapshot()
+
+    assert snapshot.cash_usd == 10_000.0
+    assert snapshot.base_currency is None
+    assert snapshot.base_per_usd is None
+
+
+def test_account_snapshot_refuses_base_currency_balances_without_usd_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ib = FakeIB(
+        account_summary_rows=[FakeAccountValue(tag="TotalCashValue", value="13100", currency="SGD")],
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    with pytest.raises(BrokerUnavailable, match="base currency \\(SGD\\)"):
+        broker.account_snapshot()
+
+
+def test_account_snapshot_skips_single_currency_cash_sleeves_for_totals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Without summary rows, only the BASE total row of the per-currency balances counts; the
+    # SGD sleeve row must not be mistaken for the account total.
+    fake_ib = FakeIB(
+        account_value_rows=[
+            FakeAccountValue(tag="TotalCashBalance", value="12000", currency="SGD"),
+            FakeAccountValue(tag="TotalCashBalance", value="13100", currency="BASE"),
+            FakeAccountValue(tag="ExchangeRate", value="1.31", currency="USD"),
+        ],
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    snapshot = broker.account_snapshot()
+
+    assert snapshot.cash_usd == pytest.approx(13_100 / 1.31)

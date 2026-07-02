@@ -210,6 +210,11 @@ class RebalanceEngine:
                 f"{BLOCK_MARKER}"
             )
             return fallback
+        if snapshot.base_currency and snapshot.base_per_usd:
+            warnings.append(
+                f"account balances converted from base currency {snapshot.base_currency} to USD "
+                f"at {snapshot.base_per_usd:.4f} {snapshot.base_currency}/USD"
+            )
         return snapshot
 
     def _resolve_portfolio_value_usd(self, account_snapshot: AccountSnapshot) -> float:

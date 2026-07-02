@@ -63,6 +63,16 @@ MARKET_DATA_PROBE_SYMBOL = TRADING_PERMISSION_PROBE_SYMBOL
 USD_CASH_TAGS = ("TotalCashValue", "TotalCashBalance", "CashBalance", "SettledCash")
 NET_LIQUIDATION_TAGS = ("NetLiquidation", "NetLiquidationByCurrency")
 GROSS_POSITION_VALUE_TAGS = ("GrossPositionValue",)
+USD_CURRENCY = "USD"
+# Account-value rows use the literal currency code "BASE" for the whole-account total across
+# every held currency, denominated in the account's base currency.
+BASE_CURRENCY_MARKER = "BASE"
+EXCHANGE_RATE_TAG = "ExchangeRate"
+# Summary tags report one row denominated in the account's base currency, whose code appears in
+# the row's currency column (e.g. "SGD" for an SGD-based account). The remaining balance tags
+# (TotalCashBalance, CashBalance, NetLiquidationByCurrency) report one row per held currency
+# plus a BASE total row; only the total is a portfolio-level amount.
+SUMMARY_BASE_CURRENCY_TAGS = frozenset({"TotalCashValue", "SettledCash", "NetLiquidation", "GrossPositionValue"})
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
@@ -475,55 +485,81 @@ class IbkrBroker:
         self._assert_connected(ib)
 
     def account_snapshot(self) -> AccountSnapshot:
-        """Read cash, positions, and net liquidation from one IBKR session.
+        """Read cash, positions, and net liquidation from one IBKR session, in USD terms.
 
         Fetching both in the same connect/disconnect avoids two separate IBKR sessions racing
         against each other and reporting inconsistent cash vs. positions for the same rebalance.
+        Accounts whose base currency is not USD (e.g. SGD) report cash/net-liquidation/gross
+        totals in the base currency, so every base-denominated amount is converted to USD via
+        the account's IBKR ``ExchangeRate`` rows before any USD order is sized against it.
         """
         ib = self._connect()
         try:
-            positions = self._positions_from_ib(ib)
+            account = self.settings.ibkr_account
+            account_rows = list(_request_account_values(ib, account))
+            exchange_rates = _exchange_rates_by_currency(account_rows, account)
+            base_per_usd = exchange_rates.get(USD_CURRENCY)
+            positions = self._positions_from_ib(ib, exchange_rates)
             positions_market_value = sum(position.market_value for position in positions)
-            account_rows = list(_request_account_values(ib, self.settings.ibkr_account))
-            cash_usd = _find_account_value(account_rows, USD_CASH_TAGS, self.settings.ibkr_account)
-            net_liquidation_usd = _find_account_value(
-                account_rows,
-                NET_LIQUIDATION_TAGS,
-                self.settings.ibkr_account,
-            )
-            summary_positions_value = _find_account_value(
-                account_rows,
-                GROSS_POSITION_VALUE_TAGS,
-                self.settings.ibkr_account,
-            )
-            if summary_positions_value is not None and summary_positions_value > 0:
-                positions_market_value = summary_positions_value
-            if cash_usd is None:
-                raise BrokerUnavailable("IBKR did not return a USD cash balance for the configured account")
+
+            cash = _find_account_amount(account_rows, USD_CASH_TAGS, account)
+            if cash is None:
+                raise BrokerUnavailable("IBKR did not return a cash balance for the configured account")
+            cash_amount, cash_currency = cash
+            cash_usd = _account_amount_to_usd(cash_amount, cash_currency, base_per_usd, "cash balance")
+
+            net_liquidation_usd = None
+            net_liquidation = _find_account_amount(account_rows, NET_LIQUIDATION_TAGS, account)
+            if net_liquidation is not None:
+                net_liquidation_usd = _account_amount_to_usd(*net_liquidation, base_per_usd, "net liquidation value")
+
+            summary_positions = _find_account_amount(account_rows, GROSS_POSITION_VALUE_TAGS, account)
+            if summary_positions is not None and summary_positions[0] > 0:
+                positions_market_value = _account_amount_to_usd(
+                    *summary_positions, base_per_usd, "gross position value"
+                )
+
+            base_currency = None if cash_currency == USD_CURRENCY else cash_currency
             return AccountSnapshot(
                 cash_usd=cash_usd,
                 positions=tuple(positions),
                 positions_market_value_usd=positions_market_value,
                 net_liquidation_usd=net_liquidation_usd,
-                account_id=self.settings.ibkr_account,
+                account_id=account,
                 timestamp_utc=datetime.now(UTC).isoformat(),
+                base_currency=base_currency,
+                base_per_usd=base_per_usd if base_currency else None,
             )
         finally:
             ib.disconnect()
 
-    def _positions_from_ib(self, ib: IB) -> list[CurrentPosition]:
+    def _positions_from_ib(self, ib: IB, exchange_rates: dict[str, float]) -> list[CurrentPosition]:
+        """Stock positions with market values in USD.
+
+        ``PortfolioItem.marketValue`` is denominated in the contract's currency, so US-listed
+        USD stocks (the only thing this strategy trades) pass through unchanged. Any non-USD
+        position held in the same account is converted through the account's ExchangeRate rows
+        when possible so it does not distort per-ticker rebalance deltas.
+        """
         rows: list[CurrentPosition] = []
+        base_per_usd = exchange_rates.get(USD_CURRENCY)
         for item in ib.portfolio():
             if item.contract.secType != "STK":
                 continue
             account_mismatch = self.settings.ibkr_account and item.account != self.settings.ibkr_account
             if account_mismatch:
                 continue
+            market_value = float(item.marketValue)
+            currency = str(getattr(item.contract, "currency", "") or USD_CURRENCY).upper()
+            if currency != USD_CURRENCY:
+                base_per_unit = exchange_rates.get(currency)
+                if base_per_unit is not None and base_per_usd is not None:
+                    market_value = market_value * base_per_unit / base_per_usd
             rows.append(
                 CurrentPosition(
                     ticker=item.contract.symbol.upper(),
                     quantity=float(item.position),
-                    market_value=float(item.marketValue),
+                    market_value=market_value,
                 )
             )
         return rows
@@ -924,19 +960,69 @@ def _account_values_queries(account: str | None) -> tuple[str, ...]:
     return ("",)
 
 
-def _find_account_value(rows: Iterable[object], tags: tuple[str, ...], account: str | None) -> float | None:
+def _find_account_amount(
+    rows: Iterable[object],
+    tags: tuple[str, ...],
+    account: str | None,
+) -> tuple[float, str] | None:
+    """Return the first matching balance row as ``(value, currency_code)``.
+
+    Summary tags always denominate in the account's base currency (their currency column
+    carries the base code, e.g. ``SGD``), so any code is accepted there and conversion is the
+    caller's job. Per-currency balance tags only count via their ``BASE`` total row (or a USD
+    row, correct for USD-base accounts): a single-currency sleeve of a multi-currency account
+    is never a portfolio-level amount.
+    """
     for row in rows:
         if account and getattr(row, "account", "") not in ("", account):
             continue
-        if getattr(row, "tag", "") not in tags:
+        tag = getattr(row, "tag", "")
+        if tag not in tags:
             continue
-        currency = str(getattr(row, "currency", "") or "USD").upper()
-        if currency not in {"USD", "BASE"}:
+        currency = str(getattr(row, "currency", "") or USD_CURRENCY).upper()
+        if tag not in SUMMARY_BASE_CURRENCY_TAGS and currency not in {USD_CURRENCY, BASE_CURRENCY_MARKER}:
             continue
         parsed = _parse_account_value(getattr(row, "value", None))
         if parsed is not None:
-            return parsed
+            return parsed, currency
     return None
+
+
+def _exchange_rates_by_currency(rows: Iterable[object], account: str | None) -> dict[str, float]:
+    """IBKR ``ExchangeRate`` account rows: base-currency units per one unit of each currency."""
+    rates: dict[str, float] = {}
+    for row in rows:
+        if account and getattr(row, "account", "") not in ("", account):
+            continue
+        if getattr(row, "tag", "") != EXCHANGE_RATE_TAG:
+            continue
+        currency = str(getattr(row, "currency", "") or "").upper()
+        parsed = _parse_account_value(getattr(row, "value", None))
+        if currency and parsed is not None and parsed > 0 and currency not in rates:
+            rates[currency] = parsed
+    return rates
+
+
+def _account_amount_to_usd(
+    amount: float,
+    currency: str,
+    base_per_usd: float | None,
+    label: str,
+) -> float:
+    """Convert a base-currency account amount to USD; USD-denominated rows pass through.
+
+    Refusing to guess is deliberate: sizing USD orders off an unconverted base-currency balance
+    (e.g. treating S$13,100 as $13,100) silently oversizes every trade by the FX rate.
+    """
+    if currency == USD_CURRENCY:
+        return amount
+    if base_per_usd is None:
+        raise BrokerUnavailable(
+            f"IBKR reported the {label} in the account base currency ({currency}) but returned "
+            "no USD ExchangeRate row to convert it to USD; refusing to size USD orders off an "
+            "unconverted balance"
+        )
+    return amount / base_per_usd
 
 
 def _parse_account_value(value: object) -> float | None:
