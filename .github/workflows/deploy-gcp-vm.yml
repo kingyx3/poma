@@ -384,6 +384,43 @@ jobs:
             exit 1
           }
 
+      - name: Export Terraform outputs
+        if: ${{ inputs.deployment_action == 'deploy' && inputs.terraform_action == 'apply' && inputs.deploy_app }}
+        run: |
+          set -euo pipefail
+
+          tf_output() {
+            local name="$1" attempt=1 status output
+            while true; do
+              set +e
+              output="$(timeout --kill-after=10s 45s terraform -chdir=infra/gcp-free-tier output -raw "${name}" 2>&1)"
+              status="$?"
+              set -e
+              if [ "${status}" -eq 0 ]; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -ge 3 ]; then
+                echo "::error::Unable to read Terraform output ${name} after ${attempt} attempt(s)" >&2
+                printf '%s\n' "${output}" >&2
+                return "${status}"
+              fi
+              attempt=$((attempt + 1))
+              echo "Terraform output ${name} failed; retrying attempt ${attempt}/3 in 10s..." >&2
+              sleep 10
+            done
+          }
+
+          instance_name="$(tf_output instance_name)"
+          zone="$(tf_output zone)"
+          startup_revision="$(tf_output startup_revision)"
+          {
+            echo "TF_INSTANCE_NAME=${instance_name}"
+            echo "TF_ZONE=${zone}"
+            echo "TF_STARTUP_REVISION=${startup_revision}"
+          } >> "${GITHUB_ENV}"
+          echo "Terraform outputs exported: instance_name=${instance_name}, zone=${zone}, startup_revision=${startup_revision}"
+
       - name: Verify Terraform state is clean after undeploy
         if: ${{ inputs.deployment_action == 'undeploy' && inputs.terraform_action == 'apply' }}
         run: |
@@ -437,9 +474,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          instance_name="$(terraform -chdir=infra/gcp-free-tier output -raw instance_name)"
-          zone="$(terraform -chdir=infra/gcp-free-tier output -raw zone)"
-          startup_revision="$(terraform -chdir=infra/gcp-free-tier output -raw startup_revision)"
+          instance_name="${TF_INSTANCE_NAME:?missing Terraform output TF_INSTANCE_NAME}"
+          zone="${TF_ZONE:?missing Terraform output TF_ZONE}"
+          startup_revision="${TF_STARTUP_REVISION:?missing Terraform output TF_STARTUP_REVISION}"
           ssh_common=(--zone "${zone}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet --verbosity=error --no-user-output-enabled)
           step_start="${SECONDS}"
 

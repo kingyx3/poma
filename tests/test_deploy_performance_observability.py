@@ -45,6 +45,7 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         "timeout --kill-after=30s 5m terraform -chdir=infra/gcp-free-tier init",
         "timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan",
         "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
+        "timeout --kill-after=10s 45s terraform -chdir=infra/gcp-free-tier output -raw",
         "timeout --kill-after=30s 2m tar",
         "docker-compose.vm.yml",
         "timeout-minutes: 40",
@@ -90,7 +91,18 @@ def test_prebuilt_image_workflow_pushes_sha_and_optional_main_tag_with_cache() -
 
 def test_deploy_polling_and_retries_are_bounded() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    upload_block = workflow.split("- name: Upload and install on VM", 1)[1].split("- name: Notify Telegram", 1)[0]
 
+    assert "- name: Export Terraform outputs" in workflow
+    assert "tf_output()" in workflow
+    assert "Terraform output ${name} failed; retrying attempt ${attempt}/3 in 10s" in workflow
+    assert "TF_INSTANCE_NAME=${instance_name}" in workflow
+    assert "TF_ZONE=${zone}" in workflow
+    assert "TF_STARTUP_REVISION=${startup_revision}" in workflow
+    assert 'instance_name="${TF_INSTANCE_NAME:?missing Terraform output TF_INSTANCE_NAME}"' in upload_block
+    assert 'zone="${TF_ZONE:?missing Terraform output TF_ZONE}"' in upload_block
+    assert 'startup_revision="${TF_STARTUP_REVISION:?missing Terraform output TF_STARTUP_REVISION}"' in upload_block
+    assert "terraform -chdir=infra/gcp-free-tier output -raw" not in upload_block
     assert 'wait_for_vm_ready 720 "12m"' in workflow
     assert "local deadline=$((SECONDS + wait_seconds)) attempt=0 status=1 saw_remote=0" in workflow
     assert "startup revision ${startup_revision} not ready within ${wait_label}" in workflow
