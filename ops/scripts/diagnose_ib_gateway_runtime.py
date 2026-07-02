@@ -177,6 +177,33 @@ def recent_log_text(log_lines: int) -> str:
     return redact("\n".join(chunks))
 
 
+# Cap per file so one chatty log cannot bury the others; `diagnose` still prints full tails.
+MAX_HINT_LINES_PER_FILE = 40
+
+
+def recent_log_hints(log_lines: int) -> str:
+    """Only the log lines a debugger acts on: login/2FA progress and error-shaped lines.
+
+    The full tails (VNC/Xvfb banners, screen setup chatter) belong to `diagnose`; printing them
+    under a "hints" heading buried the one actionable line thousands of lines deep.
+    """
+    chunks: list[str] = []
+    for path, lines in tail_log_files(log_lines):
+        matches = [
+            line
+            for line in lines
+            if TWO_FA_HINTS.search(line) or LOGIN_STAGE_HINTS.search(line) or FATAL_LOG_HINTS.search(line)
+        ]
+        if not matches:
+            continue
+        chunks.append(f"--- {path} (hint lines only; run diagnose for full tails) ---")
+        omitted = len(matches) - MAX_HINT_LINES_PER_FILE
+        if omitted > 0:
+            chunks.append(f"... {omitted} earlier hint line(s) omitted ...")
+        chunks.extend(matches[-MAX_HINT_LINES_PER_FILE:])
+    return redact("\n".join(chunks))
+
+
 def classify_startup(log_lines: int) -> StartupClassification:
     processes = process_summary()
     flags = process_flags(processes)
@@ -217,7 +244,7 @@ def print_visible_startup_failure(classification: StartupClassification, log_lin
     section("Relevant listening ports")
     print(redact(listener_summary()))
     section("Recent login/API log hints")
-    text = recent_log_text(log_lines)
+    text = recent_log_hints(log_lines)
     if text:
         print(text)
     else:
@@ -301,7 +328,7 @@ def progress(log_lines: int) -> int:
     print(redact(listener_summary()))
     print_startup(log_lines)
     section("Recent login/API log hints")
-    text = recent_log_text(log_lines)
+    text = recent_log_hints(log_lines)
     if text:
         print(text)
     else:

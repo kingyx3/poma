@@ -350,6 +350,9 @@ def test_execution_quotes_falls_back_to_delayed_data_when_allowed_and_no_live_ti
     assert quotes["NVDA"].age_seconds is not None
     # live on connect, delayed for the retry, then back to live for any later request this session.
     assert fake_ib.market_data_type_requests == [1, 3, 1]
+    # Frozen data types (2/4) are readiness-probe-only: stale-by-definition quotes must never
+    # feed execution pricing.
+    assert not {2, 4} & set(fake_ib.market_data_type_requests)
 
 
 def test_execution_quotes_does_not_retry_tickers_that_already_have_a_live_tick(

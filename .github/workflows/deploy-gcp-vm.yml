@@ -218,6 +218,18 @@ jobs:
           fi
           set_default ALLOW_LAST_PRICE_FALLBACK "false"
           set_default ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE "false"
+          # Non-live environments must prove real-time market data entitlement: ibkr-check
+          # hard-fails until a live tick (or frozen tick off-hours) actually arrives, instead of
+          # soft-passing on delayed-only data or market-closed silence. Flip via a GitHub
+          # Environment variable only if delayed dev pricing is ever acceptable again. Live keeps
+          # false because a delayed-only probe already hard-fails there
+          # (ALLOW_DELAYED_EXECUTION_QUOTES=false), keeping off-hours live configure unblocked.
+          if [ "${TRADING_MODE}" = "live" ]; then
+            set_default REQUIRE_LIVE_EXECUTION_QUOTES "false"
+          else
+            set_default REQUIRE_LIVE_EXECUTION_QUOTES "true"
+          fi
+          set_default MARKET_DATA_PROBE_WAIT_SECONDS "5"
           set_default ORDER_STATUS_TIMEOUT_SECONDS "60"
           set_default CANCEL_STALE_ORDERS "true"
           set_default ORDER_TIME_IN_FORCE "DAY"

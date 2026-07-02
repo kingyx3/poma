@@ -125,7 +125,7 @@ def test_ibkr_health_fails_when_configured_account_is_not_managed(
 ) -> None:
     settings = _settings(monkeypatch, TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567")
 
-    def fake_probe(_: Settings) -> IbkrHealth:
+    def fake_probe(_: Settings, *, timeout: float = 20.0) -> IbkrHealth:
         return IbkrHealth(
             connected=True,
             accounts=["DU7654321"],

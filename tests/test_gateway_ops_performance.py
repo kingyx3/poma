@@ -57,6 +57,31 @@ def test_gateway_readiness_uses_pulled_vm_image_and_bounded_restarts() -> None:
     assert "'Read-Only API' disabled" in runner
 
 
+def test_gateway_ops_logs_stay_concise_and_error_specific() -> None:
+    runner = _runner()
+
+    # gcloud's per-invocation chatter (ssh metadata updates, key propagation waits, IAP NumPy
+    # warnings) repeats on every poll attempt and buries the actionable failure lines.
+    assert "--verbosity=error" in runner
+    assert "--no-user-output-enabled" in runner
+    # The fixed gcloud ssh boilerplate is echoed compactly; only the remote command varies.
+    assert "_echo_command" in runner
+    assert '"+ " + " ".join(command)' in runner
+
+
+def test_gateway_ops_supports_read_only_market_data_verification() -> None:
+    workflow = _workflow()
+    runner = _runner()
+
+    assert "verify-market-data" in workflow
+    verify_block = runner.split('if action == "verify-market-data":', 1)[1].split("if action not in", 1)[0]
+    # The entitlement check must observe the running Gateway session as-is: a restart or
+    # repair would force a fresh login and hide what the deployed session actually serves.
+    assert "ibkr_check_command" in verify_block
+    assert "systemctl restart" not in verify_block
+    assert "repair_runtime()" not in verify_block
+
+
 def test_gateway_runtime_repair_installs_helpers_idempotently() -> None:
     runner = _runner()
 

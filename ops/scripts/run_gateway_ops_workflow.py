@@ -43,8 +43,17 @@ def _append_step_summary(markdown: str) -> None:
         handle.write("\n")
 
 
+def _echo_command(command: list[str]) -> str:
+    """Compact command echo: the fixed gcloud ssh boilerplate repeated on every poll buries the
+    lines that matter, so print only the part that varies (the target VM and remote command)."""
+    if command[:3] == ["gcloud", "compute", "ssh"] and "--command" in command:
+        remote_command = command[command.index("--command") + 1]
+        return f"+ [ssh {command[3]}] {remote_command}"
+    return "+ " + " ".join(command)
+
+
 def run(command: list[str], *, timeout: int = 180, input_text: str | None = None) -> int:
-    print("+", " ".join(command), flush=True)
+    print(_echo_command(command), flush=True)
     try:
         completed = subprocess.run(
             command,
@@ -86,7 +95,19 @@ def main() -> int:
     twofa_timeout = env("IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS", "360")
     poll_seconds = env("IB_GATEWAY_SOCKET_POLL_SECONDS", "5")
     no_progress_after = env("IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS", "200")
-    ssh_common = ["--zone", zone, "--tunnel-through-iap", "--ssh-key-expire-after=15m", "--quiet"]
+    # --verbosity=error and --no-user-output-enabled silence gcloud's per-invocation chatter
+    # ("Updating instance ssh metadata...", SSH key propagation waits, IAP NumPy warnings) that
+    # otherwise repeats on every poll attempt; remote command output is unaffected (it comes from
+    # the ssh subprocess, not gcloud's output framework), and real gcloud errors still print.
+    ssh_common = [
+        "--zone",
+        zone,
+        "--tunnel-through-iap",
+        "--ssh-key-expire-after=15m",
+        "--quiet",
+        "--verbosity=error",
+        "--no-user-output-enabled",
+    ]
     sentinel = "/var/lib/poma/ib-gateway-runtime-revision"
     revision = helper_revision()
 
@@ -179,6 +200,22 @@ def main() -> int:
         )
         return timed("Gateway startup progress check", lambda: remote(command, timeout=120))
 
+    def ibkr_check_command(mode: str, required: bool) -> str:
+        # Run the readiness check against the deployed VM image (docker-compose.vm.yml,
+        # host-networked) so it reuses the pulled image instead of building from source on
+        # the e2-micro and so 127.0.0.1:7497 reaches the host Gateway.
+        return (
+            "if ! test -f /opt/poma/docker-compose.vm.yml; then "
+            + (
+                "echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2; exit 1; "
+                if required
+                else "echo 'POMA app not deployed at /opt/poma; skipping.'; exit 0; "
+            )
+            + "fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm -e TRADING_MODE="
+            + mode
+            + " -e DATA_PROVIDER=fixture poma ibkr-check'"
+        )
+
     def api_ready(mode: str, required: bool) -> int:
         timeout_seconds = int(twofa_timeout)
         poll_interval_seconds = int(poll_seconds)
@@ -206,17 +243,11 @@ def main() -> int:
             if poll == 0:
                 stable += 1
                 if stable >= 2:
-                    # Run the readiness what-if against the deployed VM image (docker-compose.vm.yml,
-                    # host-networked) so it reuses the pulled image instead of building from source on
-                    # the e2-micro and so 127.0.0.1:7497 reaches the host Gateway.
-                    check = (
-                        "if ! test -f /opt/poma/docker-compose.vm.yml; then "
-                        + ("echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2; exit 1; " if required else "echo 'POMA app not deployed at /opt/poma; skipping.'; exit 0; ")
-                        + "fi; sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm -e TRADING_MODE="
-                        + mode
-                        + " -e DATA_PROVIDER=fixture poma ibkr-check'"
-                    )
-                    check_status = remote(check, timeout=240)
+                    # 240s proved too tight on a cold post-deploy VM: image pull + container
+                    # boot alone can eat ~3 minutes on the e2-micro before the check's connect
+                    # attempt (60s) and probe ladder (~30s worst case) even start, and a timed-out
+                    # check triggers a counterproductive forced Gateway restart below.
+                    check_status = remote(ibkr_check_command(mode, required), timeout=480)
                     if check_status == 0:
                         print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
                         return 0
@@ -336,6 +367,15 @@ def main() -> int:
             return 1
         remote("sudo systemctl restart ibgateway || true", timeout=180)
         return api_ready("paper", required=False)
+    if action == "verify-market-data":
+        # Read-only market data entitlement verification: no repair, no restart. Runs poma
+        # ibkr-check against the *currently running* Gateway session, so a green run proves the
+        # account is genuinely serving entitled quotes (live during market hours, frozen after
+        # hours; REQUIRE_LIVE_EXECUTION_QUOTES in the deployed .env decides how strict that is).
+        return timed(
+            "Market data entitlement check (poma ibkr-check)",
+            lambda: remote(ibkr_check_command("paper", required=True), timeout=480),
+        )
 
     if action not in {"configure-paper", "configure-live"}:
         print(f"unknown action: {action}", file=sys.stderr)

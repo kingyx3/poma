@@ -37,6 +37,8 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `EXECUTION_QUOTE_MAX_AGE_SECONDS` | yes | `60` | Maximum age of a broker quote before it is considered stale and the trade is blocked. Deploy validation caps this at 120s for paper/live. |
 | `EXECUTION_MAX_SPREAD_BPS` | yes | `50` | Maximum allowed bid/ask spread, in basis points, before a trade is blocked as too wide to price safely. |
 | `ALLOW_DELAYED_EXECUTION_QUOTES` | yes | `false` | Whether a broker quote flagged as delayed (not live/frozen market data) may still be used. When `true`, `IbkrBroker` also automatically retries any ticker that got no live tick at all as delayed data (`reqMarketDataType`) before giving up on it — no manual Gateway/TWS market-data-type step required. Deploy validation blocks `true` for `TRADING_MODE=live`. |
+| `REQUIRE_LIVE_EXECUTION_QUOTES` | yes | `false` (`true` in non-live CI deploys) | Makes `poma ibkr-check` hard-fail unless its market data probe receives a real-time-class tick: live, or frozen (the last real-time quote) when the market is closed. Delayed-only data and market-closed silence are never soft-passed. Use it to prove the account's real-time API market data entitlement actually works. |
+| `MARKET_DATA_PROBE_WAIT_SECONDS` | yes | `5` | Per-step wait of the readiness probe's market data type ladder (see below); the delayed steps wait twice this long because delayed subscriptions start ticking noticeably slower. |
 | `ALLOW_LAST_PRICE_FALLBACK` | yes | `false` | Required to be `true` before `EXECUTION_PRICE_BASIS=last` is accepted. |
 | `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE` | yes | `false` | Explicit override required for `TRADING_MODE=live` with `EXECUTION_PRICE_SOURCE=snapshot`. Leave `false` unless you understand the staleness risk. |
 | `NON_FRACTIONAL_TICKERS` | no | `` (empty) | Comma-separated tickers to round down to whole shares instead of sending fractional orders. Every other ticker defaults to fractional-friendly sizing, since a small managed cap depends on fractional quantities to hit target weights. Only list tickers confirmed to reject fractional orders at the broker. |
@@ -89,6 +91,14 @@ place. A ticker with no tick after that (missing quote timestamp, not merely sta
 delayed data automatically when `ALLOW_DELAYED_EXECUTION_QUOTES=true`; tickers that already
 received a live tick are left alone. A symbol with no data under either mode still blocks
 execution.
+
+The readiness probe behind `poma ibkr-check` additionally walks the full market data type ladder
+(live → frozen → delayed → delayed-frozen) so its verdict is conclusive even outside market
+hours: frozen data serves the last real-time quote of a closed session and needs the same
+entitlement as live, so a frozen tick off-hours proves real-time entitlement, while a
+delayed-only tick proves that entitlement is missing. The ladder is probe-only — frozen data is
+stale by definition and never feeds execution pricing. `ibkr-check` output reports the verdict
+directly as `market_data_type=…` and `realtime_entitlement=yes|no`.
 
 ## Portfolio sizing and existing account equity
 

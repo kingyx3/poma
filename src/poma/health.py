@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from poma.config import Settings, TradingMode
 from poma.data import build_data_client
 
-_SOFT_MARKET_DATA_FAILURE_HINTS = (
-    "IBKR reported no error",
-    "request may still be warming up",
-)
+# The readiness check runs on the same tiny VM as the Gateway, often right after a Gateway
+# restart while Java login and the docker container fight over 2 shared vCPUs. The API handshake
+# can legitimately take far longer than the trading path's 20s there, and a too-short timeout
+# reads as "unreachable" and triggers a counterproductive forced Gateway restart upstream.
+HEALTH_CONNECT_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -16,17 +17,6 @@ class Check:
     name: str
     ok: bool
     detail: str
-
-
-def _market_data_failure_is_soft(message: str) -> bool:
-    """Return true for inconclusive market-data probes that should not fail configure.
-
-    During Gateway configure the US market is often closed and the tiny dev VM may still be
-    warming up after a Gateway restart. A missing tick with an explicit IBKR entitlement/trading
-    error remains a hard failure, but a missing tick with no broker error is not actionable enough
-    to block configure; live execution still requires fresh quotes before any order is submitted.
-    """
-    return any(hint in message for hint in _SOFT_MARKET_DATA_FAILURE_HINTS)
 
 
 def check_runtime_config(settings: Settings) -> Check:
@@ -65,16 +55,21 @@ def check_ibkr(settings: Settings) -> Check:
         return Check("ibkr", False, f"{settings.trading_mode.value} trading requires IBKR_ACCOUNT")
 
     try:
-        result = probe_ibkr(settings)
+        result = probe_ibkr(settings, timeout=HEALTH_CONNECT_TIMEOUT_SECONDS)
     except Exception as exc:  # noqa: BLE001 - any connection/auth failure is a failed check
-        return Check("ibkr", False, f"{settings.ibkr_host}:{settings.ibkr_port} unreachable: {exc}")
+        # asyncio.TimeoutError stringifies to "", which previously produced the undiagnosable
+        # log line "unreachable: " -- always name the exception type.
+        detail = str(exc) or exc.__class__.__name__
+        return Check("ibkr", False, f"{settings.ibkr_host}:{settings.ibkr_port} unreachable: {detail}")
 
     detail = (
         f"connected to {settings.ibkr_host}:{settings.ibkr_port}, "
         f"accounts={result.accounts or ['none']}, "
         f"server_time={result.server_time}, stock_positions={result.stock_positions}, "
         f"trading_permissions={result.trading_permissions_message}, "
-        f"market_data={result.market_data_message}"
+        f"market_data={result.market_data_message}, "
+        f"market_data_type={result.market_data_type or 'none'}, "
+        f"realtime_entitlement={'yes' if result.market_data_realtime else 'no'}"
     )
     account_ok = settings.ibkr_account in result.accounts
     if not account_ok:
@@ -86,12 +81,12 @@ def check_ibkr(settings: Settings) -> Check:
     if not result.trading_permissions_ok:
         return Check("ibkr", False, detail)
     if not result.market_data_ok:
-        if _market_data_failure_is_soft(result.market_data_message):
+        if result.market_data_soft_failure:
             return Check(
                 "ibkr",
                 result.connected,
                 detail
-                + ", market_data_warning=non-fatal configure-time probe; "
+                + ", market_data_warning=inconclusive (market closed); "
                 + "execution still requires fresh quotes before orders",
             )
         return Check("ibkr", False, detail)

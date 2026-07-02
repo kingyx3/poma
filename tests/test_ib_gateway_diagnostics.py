@@ -140,3 +140,49 @@ def test_classifies_open_api_socket_as_ready_for_real_handshake() -> None:
 
     assert result.stage == "api-socket-open"
     assert result.action == "ready"
+
+
+def test_recent_log_hints_prints_only_actionable_lines(tmp_path, monkeypatch) -> None:
+    # A "hints" section that dumps full tails (VNC banners, screen-setup chatter) buries the one
+    # actionable line; only login/2FA/error-shaped lines may survive the filter.
+    module = load_diagnostics_module()
+    log_dir = tmp_path / "ibgateway"
+    log_dir.mkdir()
+    (log_dir / "xvfb.log").write_text(
+        "\n".join(
+            [
+                "Have you tried the x11vnc '-ncache' VNC client-side pixel caching feature yet?",
+                "The VNC desktop is:      localhost:0",
+                "screen setup finished.",
+                "API connection failed: TimeoutError()",
+                "Waiting for second factor authentication.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "LOG_PATHS", (log_dir,))
+
+    hints = module.recent_log_hints(200)
+
+    assert "API connection failed: TimeoutError()" in hints
+    assert "second factor authentication" in hints
+    assert "hint lines only" in hints
+    assert "ncache" not in hints
+    assert "screen setup finished" not in hints
+
+
+def test_recent_log_hints_caps_lines_per_file(tmp_path, monkeypatch) -> None:
+    module = load_diagnostics_module()
+    log_dir = tmp_path / "ibgateway"
+    log_dir.mkdir()
+    (log_dir / "ibc.log").write_text(
+        "\n".join(f"error line {index}" for index in range(100)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "LOG_PATHS", (log_dir,))
+
+    hints = module.recent_log_hints(200)
+
+    assert "error line 99" in hints
+    assert "error line 10" not in hints
+    assert "60 earlier hint line(s) omitted" in hints

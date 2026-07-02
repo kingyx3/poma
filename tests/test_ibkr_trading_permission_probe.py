@@ -3,8 +3,32 @@ from __future__ import annotations
 import pytest
 from conftest import make_settings
 
-from poma.broker import BROKER_UNAVAILABLE_STATUS, IbkrBroker
+from poma.broker import BROKER_UNAVAILABLE_STATUS, IbkrBroker, _probe_trading_permissions
 from poma.models import OrderSide, ProposedTrade
+
+
+def test_trading_permission_probe_sends_transmit_true_what_if_order() -> None:
+    captured_orders: list[object] = []
+
+    class FakeIB:
+        def whatIfOrder(self, _contract, order):  # noqa: N802, ANN202 - ib_insync shape
+            captured_orders.append(order)
+
+            class State:
+                warningText = ""
+                initMarginChange = ""
+
+            return State()
+
+    settings = make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567")
+
+    ok, _message = _probe_trading_permissions(FakeIB(), settings)
+
+    assert ok is True
+    # IBKR rejects what-if orders with transmit=False (Error 321); whatIf=True alone already
+    # guarantees the order is never executed.
+    assert captured_orders[0].whatIf is True
+    assert captured_orders[0].transmit is True
 
 
 def test_ibkr_broker_blocks_orders_when_session_is_not_trade_enabled(

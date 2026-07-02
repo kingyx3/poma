@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     )
     execution_max_spread_bps: PositiveFloat = Field(default=50.0, alias="EXECUTION_MAX_SPREAD_BPS")
     allow_delayed_execution_quotes: bool = Field(default=False, alias="ALLOW_DELAYED_EXECUTION_QUOTES")
+    # When true, `poma ibkr-check` hard-fails unless the market data probe receives a
+    # real-time-class tick (live or frozen); delayed-only or silent probes are never soft-passed.
+    # Turn on to prove an account's real-time API market data entitlement actually works.
+    require_live_execution_quotes: bool = Field(default=False, alias="REQUIRE_LIVE_EXECUTION_QUOTES")
+    market_data_probe_wait_seconds: PositiveFloat = Field(
+        default=5.0,
+        alias="MARKET_DATA_PROBE_WAIT_SECONDS",
+    )
     allow_last_price_fallback: bool = Field(default=False, alias="ALLOW_LAST_PRICE_FALLBACK")
     allow_unsafe_execution_price_source: bool = Field(
         default=False,
