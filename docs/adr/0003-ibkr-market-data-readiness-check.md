@@ -40,6 +40,13 @@ The failure was only visible after the fact, per order, in Telegram, with no ind
   `src/poma/health.py` as shared paths: changing either runs both `dev-deploy` and
   `dev-configure-gateway`, so a PR that touches the credentialed Gateway/market-data path always
   re-validates it, the same way shared VM foundation changes already did in ADR-0002.
+- This check immediately proved its value: running it against the real dev paper account surfaced
+  `Error 10089: Requested market data requires additional subscription for API ... Delayed market
+  data is available`, confirming the account lacks the separate IBKR "API market data" opt-in but
+  does have delayed data. `deploy-gcp-vm.yml`'s CI runtime defaults now set
+  `ALLOW_DELAYED_EXECUTION_QUOTES=true` for every `TRADING_MODE` except `live` (which keeps the
+  conservative `false` default), so dev/stg paper trading uses delayed quotes for execution pricing
+  out of the box instead of requiring a manual account-side fix before trading can work at all.
 
 ## Consequences
 

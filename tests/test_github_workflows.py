@@ -49,6 +49,17 @@ def test_deploy_workflow_routes_paper_to_paper_account() -> None:
     assert "TRADING_MODE=live" in workflow
 
 
+def test_deploy_workflow_defaults_delayed_quotes_on_for_non_live_only() -> None:
+    workflow = _text(DEPLOY_WORKFLOW)
+    block = workflow.split('set_default EXECUTION_MAX_SPREAD_BPS "50"', 1)[1].split(
+        'set_default ALLOW_LAST_PRICE_FALLBACK "false"', 1
+    )[0]
+
+    assert 'if [ "${TRADING_MODE}" = "live" ]; then' in block
+    assert 'set_default ALLOW_DELAYED_EXECUTION_QUOTES "false"' in block
+    assert 'set_default ALLOW_DELAYED_EXECUTION_QUOTES "true"' in block
+
+
 def test_gateway_ops_routes_paper_login_secrets_to_configure_paper() -> None:
     workflow = _text(GATEWAY_OPS_WORKFLOW)
     paper_block = workflow.split("configure-paper)", 1)[1].split(";;", 1)[0]
@@ -234,3 +245,5 @@ def test_adr_0003_market_data_readiness_check_records_the_decision() -> None:
     assert "errorEvent" in text
     assert "src/poma/broker.py" in text
     assert "src/poma/health.py" in text
+    assert "10089" in text
+    assert "ALLOW_DELAYED_EXECUTION_QUOTES=true" in text
