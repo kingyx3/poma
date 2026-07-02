@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from poma.config import Settings, TradingMode
 from poma.data import build_data_client
 
+# The readiness check runs on the same tiny VM as the Gateway, often right after a Gateway
+# restart while Java login and the docker container fight over 2 shared vCPUs. The API handshake
+# can legitimately take far longer than the trading path's 20s there, and a too-short timeout
+# reads as "unreachable" and triggers a counterproductive forced Gateway restart upstream.
+HEALTH_CONNECT_TIMEOUT_SECONDS = 60.0
+
 
 @dataclass(frozen=True)
 class Check:
@@ -49,9 +55,12 @@ def check_ibkr(settings: Settings) -> Check:
         return Check("ibkr", False, f"{settings.trading_mode.value} trading requires IBKR_ACCOUNT")
 
     try:
-        result = probe_ibkr(settings)
+        result = probe_ibkr(settings, timeout=HEALTH_CONNECT_TIMEOUT_SECONDS)
     except Exception as exc:  # noqa: BLE001 - any connection/auth failure is a failed check
-        return Check("ibkr", False, f"{settings.ibkr_host}:{settings.ibkr_port} unreachable: {exc}")
+        # asyncio.TimeoutError stringifies to "", which previously produced the undiagnosable
+        # log line "unreachable: " -- always name the exception type.
+        detail = str(exc) or exc.__class__.__name__
+        return Check("ibkr", False, f"{settings.ibkr_host}:{settings.ibkr_port} unreachable: {detail}")
 
     detail = (
         f"connected to {settings.ibkr_host}:{settings.ibkr_port}, "

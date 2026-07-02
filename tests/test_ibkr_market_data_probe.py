@@ -321,7 +321,7 @@ def test_probe_ibkr_skips_market_data_check_when_execution_price_source_is_snaps
 
 
 def test_check_ibkr_treats_market_closed_silence_as_warning(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_probe(_settings):
+    def fake_probe(_settings, *, timeout: float = 20.0):
         return IbkrHealth(
             connected=True,
             accounts=["DU1234567"],
@@ -347,7 +347,7 @@ def test_check_ibkr_treats_market_closed_silence_as_warning(monkeypatch: pytest.
 
 
 def test_check_ibkr_keeps_explicit_market_data_error_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_probe(_settings):
+    def fake_probe(_settings, *, timeout: float = 20.0):
         return IbkrHealth(
             connected=True,
             accounts=["DU1234567"],
@@ -374,7 +374,7 @@ def test_check_ibkr_keeps_explicit_market_data_error_as_failure(monkeypatch: pyt
 def test_check_ibkr_reports_realtime_entitlement_verdict_on_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_probe(_settings):
+    def fake_probe(_settings, *, timeout: float = 20.0):
         return IbkrHealth(
             connected=True,
             accounts=["DU1234567"],

@@ -28,6 +28,31 @@ def test_check_ibkr_reports_connection_failure(monkeypatch) -> None:
     assert "unreachable" in check.detail
 
 
+def test_check_ibkr_names_exception_type_when_message_is_empty(monkeypatch) -> None:
+    # asyncio.TimeoutError stringifies to "" -- the check must still say what happened.
+    def boom(settings, *, timeout: float = 20.0) -> IbkrHealth:
+        raise TimeoutError()
+
+    monkeypatch.setattr("poma.broker.probe_ibkr", boom)
+    check = check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
+    assert not check.ok
+    assert "unreachable: TimeoutError" in check.detail
+
+
+def test_check_ibkr_uses_generous_connect_timeout_for_health_probes(monkeypatch) -> None:
+    captured: dict[str, float] = {}
+
+    def fake_probe(settings, *, timeout: float = 20.0) -> IbkrHealth:
+        captured["timeout"] = timeout
+        raise ConnectionError("no socket")
+
+    monkeypatch.setattr("poma.broker.probe_ibkr", fake_probe)
+    check_ibkr(make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU123"))
+    # The check shares the VM with a Gateway that may be mid-login; 20s handshakes misreport
+    # a busy host as "unreachable" and trigger forced Gateway restarts upstream.
+    assert captured["timeout"] == 60.0
+
+
 def test_check_ibkr_success_when_account_matches_and_session_is_trade_enabled(monkeypatch) -> None:
     monkeypatch.setattr(
         "poma.broker.probe_ibkr",

@@ -54,7 +54,10 @@ modes. Two problems remained:
   the transition; flip it to `false` once `verify-market-data` confirms real-time ticks.
 - New probe wait setting `MARKET_DATA_PROBE_WAIT_SECONDS` (default 5s per ladder step; the
   delayed steps wait twice as long per ADR-0003's finding that delayed subscriptions start
-  ticking slowly). Worst case ~30s, well inside the 240s ops-side `ibkr-check` timeout.
+  ticking slowly). Worst case ~30s, well inside the 480s ops-side `ibkr-check` timeout (raised
+  from 240s, which a cold post-deploy container boot on the e2-micro plus the 60s health-check
+  connect timeout could exhaust on its own, misread as "unreachable", and answer with a
+  counterproductive forced Gateway restart).
 - New read-only **IB Gateway Ops** action `verify-market-data`: runs `poma ibkr-check` against
   the currently running Gateway session with no repair and no restart, so a green run proves the
   deployed session genuinely serves entitled quotes. Run it (workflow_dispatch) after changing

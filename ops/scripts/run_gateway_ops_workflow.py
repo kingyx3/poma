@@ -222,7 +222,11 @@ def main() -> int:
             if poll == 0:
                 stable += 1
                 if stable >= 2:
-                    check_status = remote(ibkr_check_command(mode, required), timeout=240)
+                    # 240s proved too tight on a cold post-deploy VM: image pull + container
+                    # boot alone can eat ~3 minutes on the e2-micro before the check's connect
+                    # attempt (60s) and probe ladder (~30s worst case) even start, and a timed-out
+                    # check triggers a counterproductive forced Gateway restart below.
+                    check_status = remote(ibkr_check_command(mode, required), timeout=480)
                     if check_status == 0:
                         print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
                         return 0
@@ -349,7 +353,7 @@ def main() -> int:
         # hours; REQUIRE_LIVE_EXECUTION_QUOTES in the deployed .env decides how strict that is).
         return timed(
             "Market data entitlement check (poma ibkr-check)",
-            lambda: remote(ibkr_check_command("paper", required=True), timeout=240),
+            lambda: remote(ibkr_check_command("paper", required=True), timeout=480),
         )
 
     if action not in {"configure-paper", "configure-live"}:
