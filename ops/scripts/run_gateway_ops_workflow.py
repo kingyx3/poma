@@ -24,6 +24,9 @@ NON_RETRIABLE_IBKR_MARKET_DATA_ERRORS = (
     ("354", "requested market data is not subscribed"),
     ("10197", "no market data during competing live session"),
 )
+NON_RETRIABLE_IBKR_ACCOUNT_ERRORS = (
+    ("10141", "paper trading disclaimer must first be accepted"),
+)
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -135,6 +138,11 @@ def classify_non_retriable_ibkr_check(output: str) -> tuple[str, str] | None:
         return (
             "poma ibkr-check failed with an IBKR market-data entitlement/session error.",
             "Fix the IBKR market-data/API entitlement or close the competing live session, then rerun Gateway configure.",
+        )
+    if any(code in lower_output and phrase in lower_output for code, phrase in NON_RETRIABLE_IBKR_ACCOUNT_ERRORS):
+        return (
+            "poma ibkr-check failed because the IBKR paper account requires manual disclaimer acceptance before API connections.",
+            "Log into the IBKR paper account and accept the paper trading/API disclaimer, then rerun Gateway configure.",
         )
     return None
 
