@@ -18,12 +18,12 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm `poma ibkr-check` passes and the configured account appears in managed accounts.
 - [ ] Confirm the `poma reconcile-orders` cron entry is installed alongside the rebalance cron entry (`ops/cron/poma.cron`), so accepted-but-unfilled orders are followed up independent of the rebalance process lifetime.
 - [ ] Confirm the paper account cash + portfolio balance is the intended rebalance sizing base.
-- [ ] Confirm `STRATEGY_ALLOCATIONS` splits no more than 100% of the broker-derived account value.
-- [ ] Confirm the default allocation is intentional: `rank_velocity_size_equal_weight=0.98,cash=0.02`.
+- [ ] Confirm `STRATEGY_ALLOCATIONS` splits no more than 100% of the broker-derived account value; see [`portfolio-management.md`](portfolio-management.md).
+- [ ] Confirm the default allocation is intentional: `rank_velocity_size_equal_weight=0.98,cash=0.02`; see [`strategies/rank-velocity-size-equal-weight.md`](strategies/rank-velocity-size-equal-weight.md) for the current strategy behavior.
 
 ## Required before live mode
 
-- [ ] Backtest against QQQ/QQQM or another explicit benchmark with historical constituents and historical market caps.
+- [ ] Backtest every allocated strategy against an explicit benchmark appropriate for that strategy, using point-in-time inputs wherever possible.
 - [ ] Validate data-provider endpoints and field meanings.
 - [ ] Run at least one full week in `dry_run`.
 - [ ] Run at least one full week in `paper`.
