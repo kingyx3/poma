@@ -72,6 +72,18 @@ def test_gateway_readiness_uses_pulled_vm_image_and_bounded_restarts() -> None:
     assert "classify_non_retriable_ibkr_check(check_output)" in runner
 
 
+def test_gateway_readiness_retries_progressing_login_until_hard_deadline() -> None:
+    runner = _runner()
+
+    # A per-attempt socket-wait timeout (exit 1) with a progressing login must retry until the
+    # overall hard deadline instead of failing immediately: a cold Gateway start on the
+    # CPU-constrained free-tier VM can take longer than one per-attempt budget. Stalls are a
+    # different exit code (2) and still fail fast.
+    assert "if socket_status == 1:" in runner
+    assert "expired while Gateway startup " in runner
+    assert "was still progressing; retrying the socket wait" in runner
+
+
 def test_gateway_market_data_entitlement_failures_skip_fresh_login_restart() -> None:
     module = _load_gateway_runner()
 
