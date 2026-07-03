@@ -69,6 +69,7 @@ def check_ibkr(settings: Settings) -> Check:
         f"trading_permissions={result.trading_permissions_message}, "
         f"market_data={result.market_data_message}, "
         f"market_data_type={result.market_data_type or 'none'}, "
+        f"market_data_exchange={result.market_data_exchange or 'none'}, "
         f"realtime_entitlement={'yes' if result.market_data_realtime else 'no'}"
     )
     account_ok = settings.ibkr_account in result.accounts

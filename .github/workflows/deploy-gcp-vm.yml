@@ -223,16 +223,19 @@ jobs:
           fi
           set_default ALLOW_LAST_PRICE_FALLBACK "false"
           set_default ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE "false"
-          # Non-live environments must prove real-time market data entitlement: ibkr-check
-          # hard-fails until a live tick (or frozen tick off-hours) actually arrives, instead of
-          # soft-passing on delayed-only data or market-closed silence. Flip via a GitHub
-          # Environment variable only if delayed dev pricing is ever acceptable again. Live keeps
-          # false because a delayed-only probe already hard-fails there
+          # Paper/dev requests direct-venue quotes first so IBKR's free non-consolidated US feed
+          # can satisfy live checks when the API exposes it. Do not hard-require a live/frozen
+          # tick by default: some paper Gateway sessions still classify that feed as delayed,
+          # and ALLOW_DELAYED_EXECUTION_QUOTES=true is the explicit non-live fallback.
+          # Set REQUIRE_LIVE_EXECUTION_QUOTES=true in the GitHub Environment for a proof-only run.
+          # Live keeps false because a delayed-only probe already hard-fails there
           # (ALLOW_DELAYED_EXECUTION_QUOTES=false), keeping off-hours live configure unblocked.
           if [ "${TRADING_MODE}" = "live" ]; then
             set_default REQUIRE_LIVE_EXECUTION_QUOTES "false"
+            set_default IBKR_MARKET_DATA_EXCHANGES "SMART"
           else
-            set_default REQUIRE_LIVE_EXECUTION_QUOTES "true"
+            set_default REQUIRE_LIVE_EXECUTION_QUOTES "false"
+            set_default IBKR_MARKET_DATA_EXCHANGES "IEX,SMART"
           fi
           set_default MARKET_DATA_PROBE_WAIT_SECONDS "5"
           set_default ORDER_STATUS_TIMEOUT_SECONDS "60"

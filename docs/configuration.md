@@ -39,8 +39,9 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `EXECUTION_QUOTE_MAX_AGE_SECONDS` | yes | `60` | Maximum age of a broker quote before it is considered stale and the trade is blocked. Deploy validation caps this at 120s for paper/live. |
 | `EXECUTION_MAX_SPREAD_BPS` | yes | `50` | Maximum allowed bid/ask spread, in basis points, before a trade is blocked as too wide to price safely. |
 | `ALLOW_DELAYED_EXECUTION_QUOTES` | no | mode-dependent: `true` for `dry_run`/`paper`, `false` for `live` | Whether a broker quote flagged as delayed (not live/frozen market data) may still be used. When `true`, `IbkrBroker` also automatically retries any ticker that got no live tick at all as delayed data (`reqMarketDataType`, with a doubled wait because delayed subscriptions start ticking noticeably slower) before giving up on it — no manual Gateway/TWS market-data-type step required. Unset, it defaults per trading mode, since dry-run/paper accounts commonly lack the separate IBKR "API market data" real-time opt-in even when delayed data is available. Deploy validation blocks `true` for `TRADING_MODE=live`; live requires the real-time API market data subscription instead (see `docs/production-readiness.md`). |
-| `REQUIRE_LIVE_EXECUTION_QUOTES` | yes | `false` (`true` in non-live CI deploys) | Makes `poma ibkr-check` hard-fail unless its market data probe receives a real-time-class tick: live, or frozen (the last real-time quote) when the market is closed. Delayed-only data and market-closed silence are never soft-passed. Use it to prove the account's real-time API market data entitlement actually works. |
+| `REQUIRE_LIVE_EXECUTION_QUOTES` | yes | `false` | When `true`, makes `poma ibkr-check` hard-fail unless its market data probe receives a real-time-class tick: live, or frozen (the last real-time quote) when the market is closed. Delayed-only data and market-closed silence are never soft-passed. Use it for an explicit proof run after changing IBKR market-data subscriptions or paper sharing; paper/dev deployments leave it `false` by default so the allowed delayed fallback can keep paper trading usable when IBKR Gateway classifies the available paper feed as delayed. |
 | `MARKET_DATA_PROBE_WAIT_SECONDS` | yes | `5` | Per-step wait of the readiness probe's market data type ladder (see below); the delayed steps wait twice this long because delayed subscriptions start ticking noticeably slower. |
+| `IBKR_MARKET_DATA_EXCHANGES` | no | mode-dependent: `IEX,SMART` for non-live, `SMART` for live | Comma-separated IBKR venues used only for quote/probe requests. Orders still route through `SMART`. Paper/dev tries `IEX` first so IBKR's US real-time non-consolidated streaming quote entitlement can satisfy live quote checks when the Gateway API exposes it before falling back to `SMART` and, if allowed, delayed data. |
 | `ALLOW_LAST_PRICE_FALLBACK` | yes | `false` | Required to be `true` before `EXECUTION_PRICE_BASIS=last` is accepted. |
 | `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE` | yes | `false` | Explicit override required for `TRADING_MODE=live` with `EXECUTION_PRICE_SOURCE=snapshot`. Leave `false` unless you understand the staleness risk. |
 | `FRACTIONAL_SHARES` | no | `false` | Whole-share sizing is the default for every instrument because the IBKR API rejects fractional order sizes (error 10243 "Fractional-sized order cannot be placed via API"). Buys round to the nearest whole share (up or down, keeping orders centered on the target notional); sells always round down so a rounded order can never oversell the position. Buy round-ups that would push total buy notional past available cash plus planned sell proceeds are demoted back down, and the same rounding re-applies when orders are repriced off a fresh execution quote. Set `true` only for accounts confirmed to accept fractional API orders. |
@@ -90,18 +91,24 @@ include the same summary.
 `IbkrBroker` explicitly requests live market data (`reqMarketDataType(1)`) on every connection
 rather than relying on Gateway remembering a data type from a prior session or client id, since a
 fresh connection can otherwise silently return no ticks at all even with live entitlements in
-place. A ticker with no tick after that (missing quote timestamp, not merely stale) is retried as
+place. Quote requests use `IBKR_MARKET_DATA_EXCHANGES` in order. This affects only quote/probe
+contracts, not order routing: submitted orders still use `SMART`. In paper/dev, trying `IEX`
+before `SMART` lets accounts with IBKR's US real-time non-consolidated streaming quotes use a
+real-time direct-venue feed when the Gateway API exposes one, instead of immediately failing on
+`SMART`/NASDAQ consolidated market-data entitlement. A ticker with no live tick on any configured venue is retried as
 delayed data automatically when `ALLOW_DELAYED_EXECUTION_QUOTES=true`; tickers that already
 received a live tick are left alone. A symbol with no data under either mode still blocks
 execution.
 
 The readiness probe behind `poma ibkr-check` additionally walks the full market data type ladder
-(live → frozen → delayed → delayed-frozen) so its verdict is conclusive even outside market
+(live → frozen → delayed → delayed-frozen) across each configured
+`IBKR_MARKET_DATA_EXCHANGES` venue, so its verdict is conclusive even outside market
 hours: frozen data serves the last real-time quote of a closed session and needs the same
 entitlement as live, so a frozen tick off-hours proves real-time entitlement, while a
 delayed-only tick proves that entitlement is missing. The ladder is probe-only — frozen data is
 stale by definition and never feeds execution pricing. `ibkr-check` output reports the verdict
-directly as `market_data_type=…` and `realtime_entitlement=yes|no`.
+directly as `market_data_type=…`, `market_data_exchange=…`, and
+`realtime_entitlement=yes|no`.
 
 ## Portfolio sizing and existing account equity
 

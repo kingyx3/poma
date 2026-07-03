@@ -60,9 +60,8 @@ The failure was only visible after the fact, per order, in Telegram, with no ind
 - A market data entitlement/sharing gap is caught at Gateway-configure time, with the actual IBKR
   error text, instead of discovered order-by-order during the next rebalance.
 - `IbkrBroker._connect()` and `probe_ibkr()` now share one connect helper (`_connect_ib`) that
-  requests live market data on every session; the delayed-data retry logic
-  (`_retry_missing_quotes_as_delayed`) is a free function shared between `execution_quotes` and
-  the new probe instead of being duplicated.
+  requests live market data on every session; execution quotes and the probe both use explicit
+  market-data request helpers instead of duplicating per-call request/cancel handling.
 - `poma ibkr-check` takes a few seconds longer (one extra market data round trip) on every
   Gateway-configure run; this fits well within the existing readiness budget.
 - PRs touching `src/poma/broker.py` or `src/poma/health.py` now also run `dev-configure-gateway`,

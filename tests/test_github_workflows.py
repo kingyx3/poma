@@ -60,6 +60,18 @@ def test_deploy_workflow_defaults_delayed_quotes_on_for_non_live_only() -> None:
     assert 'set_default ALLOW_DELAYED_EXECUTION_QUOTES "true"' in block
 
 
+def test_deploy_workflow_defaults_non_live_quotes_to_iex_before_smart() -> None:
+    workflow = _text(DEPLOY_WORKFLOW)
+    block = workflow.split('set_default ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE "false"', 1)[1].split(
+        'set_default MARKET_DATA_PROBE_WAIT_SECONDS "5"', 1
+    )[0]
+
+    assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "false"' in block
+    assert 'set_default IBKR_MARKET_DATA_EXCHANGES "SMART"' in block
+    assert 'set_default IBKR_MARKET_DATA_EXCHANGES "IEX,SMART"' in block
+    assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "true"' not in block
+
+
 def test_deploy_workflow_defaults_transaction_cost_estimates() -> None:
     workflow = _text(DEPLOY_WORKFLOW)
 
@@ -273,7 +285,7 @@ def test_adr_0004_market_data_entitlement_probe_ladder_records_the_decision() ->
     assert "is_market_open" in text
 
 
-def test_deploy_workflow_requires_live_quotes_proof_for_non_live_only() -> None:
+def test_deploy_workflow_leaves_live_quote_proof_opt_in() -> None:
     workflow = _text(DEPLOY_WORKFLOW)
     block = workflow.split('set_default ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE "false"', 1)[1].split(
         'set_default MARKET_DATA_PROBE_WAIT_SECONDS "5"', 1
@@ -281,4 +293,5 @@ def test_deploy_workflow_requires_live_quotes_proof_for_non_live_only() -> None:
 
     assert 'if [ "${TRADING_MODE}" = "live" ]; then' in block
     assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "false"' in block
-    assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "true"' in block
+    assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "true"' not in block
+    assert "proof-only run" in block

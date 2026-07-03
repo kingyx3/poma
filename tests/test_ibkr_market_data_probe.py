@@ -63,6 +63,7 @@ class FakeIB:
     error_to_emit: tuple[int, str] | None = None
     current_market_data_type: int = 1
     market_data_type_requests: list[int] = field(default_factory=list)
+    requested_market_data_contracts: list[tuple[str, str]] = field(default_factory=list)
 
     def connect(self, *_args, **_kwargs) -> None:
         self.connected = True
@@ -87,6 +88,7 @@ class FakeIB:
         self.current_market_data_type = data_type
 
     def reqMktData(self, contract, *_args, **_kwargs):  # noqa: N802, ANN201 - mirrors ib_insync API
+        self.requested_market_data_contracts.append((contract.symbol, getattr(contract, "exchange", "")))
         if self.error_to_emit is not None:
             code, message = self.error_to_emit
             self.errorEvent.emit(-1, code, message, contract)
@@ -140,8 +142,32 @@ def test_probe_ibkr_short_circuits_on_a_live_tick(monkeypatch: pytest.MonkeyPatc
     assert health.market_data_realtime is True
     assert health.market_data_type == "live"
     assert "real-time entitlement confirmed" in health.market_data_message
+    assert health.market_data_exchange == "IEX"
+    assert "on IEX" in health.market_data_message
+    assert fake_ib.requested_market_data_contracts == [("AAPL", "IEX")]
     # connect requests live, the first ladder step requests live, then the session is restored.
     assert fake_ib.market_data_type_requests == [1, 1, 1]
+
+
+def test_probe_ibkr_tries_smart_after_direct_venue_has_no_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_market_open(monkeypatch, True)
+    tick_time = datetime.now(UTC)
+
+    class ExchangeAwareFakeIB(FakeIB):
+        def reqMktData(self, contract, *_args, **_kwargs):  # noqa: N802, ANN201
+            self.requested_market_data_contracts.append((contract.symbol, getattr(contract, "exchange", "")))
+            if contract.exchange == "IEX":
+                return FakeMarketData(contract=contract, marketDataType=self.current_market_data_type)
+            return FakeMarketData(contract=contract, bid=200.0, ask=200.2, time=tick_time, marketDataType=1)
+
+    fake_ib = ExchangeAwareFakeIB()
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+
+    health = probe_ibkr(_settings(monkeypatch))
+
+    assert health.market_data_ok is True
+    assert health.market_data_exchange == "SMART"
+    assert fake_ib.requested_market_data_contracts == [("AAPL", "IEX"), ("AAPL", "SMART")]
 
 
 def test_probe_ibkr_confirms_realtime_entitlement_via_frozen_tick_when_market_closed(
