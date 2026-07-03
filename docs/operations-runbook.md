@@ -62,7 +62,7 @@ The next scheduled rebalance also checks the order ledger for anything still ope
 
 A same-run retry only happens one way: if `poma monitor` finds today's session still marked `running` in local state with no terminal status ever recorded, the previous attempt was killed outright (process crash, OOM, VM restart) before it could finish. The next cron tick resumes that session with the *same* `run_id` instead of minting a new one. Any orderRef already recorded in the ledger for that run — open or terminal — is not resubmitted; `submit_plan` returns an `IdempotentReplay` result for it instead. A manual `poma rebalance` invocation always mints a fresh `run_id`, so it is never part of this replay path; if you need to manually recover a killed session outside of cron, use `poma reconcile-orders` to resolve any leftover open orders first.
 
-Buys are never sized against unconfirmed sell proceeds: after the sell phase is submitted, `ExecutionManager` refreshes broker cash before sizing and submitting buys. If the refreshed cash does not cover the planned buy notional, the buys are blocked as `BuyingPowerBlocked` instead of being submitted.
+Buys are never sized against unconfirmed sell proceeds: after the sell phase is submitted, `ExecutionManager` reprices buys from fresh execution quotes, then refreshes broker cash before submitting them. If the refreshed cash does not cover the buy limit cash requirement, the buys are blocked as `BuyingPowerBlocked` instead of being submitted.
 
 ## Execution pricing and quote safety
 
@@ -106,7 +106,7 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 | No strategy history snapshot | First run or insufficient provider snapshot history for the active strategy | Run `poma refresh-market-data`; check the active strategy docs for fallback behavior. |
 | Limit order accepted but never fills | Working limit price never crossed the market | Confirm the `poma reconcile-orders` cron entry (`ops/cron/poma.cron`) is installed; it replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`. Run it manually to force an immediate check. |
 | New rebalance blocked: "open order(s) from a prior session" / "a different run in this session" | A previous session's (or a different run's) order never reached a terminal state | Run `poma reconcile-orders` to resolve it, or set `STALE_ORDER_POLICY=cancel` to have the next rebalance cancel it automatically. |
-| Buy orders show `BuyingPowerBlocked` | Broker cash refreshed after the sell phase did not cover planned buy notional | Expected when sells have not settled/filled; review the sell fills and rerun once cash confirms, rather than assuming the sell proceeds. |
+| Buy orders show `BuyingPowerBlocked` | Broker cash refreshed after the sell phase did not cover the repriced buy limit cash requirement | Expected when sells have not settled/filled or the fresh buy quote/limit offset made the order more expensive than planned; review the sell fills and rerun once cash confirms, rather than assuming the sell proceeds. |
 | Telegram missing | Wrong chat id, bot not started in the chat, or Telegram outage | Use **Discover Telegram chat ID** and send `/start` or a new message while it polls. |
 
 ## Useful VM commands

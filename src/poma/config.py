@@ -219,6 +219,8 @@ class Settings(BaseSettings):
 
         if self.allow_delayed_execution_quotes is None:
             self.allow_delayed_execution_quotes = self.trading_mode != TradingMode.LIVE
+        if self.trading_mode == TradingMode.LIVE and self.allow_delayed_execution_quotes:
+            raise ValueError("LIVE trading requires ALLOW_DELAYED_EXECUTION_QUOTES=false")
         if not self.ibkr_market_data_exchanges:
             self.ibkr_market_data_exchanges = "SMART" if self.trading_mode == TradingMode.LIVE else "IEX,SMART"
 

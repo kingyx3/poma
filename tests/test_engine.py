@@ -133,6 +133,7 @@ def test_run_paper_executes_through_broker() -> None:
         broker=broker,
         TRADING_MODE="paper",
         IBKR_ACCOUNT="DU1234567",
+        MAX_POSITION_PCT=1.0,
         MAX_TURNOVER_PCT=1.0,
         MAX_ORDER_NOTIONAL_USD=100_000.0,
     )
@@ -155,6 +156,33 @@ def test_run_blocks_when_turnover_exceeds_limit() -> None:
     assert not outcome.executed
     assert outcome.status == "blocked"
     assert broker.submitted is None
+
+
+def test_run_blocks_when_target_exceeds_position_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("poma.config.default_registry", _multi_strategy_registry)
+    broker = FakeBroker()
+    settings = make_settings(
+        STRATEGY_ALLOCATIONS=f"{SHADOW_STRATEGY_NAME}=1.0",
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
+        MAX_POSITION_PCT=0.10,
+        MAX_TURNOVER_PCT=1.0,
+        MAX_ORDER_NOTIONAL_USD=100_000.0,
+    )
+    engine = RebalanceEngine(
+        settings,
+        data_client=FixtureMarketDataClient(),
+        broker=broker,
+        strategy_registry=_multi_strategy_registry(),
+    )
+
+    outcome = engine.run("session", "run")
+
+    assert outcome.blocked
+    assert not outcome.executed
+    assert outcome.status == "blocked"
+    assert broker.submitted is None
+    assert any("max_position_pct" in warning for warning in outcome.plan.warnings)
 
 
 def test_run_blocks_when_paper_balance_cannot_be_read() -> None:
@@ -275,3 +303,26 @@ def test_current_holdings_reduce_buys_and_generate_sells() -> None:
     aapl_trades = [trade for trade in plan.trades if trade.ticker == "AAPL"]
     assert aapl_trades, "an oversized existing AAPL position should trigger a rebalancing trade"
     assert aapl_trades[0].side.value == "SELL"
+
+
+def test_current_holding_outside_provider_snapshot_can_still_be_reduced() -> None:
+    broker = FakeBroker(
+        positions=[CurrentPosition("TSLA", quantity=10.0, market_value=2_000.0)],
+        cash_usd=8_000.0,
+    )
+    plan = _engine(
+        broker=broker,
+        TRADING_MODE="paper",
+        IBKR_ACCOUNT="DU1234567",
+        STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.98,cash=0.02",
+        MAX_POSITION_PCT=1.0,
+        MAX_TURNOVER_PCT=1.0,
+        MAX_ORDER_NOTIONAL_USD=100_000.0,
+    ).build_plan("session", "rebalance-x")
+
+    tsla_trades = [trade for trade in plan.trades if trade.ticker == "TSLA"]
+    assert len(tsla_trades) == 1
+    assert tsla_trades[0].side.value == "SELL"
+    assert tsla_trades[0].quantity == 10
+    assert tsla_trades[0].reference_price == 200
+    assert any("held TSLA" in warning for warning in plan.warnings)

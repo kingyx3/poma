@@ -956,12 +956,22 @@ class IbkrBroker:
             self._assert_connected(ib)
             ib.reqAllOpenOrders()
             ib.sleep(1.0)
-            target = next((trade.order for trade in ib.openTrades() if trade.order.orderId == order_id), None)
-            if target is not None:
-                ib.cancelOrder(target)
-                ib.sleep(1.0)
+            target_trade = next((trade for trade in ib.openTrades() if trade.order.orderId == order_id), None)
+            if target_trade is None:
+                raise RuntimeError(f"cannot replace order {order_id}: original order is no longer open")
+            ib.cancelOrder(target_trade.order)
+            ib.sleep(1.0)
+            cancelled_status = str(getattr(target_trade.orderStatus, "status", "") or "")
+            if cancelled_status not in {"Cancelled", "ApiCancelled"}:
+                raise RuntimeError(
+                    f"cannot replace order {order_id}: cancel not confirmed (status={cancelled_status or 'unknown'})"
+                )
+            remaining_qty = float(getattr(target_trade.orderStatus, "remaining", 0.0) or 0.0)
+            replacement_qty = min(abs(quantity), remaining_qty)
+            if replacement_qty <= 0:
+                raise RuntimeError(f"cannot replace order {order_id}: no remaining quantity after cancel")
             contract = Stock(ticker, "SMART", "USD")
-            order = LimitOrder(side.value, abs(quantity), new_limit_price)
+            order = LimitOrder(side.value, replacement_qty, new_limit_price)
             order.tif = self.settings.order_time_in_force
             order.orderRef = order_ref
             if self.settings.ibkr_account:

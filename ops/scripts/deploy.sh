@@ -4,9 +4,6 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/poma}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.vm.yml}"
 COMPOSE_ENV_FILE="${COMPOSE_ENV_FILE:-.compose.env}"
-DEFAULT_IMAGE_REGISTRY="${DEFAULT_IMAGE_REGISTRY:-ghcr.io}"
-DEFAULT_IMAGE_REPOSITORY="${DEFAULT_IMAGE_REPOSITORY:-kingyx3/poma}"
-DEFAULT_IMAGE_TAG="${DEFAULT_IMAGE_TAG:-main}"
 EXPECTED_APP_UID="${EXPECTED_APP_UID:-1000}"
 EXPECTED_APP_GID="${EXPECTED_APP_GID:-1000}"
 DOCKER_DIAGNOSTIC_TIMEOUT="${DOCKER_DIAGNOSTIC_TIMEOUT:-10s}"
@@ -75,10 +72,10 @@ prepare_runtime_dirs() {
 }
 
 resolve_image() {
-  if [ -n "${POMA_IMAGE:-}" ]; then
-    return 0
+  if [ -z "${POMA_IMAGE:-}" ]; then
+    echo "POMA_IMAGE is required; pass the immutable image ref built by build-app-image.yml." >&2
+    exit 1
   fi
-  export POMA_IMAGE="${DEFAULT_IMAGE_REGISTRY}/${DEFAULT_IMAGE_REPOSITORY}:${DEFAULT_IMAGE_TAG}"
 }
 
 write_compose_env() {
@@ -120,7 +117,7 @@ pull_image() {
 }
 
 run_deploy_smoke() {
-  local after_count before_count smoke_session
+  local after_count before_count report_path smoke_session
 
   smoke_session="deploy-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
   before_count="$(find reports -maxdepth 1 -type f -name 'rebalance-*.json' | wc -l)"
@@ -134,6 +131,26 @@ run_deploy_smoke() {
     echo "Deploy smoke test did not create a rebalance report" >&2
     exit 1
   fi
+  report_path="$(find reports -maxdepth 1 -type f -name 'rebalance-*.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)"
+  python - "${smoke_session}" "${report_path}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+session = sys.argv[1]
+path = Path(sys.argv[2])
+report = json.loads(path.read_text())
+if report.get("session_date") != session:
+    raise SystemExit(f"smoke report {path} has session_date={report.get('session_date')!r}, expected {session!r}")
+if report.get("execution_results"):
+    raise SystemExit(f"smoke report {path} unexpectedly contains execution results")
+if any("block execution" in warning for warning in report.get("warnings", [])):
+    raise SystemExit(f"smoke report {path} contains blocking warnings")
+if not report.get("targets"):
+    raise SystemExit(f"smoke report {path} contains no targets")
+if not report.get("trades"):
+    raise SystemExit(f"smoke report {path} contains no trades")
+PY
 }
 
 prune_dangling_images() {

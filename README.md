@@ -76,6 +76,6 @@ pytest
 1. Add only the temporary `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` secret.
 2. Run **Bootstrap GCP Workload Identity Federation** with `terraform_action=plan`, then `apply`.
 3. Delete the bootstrap key and add the runtime secrets from [`docs/configuration.md`](docs/configuration.md).
-4. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`, then `apply` with `deploy_app=true`.
+4. Run **Build app image** for the commit you want to deploy, then run **Deploy GCP e2-micro VM** with `terraform_action=plan`, then `apply` with `deploy_app=true` and the built commit-SHA image ref.
 5. Before `paper` or `live`, configure and verify Gateway using [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md).
 6. Use [`docs/operations-runbook.md`](docs/operations-runbook.md) for paper/live activation, alerts, and troubleshooting.

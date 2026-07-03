@@ -106,9 +106,10 @@ plan rebalance
           -> immediately before each phase: fetch a fresh IBKR execution quote per ticker and
              reprice off it (poma.execution_pricing); block trades that fail a freshness/spread/
              delayed-quote check instead of submitting them (see docs/configuration.md)
-          -> submit sell orders first; refresh broker cash before sizing buys against it (an
-             unfilled or partially filled sell is not assumed to provide buying power); if the
-             refreshed cash does not cover planned buy notional, block the buys as
+          -> submit sell orders first; reprice buys from fresh execution quotes, then refresh
+             broker cash before submitting them (an unfilled or partially filled sell is not
+             assumed to provide buying power); if the refreshed cash does not cover planned buy
+             limit cash requirement, block the buys as
              BuyingPowerBlocked instead of submitting them
           -> submit buy orders, each with explicit ORDER_TIME_IN_FORCE
           -> record every submission and status change, plus the quote it was priced from, in
@@ -130,8 +131,8 @@ ExecutionManager (src/poma/execution_manager.py)
   -> tags every trade with a stable orderRef and records a lifecycle ledger entry
   -> a retry of the same run that finds a non-terminal ledger entry for an orderRef does not
      resubmit it; it returns an IdempotentReplay result instead
-  -> stages sells before buys, then refreshes broker cash before sizing/submitting buys so a
-     rebalance never assumes unconfirmed sell proceeds provide buying power
+  -> stages sells before buys, then reprices buys and refreshes broker cash before submitting
+     them so a rebalance never assumes unconfirmed sell proceeds provide buying power
   -> IbkrBroker (src/poma/broker.py) stays a thin adapter: submit/cancel/replace/query only
   -> internal lifecycle: planned -> submitted -> broker_accepted -> partially_filled
        -> filled | replace_pending -> cancel_pending -> cancelled | rejected | expired
@@ -192,7 +193,7 @@ reports/*.json                   # generated rebalance reports
 | Order timeout/cancel/failure | Order lifecycle alert plus final `completed_with_order_issues` state. |
 | Limit order accepted but never fills | `poma reconcile-orders` replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`, independent of the rebalance process lifetime. |
 | Open orders left over from a prior session, or from a different run in the same session | The next rebalance blocks (or auto-cancels, per `STALE_ORDER_POLICY`) instead of silently layering a new plan on top. |
-| Process killed outright (crash/OOM/VM restart) mid-run | `poma monitor`'s next tick resumes the session left `running` with the same `run_id`; any orderRef already recorded in the ledger is not resubmitted, and `submit_plan` returns an `IdempotentReplay` result for it instead. |
-| Sell proceeds assumed to fund buys | Buys are sized against broker cash refreshed *after* the sell phase, not the pre-trade cash snapshot; insufficient refreshed cash blocks the buys as `BuyingPowerBlocked` instead of submitting them. |
+| Process killed outright (crash/OOM/VM restart) mid-run | `poma monitor`'s next tick resumes the session left `running` with the same `run_id`; any orderRef already recorded in the ledger (open or terminal) is not resubmitted, and `submit_plan` returns an `IdempotentReplay` result for it instead. |
+| Sell proceeds assumed to fund buys | Buys are repriced first, then checked against broker cash refreshed *after* the sell phase, not the pre-trade cash snapshot; insufficient cash for the buy limit requirement blocks the buys as `BuyingPowerBlocked` instead of submitting them. |
 | Process crash mid-submission | Every order is tagged with an idempotent `orderRef` and recorded in the order ledger before submission, so a reconnect can recognize what was already sent. |
 | Public SSH exposure | Terraform only allows SSH through IAP TCP forwarding. |

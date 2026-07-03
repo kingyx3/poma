@@ -56,7 +56,7 @@ flowchart TD
 | Workflow | Secrets needed |
 |---|---|
 | Bootstrap | Temporary bootstrap service account key |
-| Deploy with `deployment_action=deploy` | Telegram token, Telegram chat id, data provider key, account selector for selected mode |
+| Deploy with `deployment_action=deploy` | Telegram token, Telegram chat id, account selector for selected mode |
 | Deploy with `deployment_action=undeploy` | No runtime secrets; uses generated WIF config for the selected environment |
 | IB Gateway Ops `configure-paper` / `configure-live` | Broker login id and broker login secret |
 

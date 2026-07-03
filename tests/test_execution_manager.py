@@ -552,6 +552,24 @@ def test_submit_plan_blocks_buys_when_refreshed_cash_is_insufficient_after_sells
     assert all(order.ticker != "AAPL" for order in open_orders)
 
 
+def test_submit_plan_blocks_repriced_buy_when_limit_cash_exceeds_refreshed_cash(
+    tmp_path: Path,
+) -> None:
+    broker = RecordingBroker()
+    broker.cash_usd = 500.50
+    broker.quotes_override = {"AAPL": _quote("AAPL", bid=99.95, ask=100.05)}
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+
+    results = manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
+
+    assert results[0].status == "BuyingPowerBlocked"
+    assert "limit cash requirement" in results[0].message
+    assert broker.submitted_batches == []
+    assert broker.account_snapshot_calls == 1
+    assert store.load_open_orders() == []
+
+
 def test_submit_plan_refreshes_cash_after_sell_phase_before_buys(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)

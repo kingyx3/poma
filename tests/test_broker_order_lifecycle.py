@@ -288,6 +288,50 @@ def test_replace_order_cancels_old_order_and_places_a_new_one(monkeypatch: pytes
     assert len(fake_ib.placed_orders) == 1
 
 
+def test_replace_order_fails_when_original_order_is_not_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(open_trades=[])
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    with pytest.raises(RuntimeError, match="original order is no longer open"):
+        broker.replace_order(
+            order_id=7,
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            quantity=5.0,
+            new_limit_price=101.5,
+            order_ref="poma:run-1:0:AAPL:BUY:r1",
+        )
+
+    assert fake_ib.placed_orders == []
+
+
+def test_replace_order_uses_remaining_quantity_after_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ib = FakeIB(
+        open_trades=[
+            FakeTrade(
+                order=FakeOrder(orderId=7, action="BUY", orderRef="poma:run-1:0:AAPL:BUY", account="DU1234567"),
+                orderStatus=FakeOrderStatus(status="Submitted", filled=3.0, remaining=2.0),
+                contract=FakeContract(symbol="AAPL"),
+            ),
+        ]
+    )
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    broker.replace_order(
+        order_id=7,
+        ticker="AAPL",
+        side=OrderSide.BUY,
+        quantity=5.0,
+        new_limit_price=101.5,
+        order_ref="poma:run-1:0:AAPL:BUY:r1",
+    )
+
+    _, replacement = fake_ib.placed_orders[0]
+    assert replacement.totalQuantity == 2.0
+
+
 def test_execution_quotes_reads_bid_ask_and_marks_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
     tick_time = datetime.now(UTC)
     fake_ib = FakeIB(

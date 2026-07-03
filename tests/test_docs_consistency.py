@@ -37,3 +37,32 @@ def test_configuration_docs_match_app_env_default_and_deploy_override() -> None:
     assert "APP_ENV=development" in env_example
     assert "| `APP_ENV` | yes | `development` |" in configuration_docs
     assert "CI/CD deploys render `dev`, `stg`, or `prd`" in configuration_docs
+
+
+def test_workflow_runbook_does_not_require_yahoo_provider_key() -> None:
+    workflow_runbook = _text(REPO_ROOT / "docs/workflow-runbook.md")
+    configuration_docs = _text(REPO_ROOT / "docs/configuration.md")
+
+    assert "data provider key" not in workflow_runbook
+    assert "| `DATA_PROVIDER` | yes | `yahoo` |" in configuration_docs
+
+
+def test_production_readiness_docs_include_execution_price_gates() -> None:
+    readiness = _text(REPO_ROOT / "docs/production-readiness.md")
+
+    for snippet in (
+        "Strategy allocations contain no non-`cash` sleeve",
+        "Paper/live mode uses anything other than `EXECUTION_PRICE_SOURCE=ibkr`",
+        "Paper/live mode allows execution quotes older than 120 seconds",
+        "Live mode allows delayed execution quotes",
+    ):
+        assert snippet in readiness
+
+
+def test_image_deploy_docs_reject_mutable_main_fallback() -> None:
+    deploy_docs = _text(REPO_ROOT / "docs/e2-micro-image-pull-deploy.md")
+    workflow_docs = _text(REPO_ROOT / "docs/deployment-gcp-free-tier.md")
+
+    assert "leaving `image` blank fails" in deploy_docs
+    assert "Blank values and mutable tags are rejected" in workflow_docs
+    assert "falls back to the `:main` tag" not in deploy_docs

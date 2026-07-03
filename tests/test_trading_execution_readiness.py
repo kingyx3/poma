@@ -418,6 +418,7 @@ def test_engine_marks_all_cancelled_orders_as_no_orders_accepted() -> None:
         make_settings(
             TRADING_MODE="paper",
             IBKR_ACCOUNT="DU1234567",
+            MAX_POSITION_PCT=1.0,
             MAX_TURNOVER_PCT=1.0,
             MAX_ORDER_NOTIONAL_USD=100_000.0,
         ),
@@ -480,15 +481,14 @@ def test_validate_runtime_config_rejects_overly_stale_quote_age_for_paper(
 def test_validate_runtime_config_rejects_delayed_quotes_allowed_for_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = _settings(
-        monkeypatch,
-        DATA_PROVIDER="yahoo",
-        TRADING_MODE="live",
-        ALLOW_LIVE_TRADING="true",
-        ALLOW_DELAYED_EXECUTION_QUOTES="true",
-    )
-    errors = _load_validate_runtime_config().validate(settings)
-    assert any("ALLOW_DELAYED_EXECUTION_QUOTES" in error for error in errors)
+    with pytest.raises(ValueError, match="ALLOW_DELAYED_EXECUTION_QUOTES=false"):
+        _settings(
+            monkeypatch,
+            DATA_PROVIDER="yahoo",
+            TRADING_MODE="live",
+            ALLOW_LIVE_TRADING="true",
+            ALLOW_DELAYED_EXECUTION_QUOTES="true",
+        )
 
 
 def test_validate_runtime_config_accepts_safe_default_execution_pricing(

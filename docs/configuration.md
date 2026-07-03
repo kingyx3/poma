@@ -44,7 +44,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `IBKR_MARKET_DATA_EXCHANGES` | no | mode-dependent: `IEX,SMART` for non-live, `SMART` for live | Comma-separated IBKR venues used only for quote/probe requests. Orders still route through `SMART`. Paper/dev tries `IEX` first so IBKR's US real-time non-consolidated streaming quote entitlement can satisfy live quote checks when the Gateway API exposes it before falling back to `SMART` and, if allowed, delayed data. |
 | `ALLOW_LAST_PRICE_FALLBACK` | yes | `false` | Required to be `true` before `EXECUTION_PRICE_BASIS=last` is accepted. |
 | `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE` | yes | `false` | Explicit override required for `TRADING_MODE=live` with `EXECUTION_PRICE_SOURCE=snapshot`. Leave `false` unless you understand the staleness risk. |
-| `FRACTIONAL_SHARES` | no | `false` | Whole-share sizing is the default for every instrument because the IBKR API rejects fractional order sizes (error 10243 "Fractional-sized order cannot be placed via API"). Buys round to the nearest whole share (up or down, keeping orders centered on the target notional); sells always round down so a rounded order can never oversell the position. Buy round-ups that would push total buy notional past available cash plus planned sell proceeds are demoted back down, and the same rounding re-applies when orders are repriced off a fresh execution quote. Set `true` only for accounts confirmed to accept fractional API orders. |
+| `FRACTIONAL_SHARES` | no | `false` | Whole-share sizing is the default for every instrument because the IBKR API rejects fractional order sizes (error 10243 "Fractional-sized order cannot be placed via API"). Buys round to the nearest whole share (up or down, keeping orders centered on the target notional); sells always round down so a rounded order can never oversell the position. Buy round-ups that would push total buy limit cash requirement past available cash plus conservative planned sell proceeds are demoted back down, and the same rounding re-applies when orders are repriced off a fresh execution quote. Set `true` only for accounts confirmed to accept fractional API orders. |
 | `NON_FRACTIONAL_TICKERS` | no | `` (empty) | Only meaningful with `FRACTIONAL_SHARES=true`: comma-separated tickers kept on whole-share sizing while every other instrument trades fractionally. |
 | `ORDER_STATUS_TIMEOUT_SECONDS` | yes | `60` | Time to wait for broker order status before marking follow-up needed. |
 | `CANCEL_STALE_ORDERS` | yes | `true` | Request cancel when an order does not reach a terminal status in time. |
@@ -75,7 +75,22 @@ The planning snapshot price and the paper/live execution price answer two differ
 
 Paper/live execution blocks the affected order (with a `block execution` warning, the same marker used elsewhere in the risk engine) instead of silently falling back to the planning snapshot price when the IBKR quote is missing, older than `EXECUTION_QUOTE_MAX_AGE_SECONDS`, wider than `EXECUTION_MAX_SPREAD_BPS`, or flagged delayed without `ALLOW_DELAYED_EXECUTION_QUOTES=true`. Every submitted order's ledger entry (`poma.order_lifecycle.OrderLedgerEntry`) records the quote source, basis, timestamp, age, and spread it was priced from, and Telegram order-status alerts include the same summary.
 
-`IbkrBroker` explicitly requests live market data (`reqMarketDataType(1)`) on every connection rather than relying on Gateway remembering a data type from a prior session or client id, since a fresh connection can otherwise silently return no ticks at all even with live entitlements in place. Quote requests use `IBKR_MARKET_DATA_EXCHANGES` in order. This affects only quote/probe contracts, not order routing: submitted orders still use `SMART`. In paper/dev, trying `IEX` before `SMART` lets accounts with IBKR's US real-time non-consolidated streaming quotes use a real-time direct-venue feed when the Gateway API exposes one, instead of immediately failing on `SMART`/NASDAQ consolidated market-data entitlement. A ticker with no live tick on any configured venue is retried as delayed data automatically when `ALLOW_DELAYED_EXECUTION_QUOTES=true`; tickers that already received a live tick are left alone. A symbol with no data under either mode still blocks execution.
+Buying-power checks use the cash the submitted limit order can actually consume, not just the
+reference-price notional. For paper/live buys, `ExecutionManager` reprices against the fresh
+execution quote first, then refreshes broker cash after the sell phase and blocks buys as
+`BuyingPowerBlocked` if that cash cannot cover the buy limit cash requirement.
+
+`IbkrBroker` explicitly requests live market data (`reqMarketDataType(1)`) on every connection
+rather than relying on Gateway remembering a data type from a prior session or client id, since a
+fresh connection can otherwise silently return no ticks at all even with live entitlements in
+place. Quote requests use `IBKR_MARKET_DATA_EXCHANGES` in order. This affects only quote/probe
+contracts, not order routing: submitted orders still use `SMART`. In paper/dev, trying `IEX`
+before `SMART` lets accounts with IBKR's US real-time non-consolidated streaming quotes use a
+real-time direct-venue feed when the Gateway API exposes one, instead of immediately failing on
+`SMART`/NASDAQ consolidated market-data entitlement. A ticker with no live tick on any configured venue is retried as
+delayed data automatically when `ALLOW_DELAYED_EXECUTION_QUOTES=true`; tickers that already
+received a live tick are left alone. A symbol with no data under either mode still blocks
+execution.
 
 The readiness probe behind `poma ibkr-check` additionally walks the full market data type ladder (live → frozen → delayed → delayed-frozen) across each configured `IBKR_MARKET_DATA_EXCHANGES` venue, so its verdict is conclusive even outside market hours: frozen data serves the last real-time quote of a closed session and needs the same entitlement as live, so a frozen tick off-hours proves real-time entitlement, while a delayed-only tick proves that entitlement is missing. The ladder is probe-only — frozen data is stale by definition and never feeds execution pricing. `ibkr-check` output reports the verdict directly as `market_data_type=…`, `market_data_exchange=…`, and `realtime_entitlement=yes|no`.
 
@@ -94,6 +109,11 @@ STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.60,future_strategy=0.20,c
 That runs `rank_velocity_size_equal_weight` on 60% of the resolved portfolio value, runs `future_strategy` on 20%, and leaves 20% in passive cash. No sleeve separately subtracts a hidden cash buffer. If two sleeves both target the same ticker, POMA combines their targets into a single portfolio-level order rather than trading them independently. See [`docs/portfolio-management.md`](portfolio-management.md) for the strategy-neutral model.
 
 Existing USD-denominated stock positions in the configured IBKR account are read by ticker and included in rebalance deltas. Keep unrelated/manual positions in a separate account or avoid overlapping tickers if you do not want them to affect POMA's calculations.
+
+If a held ticker is missing from the Yahoo planning snapshot and the combined target would reduce
+or exit that position, POMA may use the broker-reported position market value per share to size the
+risk-reducing sell. This fallback is not used for buys, and it does not bypass the fresh IBKR
+execution quote check before submission.
 
 ## Required GitHub secret shapes
 

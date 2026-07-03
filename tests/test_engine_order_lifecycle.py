@@ -13,7 +13,7 @@ from poma.order_store import OrderStore
 
 def _engine(tmp_path: Path, broker: FakeBroker | None = None, **overrides: object) -> RebalanceEngine:
     return RebalanceEngine(
-        make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567", **overrides),
+        make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567", MAX_POSITION_PCT=1.0, **overrides),
         data_client=FixtureMarketDataClient(),
         broker=broker or FakeBroker(),
         order_store=OrderStore(tmp_path),
