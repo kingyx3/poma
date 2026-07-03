@@ -1,3 +1,4 @@
+import importlib.util
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,15 @@ def _runner() -> str:
     return GATEWAY_OPS_RUNNER.read_text(encoding="utf-8")
 
 
+def _load_gateway_runner():
+    spec = importlib.util.spec_from_file_location("run_gateway_ops_workflow", GATEWAY_OPS_RUNNER)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     workflow = _workflow()
 
@@ -25,6 +35,7 @@ def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 180" in workflow
     assert "IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS: 1" in workflow
     assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS: 300" in workflow
+    assert "IB_GATEWAY_RUNTIME_REPAIR_TIMEOUT_SECONDS: 780" in workflow
     assert "Resolve broker login secrets" in workflow
 
 
@@ -58,6 +69,25 @@ def test_gateway_readiness_uses_pulled_vm_image_and_bounded_restarts() -> None:
     assert 'max_trading_login_restarts = int(env("IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS", "1"))' in runner
     assert "hard_deadline = started + (max_trading_login_restarts + 1) * timeout_seconds" in runner
     assert "'Read-Only API' disabled" in runner
+    assert "classify_non_retriable_ibkr_check(check_output)" in runner
+
+
+def test_gateway_market_data_entitlement_failures_skip_fresh_login_restart() -> None:
+    module = _load_gateway_runner()
+
+    for output in (
+        "Error 10089: Requested market data requires additional subscription for API.",
+        "Error 354: Requested market data is not subscribed.",
+        "Error 10197: No market data during competing live session",
+    ):
+        classification = module.classify_non_retriable_ibkr_check(output)
+
+        assert classification is not None
+        reason, next_action = classification
+        assert "market-data" in reason
+        assert "rerun Gateway configure" in next_action
+
+    assert module.classify_non_retriable_ibkr_check("TimeoutError connecting to IBKR API") is None
 
 
 def test_gateway_ops_logs_stay_concise_and_error_specific() -> None:
@@ -90,12 +120,23 @@ def test_gateway_runtime_repair_installs_helpers_idempotently() -> None:
 
     for snippet in (
         "revision = helper_revision()",
+        "HELPER_ARCHIVE_NAME = \"poma-gateway-helpers.tar.gz\"",
+        "def build_helper_archive()",
+        "tarfile.open",
+        "Upload gateway helper bundle",
+        "timeout=240",
+        "Gateway runtime preflight",
+        "sudo tar -xzf /tmp/{HELPER_ARCHIVE_NAME} -C /tmp",
+        "sudo install -m 755 /tmp/diagnose_ib_gateway_runtime.py",
         "/var/lib/poma/ib-gateway-runtime-revision",
         "poma-diagnose-ibgateway",
         "poma-wait-ibgateway-2fa",
         "Gateway runtime helpers already current",
         "Gateway runtime sentinel missing or stale; fail-open",
         "systemctl cat ibgateway",
+        "runtime_repair_timeout_seconds",
+        "runtime-repair",
+        "Collect runtime repair diagnostics",
     ):
         assert snippet in runner
 
@@ -172,11 +213,12 @@ def test_gateway_ops_keeps_bounded_timeouts() -> None:
     workflow = _workflow()
     runner = _runner()
 
-    assert "timeout-minutes: 20" in workflow
+    assert "timeout-minutes: 25" in workflow
     assert "IB_GATEWAY_2FA_APPROVAL_TIMEOUT_SECONDS: 300" in workflow
     assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 180" in workflow
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS" in workflow
     assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS" in workflow
+    assert "IB_GATEWAY_RUNTIME_REPAIR_TIMEOUT_SECONDS" in workflow
     assert "ibkr_check_timeout_seconds" in runner
-    assert "timeout=600" in runner
+    assert "timeout=runtime_repair_timeout_seconds" in runner

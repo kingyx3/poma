@@ -15,6 +15,7 @@ def test_upload_install_step_reports_stage_timings() -> None:
     expected_snippets = (
         "Packaged runtime archive:",
         "timed \"VM readiness\" ensure_vm_ready",
+        "timed \"Pause app cron before deploy\"",
         "timed \"Deployment bundle upload\"",
         "retry_with_backoff 4m \"Deployment bundle upload\" 2",
         "timed \"Remote install, Docker pull, optional smoke, cron\"",
@@ -26,6 +27,7 @@ def test_upload_install_step_reports_stage_timings() -> None:
         "remote_timed \"Extract deployment bundle as app user\"",
         "remote_timed \"Docker pull and optional smoke\"",
         "remote_timed \"Install cron schedule\"",
+        "remote_timed \"Restart cron scheduler\"",
         "TIMING Upload and install on VM total",
     )
     for snippet in expected_snippets:
@@ -43,9 +45,10 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
         "timeout --kill-after=30s 5m terraform -chdir=infra/gcp-free-tier init",
         "timeout --kill-after=30s 10m terraform -chdir=infra/gcp-free-tier plan",
         "timeout --kill-after=30s 20m terraform -chdir=infra/gcp-free-tier apply",
+        "timeout --kill-after=10s 45s terraform -chdir=infra/gcp-free-tier output -raw",
         "timeout --kill-after=30s 2m tar",
         "docker-compose.vm.yml",
-        "timeout-minutes: 35",
+        "timeout-minutes: 40",
         "timeout-minutes: 90",
         "Remote install, Docker pull, optional smoke, cron",
     )
@@ -88,15 +91,33 @@ def test_prebuilt_image_workflow_pushes_sha_and_optional_main_tag_with_cache() -
 
 def test_deploy_polling_and_retries_are_bounded() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    upload_block = workflow.split("- name: Upload and install on VM", 1)[1].split("- name: Notify Telegram", 1)[0]
 
-    assert "local deadline=$((SECONDS + 420)) attempt=0" in workflow
-    assert "startup revision ${startup_revision} not ready within 7m" in workflow
+    assert "- name: Export Terraform outputs" in workflow
+    assert "tf_output()" in workflow
+    assert "Terraform output ${name} failed; retrying attempt ${attempt}/3 in 10s" in workflow
+    assert "TF_INSTANCE_NAME=${instance_name}" in workflow
+    assert "TF_ZONE=${zone}" in workflow
+    assert "TF_STARTUP_REVISION=${startup_revision}" in workflow
+    assert 'instance_name="${TF_INSTANCE_NAME:?missing Terraform output TF_INSTANCE_NAME}"' in upload_block
+    assert 'zone="${TF_ZONE:?missing Terraform output TF_ZONE}"' in upload_block
+    assert 'startup_revision="${TF_STARTUP_REVISION:?missing Terraform output TF_STARTUP_REVISION}"' in upload_block
+    assert "terraform -chdir=infra/gcp-free-tier output -raw" not in upload_block
+    assert 'wait_for_vm_ready 720 "12m"' in workflow
+    assert "local deadline=$((SECONDS + wait_seconds)) attempt=0 status=1 saw_remote=0" in workflow
+    assert "startup revision ${startup_revision} not ready within ${wait_label}" in workflow
+    assert "startup_status=running" in workflow
+    assert "not resetting a still-bootstrapping host" in workflow
     assert "startup_failed=$(cat /var/lib/poma/vm-startup-failed" in workflow
     assert "VM startup script failed before writing the readiness sentinel" in workflow
+    assert "return 42" in workflow
     assert "exit 42" in workflow
     assert "id poma >/dev/null 2>&1" in workflow
     assert "systemctl is-active --quiet docker" in workflow
     assert "systemctl is-active --quiet cron" in workflow
+    assert "sudo crontab -r -u poma" in workflow
+    assert "sudo systemctl stop cron" in workflow
+    assert "docker compose --env-file .compose.env -f docker-compose.vm.yml down --remove-orphans" in workflow
     assert "test -f /var/lib/cloud/instance/boot-finished" not in workflow
     assert "print_vm_bootstrap_status" in workflow
     assert "retry_with_backoff" in workflow

@@ -32,6 +32,10 @@ trap record_startup_failure EXIT
 
 rm -f "$${READY_SENTINEL}" "$${FAILED_SENTINEL}"
 
+# Existing crontabs can start old app containers as soon as the service comes up after a reboot.
+# Pause cron while the small VM is bootstrapping; it is restarted after host readiness.
+systemctl stop cron || true
+
 # Ubuntu cloud images already reserve uid/gid 1000 for the default ubuntu identity.
 # Keep the numeric app identity aligned with the prebuilt container without renaming
 # platform users/groups that the guest agent may still expect.
@@ -73,8 +77,18 @@ if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
 fi
 
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates cron curl python3
+missing_packages=()
+command -v update-ca-certificates >/dev/null 2>&1 || missing_packages+=(ca-certificates)
+command -v cron >/dev/null 2>&1 || missing_packages+=(cron)
+command -v curl >/dev/null 2>&1 || missing_packages+=(curl)
+command -v python3 >/dev/null 2>&1 || missing_packages+=(python3)
+
+if [ "$${#missing_packages[@]}" -gt 0 ]; then
+  apt-get update
+  apt-get install -y --no-install-recommends "$${missing_packages[@]}"
+else
+  echo "Required host packages already present; skipping apt-get update/install."
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
