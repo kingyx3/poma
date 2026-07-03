@@ -2,9 +2,9 @@
 
 This runbook is the day-to-day checklist for operating POMA safely in `dry_run`, `paper`, and eventually `live`.
 
-## Strategy and capital model
+## Portfolio and capital model
 
-POMA is a multi-strategy, strategy-allocated portfolio runner. In `paper` and `live`, the rebalance plan uses a single `AccountSnapshot` read of the configured IBKR account's current USD cash, positions, and net liquidation. `MANAGED_CAP_MODE` (`broker_total` by default) decides whether the full broker equity or `min(broker equity, MANAGED_CAP_USD)` is used. `STRATEGY_ALLOCATIONS` splits that resolved value across named sleeves, and the total allocation must stay at or below 100%. Every allocated non-`cash` sleeve is executed, not just one; sleeves with overlapping tickers are combined into single portfolio-level orders.
+POMA is a multi-strategy, strategy-allocated portfolio runner. In `paper` and `live`, the rebalance plan uses a single `AccountSnapshot` read of the configured IBKR account's current USD cash, positions, and net liquidation. `MANAGED_CAP_MODE` (`broker_total` by default) decides whether the full broker equity or `min(broker equity, MANAGED_CAP_USD)` is used. `STRATEGY_ALLOCATIONS` splits that resolved value across named sleeves, and the total allocation must stay at or below 100%. Every allocated non-`cash` sleeve is executed, not just one; sleeves with overlapping tickers are combined into single portfolio-level orders. See [`docs/portfolio-management.md`](portfolio-management.md) for the full strategy-neutral model.
 
 Default production allocation:
 
@@ -13,7 +13,7 @@ STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.98,cash=0.02
 MANAGED_CAP_MODE=broker_total
 ```
 
-This means `rank_velocity_size_equal_weight` can trade up to 98% of the resolved account value. The remaining 2% is a passive `cash` sleeve. There is no hidden `CASH_BUFFER_PCT` inside any strategy; reserve cash by changing the `cash` sleeve allocation. Every non-`cash` name in `STRATEGY_ALLOCATIONS` must be a registered strategy (see `docs/strategy-contract.md`); an unregistered name fails config validation at startup.
+This means the current built-in rank-velocity strategy can trade up to 98% of the resolved account value. The remaining 2% is a passive `cash` sleeve. There is no hidden `CASH_BUFFER_PCT` inside any strategy; reserve cash by changing the `cash` sleeve allocation. Every non-`cash` name in `STRATEGY_ALLOCATIONS` must be a registered strategy (see [`docs/strategy-contract.md`](strategy-contract.md)); an unregistered name fails config validation at startup. The current built-in strategy's selection/scoring behavior is documented in [`docs/strategies/rank-velocity-size-equal-weight.md`](strategies/rank-velocity-size-equal-weight.md).
 
 `DRY_RUN_PORTFOLIO_VALUE_USD` remains only a dry-run/offline fallback for report generation when no broker balance is available. Paper/live execution blocks if POMA cannot read a positive broker account snapshot before sizing targets. Balance reads query both account-filtered and session-wide IBKR account summary rows and authenticated-session account value rows, so a Gateway session that has account data in either cache can provide the cash, net liquidation, and portfolio-value inputs needed for rebalancing.
 
@@ -66,7 +66,7 @@ Buys are never sized against unconfirmed sell proceeds: after the sell phase is 
 
 ## Execution pricing and quote safety
 
-Paper/live orders are priced off a fresh IBKR quote (`EXECUTION_PRICE_SOURCE=ibkr`, the default), fetched immediately before submission — not the Yahoo screener snapshot used for universe/target planning; see "Strategy pricing vs. execution pricing" in `docs/configuration.md`. If IBKR cannot supply a valid quote for a ticker (missing, older than `EXECUTION_QUOTE_MAX_AGE_SECONDS`, wider than `EXECUTION_MAX_SPREAD_BPS`, or delayed without `ALLOW_DELAYED_EXECUTION_QUOTES=true`), that trade is blocked rather than submitted at a stale or fallback price; other trades in the same batch are unaffected. Order lifecycle Telegram alerts and the order ledger both include the quote source, basis, age, and spread each order was priced from.
+Paper/live orders are priced off a fresh IBKR quote (`EXECUTION_PRICE_SOURCE=ibkr`, the default), fetched immediately before submission — not the provider snapshot used for strategy target planning; see "Strategy pricing vs. execution pricing" in [`docs/configuration.md`](configuration.md). If IBKR cannot supply a valid quote for a ticker (missing, older than `EXECUTION_QUOTE_MAX_AGE_SECONDS`, wider than `EXECUTION_MAX_SPREAD_BPS`, or delayed without `ALLOW_DELAYED_EXECUTION_QUOTES=true`), that trade is blocked rather than submitted at a stale or fallback price; other trades in the same batch are unaffected. Order lifecycle Telegram alerts and the order ledger both include the quote source, basis, age, and spread each order was priced from.
 
 ## Session state control
 
@@ -103,7 +103,7 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 | `no_orders_accepted` | IBKR rejected/cancelled the whole batch before any order became accepted/working | Fix Gateway/trading login first. The session is still marked attempted; clear state manually through **IB Gateway Ops** only if retrying the same session is intended. |
 | `completed_with_order_issues` | One or more orders failed, cancelled, timed out, or only partially progressed | Open the latest report in `reports/`, check Telegram order details, then review IBKR activity. |
 | `blocked` rebalance | Risk guard blocked execution, usually broker balance, turnover/order-size/trade-count | Review report warnings and adjust config or Gateway only if the block is expected and safe. |
-| No rank-history snapshot | First run or insufficient snapshot history | Run `poma refresh-market-data`; strategy will fallback to current market-cap ranking until history exists. |
+| No strategy history snapshot | First run or insufficient provider snapshot history for the active strategy | Run `poma refresh-market-data`; check the active strategy docs for fallback behavior. |
 | Limit order accepted but never fills | Working limit price never crossed the market | Confirm the `poma reconcile-orders` cron entry (`ops/cron/poma.cron`) is installed; it replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`. Run it manually to force an immediate check. |
 | New rebalance blocked: "open order(s) from a prior session" / "a different run in this session" | A previous session's (or a different run's) order never reached a terminal state | Run `poma reconcile-orders` to resolve it, or set `STALE_ORDER_POLICY=cancel` to have the next rebalance cancel it automatically. |
 | Buy orders show `BuyingPowerBlocked` | Broker cash refreshed after the sell phase did not cover planned buy notional | Expected when sells have not settled/filled; review the sell fills and rerun once cash confirms, rather than assuming the sell proceeds. |
