@@ -10,15 +10,21 @@ def validate_targets(targets: list[TargetPosition], max_position_pct: float) -> 
     warnings: list[str] = []
     total_weight = sum(t.target_weight for t in targets)
     if total_weight > 1.000001:
-        warnings.append(f"target weights exceed 100%: {total_weight:.4f}")
+        warnings.append(f"target weights exceed 100%: {total_weight:.4f}; block execution")
     if any(t.target_weight > max_position_pct + 1e-9 for t in targets):
-        warnings.append("one or more target weights exceed max_position_pct")
+        warnings.append("one or more target weights exceed max_position_pct; block execution")
     if not targets:
         warnings.append("no target positions generated")
     return warnings
 
 
 # --- Trade risk: order generation and per-batch limits --------------------------------------
+
+
+def _position_reference_price(position: CurrentPosition | None) -> float | None:
+    if position is None or position.quantity <= 0 or position.market_value <= 0:
+        return None
+    return position.market_value / position.quantity
 
 
 def generate_trades(
@@ -53,12 +59,20 @@ def generate_trades(
             continue
 
         reference_price = latest_prices.get(ticker)
+        side = OrderSide.BUY if delta > 0 else OrderSide.SELL
         # reference_price != reference_price catches NaN, which is truthy and not <= 0.
         if reference_price is None or reference_price != reference_price or reference_price <= 0:
-            warnings.append(f"missing valid latest price for {ticker}; skipping trade")
-            continue
+            broker_position_price = _position_reference_price(current)
+            if side == OrderSide.SELL and broker_position_price is not None:
+                reference_price = broker_position_price
+                warnings.append(
+                    f"missing valid latest price for held {ticker}; using broker position "
+                    "market value for risk-reducing sell planning"
+                )
+            else:
+                warnings.append(f"missing valid latest price for {ticker}; skipping trade")
+                continue
 
-        side = OrderSide.BUY if delta > 0 else OrderSide.SELL
         quantity = abs(delta) / reference_price
         if side == OrderSide.SELL and current:
             quantity = min(quantity, abs(current.quantity))
@@ -143,17 +157,19 @@ def filter_trades_by_estimated_transaction_cost(
 
 
 def enforce_buying_power(trades: list[ProposedTrade], available_cash_usd: float) -> list[str]:
-    """Block execution when planned net buys would exceed the account's available cash.
+    """Block execution when planned net buy cash would exceed the account's available cash.
 
-    Sell proceeds are not assumed to settle before buys are placed, but modeling planned sells
-    as immediately available buying power matches how a same-day rebalance nets out.
+    BUY checks use the order's limit price, not only the reference notional, because that is
+    the maximum cash the submitted order can consume. SELL credits use their limit as the
+    conservative minimum proceeds for this preliminary netting check; live submission still
+    refreshes broker cash after the sell phase before any buy order is sent.
     """
-    net_cash_outflow = sum(trade.notional for trade in trades if trade.side == OrderSide.BUY) - sum(
-        trade.notional for trade in trades if trade.side == OrderSide.SELL
+    net_cash_outflow = sum(trade.buy_cash_required_usd for trade in trades) - sum(
+        trade.sell_cash_credit_usd for trade in trades
     )
     if net_cash_outflow > available_cash_usd + 1e-6:
         return [
-            f"planned net buys (${net_cash_outflow:,.2f}) exceed available cash "
+            f"planned net buy cash requirement (${net_cash_outflow:,.2f}) exceeds available cash "
             f"(${available_cash_usd:,.2f}); block execution"
         ]
     return []

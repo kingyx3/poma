@@ -45,6 +45,7 @@ Bootstrap also generates environment-specific VM and deployer names, such as `po
 | `data_provider` | choice | yes | `fixture`, `yahoo`; default `yahoo` | Yahoo is the production provider. Fixture is for tests and dry-runs; deploy validation rejects fixture for paper/live. |
 | `allow_live_trading` | boolean | yes | default `false` | Must be `true` when `trading_mode=live`. |
 | `deploy_smoke` | boolean | no | default `true` | Runs the on-VM dry-run smoke test after the Docker image is built. Auto CI/CD PR deploys set this to `false` because the exact PR image is already built and tested on the runner. |
+| `image` | string | app deploys only | `ghcr.io/kingyx3/poma:<commit-sha>` | Required when `deploy_app=true`; must be an immutable commit-SHA image ref from **Build app image** or Auto CI/CD. Blank values and mutable tags are rejected. |
 
 ## Required setup per environment
 
@@ -94,9 +95,10 @@ For each environment, repeat this sequence with the same `deploy_environment` va
 3. Confirm the generated config file for the selected environment was committed to `ops/deploy/environments/<env>.env`.
 4. Delete `GCP_BOOTSTRAP_SERVICE_ACCOUNT_KEY` from that GitHub Environment and disable/delete the temporary key in GCP IAM.
 5. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `IBKR_LOGIN_ID_PAPER`, `IBKR_LOGIN_SECRET_PAPER`, and `IBKR_ACCOUNT_PAPER` to dev/stg GitHub Environments. Add `IBKR_LOGIN_ID`, `IBKR_LOGIN_SECRET`, and `IBKR_ACCOUNT` only to environments that are allowed to configure and deploy live mode.
-6. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
-7. Rerun with `terraform_action=apply` and `deploy_app=true`.
-8. Keep `trading_mode=dry_run` until the deploy smoke test and Gateway setup are verified.
+6. Run **Build app image** for the commit you want to deploy and copy its immutable commit-SHA image output.
+7. Run **Deploy GCP e2-micro VM** with `terraform_action=plan`.
+8. Rerun with `terraform_action=apply`, `deploy_app=true`, and the built commit-SHA `image`.
+9. Keep `trading_mode=dry_run` until the deploy smoke test and Gateway setup are verified.
 
 The deploy workflow supplies safe defaults for project-derived settings, region, zone, VM name, app mode, trading defaults, risk limits, provider defaults, and local paths. Do not create GitHub Environment Variables for these defaults. After `.env` rendering, deploy validates the runtime config before Terraform/app deployment so broken account, allocation, provider, and guardrail settings fail early.
 

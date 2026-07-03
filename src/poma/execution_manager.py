@@ -89,16 +89,20 @@ class ExecutionManager:
         self._submit_phase(plan, fresh_sells, results_by_ticker, status_callback)
 
         if fresh_buys:
-            block_reason = self._block_buys_for_insufficient_cash(fresh_buys)
+            repriced_buys, blocked_results = self._reprice_for_execution(plan, fresh_buys, status_callback)
+            for trade, result in blocked_results:
+                results_by_ticker[trade.ticker] = result
+
+            block_reason = self._block_buys_for_insufficient_cash(repriced_buys)
             if block_reason is not None:
-                for trade in fresh_buys:
+                for trade in repriced_buys:
                     result = self._blocked_result(trade, BUYING_POWER_BLOCKED_STATUS, block_reason)
                     results_by_ticker[trade.ticker] = result
                     self._record_result(plan, trade, result)
                     if status_callback is not None:
                         status_callback(trade, result)
             else:
-                self._submit_phase(plan, fresh_buys, results_by_ticker, status_callback)
+                self._submit_phase(plan, repriced_buys, results_by_ticker, status_callback, reprice=False)
 
         return [results_by_ticker[trade.ticker] for trade in plan.trades]
 
@@ -164,18 +168,18 @@ class ExecutionManager:
         Unfilled (or partially filled) limit sells are not assumed to provide buying power;
         only cash the broker actually reports after the sell phase counts.
         """
-        buy_notional = sum(trade.notional for trade in buys)
-        if buy_notional <= 1e-9:
+        buy_cash_required = sum(trade.buy_cash_required_usd for trade in buys)
+        if buy_cash_required <= 1e-9:
             return None
         try:
             refreshed = self.broker.account_snapshot()
         except Exception as exc:  # noqa: BLE001 - fail closed on an unreadable post-sell cash read
             return f"unable to refresh broker cash before submitting buys; block buys: {exc}"
-        if refreshed.cash_usd + 1e-6 < buy_notional:
+        if refreshed.cash_usd + 1e-6 < buy_cash_required:
             return (
                 f"refreshed broker cash (${refreshed.cash_usd:,.2f}) does not cover planned buy "
-                f"notional (${buy_notional:,.2f}) after the sell phase; unfilled sells are not "
-                "assumed to provide buying power"
+                f"limit cash requirement (${buy_cash_required:,.2f}) after execution repricing; "
+                "unfilled sells are not assumed to provide buying power"
             )
         return None
 
@@ -200,10 +204,14 @@ class ExecutionManager:
         trades: list[ProposedTrade],
         results_by_ticker: dict[str, OrderResult],
         status_callback: OrderStatusCallback | None,
+        *,
+        reprice: bool = True,
     ) -> None:
         if not trades:
             return
-        submittable, blocked_results = self._reprice_for_execution(plan, trades, status_callback)
+        submittable, blocked_results = (
+            self._reprice_for_execution(plan, trades, status_callback) if reprice else (trades, [])
+        )
         for trade, result in blocked_results:
             results_by_ticker[trade.ticker] = result
         if not submittable:

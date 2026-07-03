@@ -61,7 +61,7 @@ on:
         type: boolean
         default: true
       image:
-        description: Full image ref to pull on the VM (blank = ghcr.io/kingyx3/poma:main).
+        description: Immutable full image ref to pull on the VM, for example ghcr.io/kingyx3/poma:<commit-sha>. Required when deploy_app=true.
         required: false
         type: string
         default: ''
@@ -305,7 +305,7 @@ jobs:
         if: ${{ inputs.deployment_action == 'deploy' }}
         run: |
           set -euo pipefail
-          timeout --kill-after=30s 2m pip install -e . || {
+          timeout --kill-after=30s 2m pip install -e . -c constraints.txt || {
             echo "::error::Dependency install timed out while preparing runtime config validation"
             exit 1
           }
@@ -484,14 +484,17 @@ jobs:
           step_start="${SECONDS}"
 
           # Validate the requested image ref before it is interpolated into the remote shell
-          # command. An empty value is allowed and makes the VM fall back to deploy.sh's
-          # default (ghcr.io/kingyx3/poma:main); a non-empty value must be a plain registry
-          # reference so it cannot smuggle shell metacharacters onto the VM.
-          if [ -n "${INPUT_IMAGE}" ] && ! printf '%s' "${INPUT_IMAGE}" | grep -Eq '^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$'; then
+          # command. App deploys must use an immutable commit-SHA tag produced by
+          # build-app-image.yml; falling back to a mutable :main tag risks deploying stale code.
+          if [ -z "${INPUT_IMAGE}" ]; then
+            echo "::error::image is required when deploy_app=true; build the app image first and pass its ghcr.io/...:<commit-sha> output"
+            exit 1
+          fi
+          if ! printf '%s' "${INPUT_IMAGE}" | grep -Eq '^[A-Za-z0-9._/-]+:[0-9a-fA-F]{40}$'; then
             echo "::error::Refusing to deploy malformed image ref: ${INPUT_IMAGE}"
             exit 1
           fi
-          echo "Deploying image: ${INPUT_IMAGE:-ghcr.io/kingyx3/poma:main (default)}"
+          echo "Deploying image: ${INPUT_IMAGE}"
 
           timed() {
             local label="$1" start status

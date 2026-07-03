@@ -207,6 +207,7 @@ def test_auto_cicd_builds_and_deploys_the_ref_under_test() -> None:
     # The deploy workflow accepts the image ref, validates it, and pulls it on the VM.
     assert "image:" in deploy_workflow
     assert "INPUT_IMAGE: ${{ inputs.image }}" in deploy_workflow
+    assert "image is required when deploy_app=true" in deploy_workflow
     assert "Refusing to deploy malformed image ref" in deploy_workflow
     assert "RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }}" in deploy_workflow
     assert "RUN_DOCKER_PULL_DIAGNOSTICS=${{ inputs.deploy_smoke }}" in deploy_workflow

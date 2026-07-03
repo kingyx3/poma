@@ -115,6 +115,24 @@ class ProposedTrade:
     quote_age_seconds: float | None = None
     quote_spread_bps: float | None = None
 
+    @property
+    def buy_cash_required_usd(self) -> float:
+        """Maximum cash this BUY can consume, using the submitted limit when present."""
+        if self.side != OrderSide.BUY:
+            return 0.0
+        if self.limit_price is not None and self.limit_price > 0:
+            return abs(self.quantity) * self.limit_price
+        return self.notional
+
+    @property
+    def sell_cash_credit_usd(self) -> float:
+        """Conservative cash credit for a SELL, using the limit as the minimum fill price."""
+        if self.side != OrderSide.SELL:
+            return 0.0
+        if self.limit_price is not None and self.limit_price > 0:
+            return abs(self.quantity) * self.limit_price
+        return self.notional
+
 
 @dataclass(frozen=True)
 class ExecutionQuote:

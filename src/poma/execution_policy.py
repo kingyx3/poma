@@ -69,9 +69,10 @@ def apply_execution_policy(
     Buys round to the nearest whole share and sells round down (see
     ``rounded_execution_quantity``). Trades that round below their tradable minimum are dropped
     with a warning instead of being sent to the broker as an invalid order. When
-    ``available_cash_usd`` is provided, buy round-ups that would push total buy notional past
-    available cash plus planned sell proceeds are demoted back down to their floored quantity,
-    so rounding up can never turn an affordable plan into a buying-power block.
+    ``available_cash_usd`` is provided, buy round-ups that would push total buy cash
+    requirement past available cash plus conservative planned sell proceeds are demoted back
+    down to their floored quantity, so rounding up can never turn an affordable plan into a
+    buying-power block.
     """
     adjusted: list[ProposedTrade] = []
     floors_by_index: dict[int, float] = {}
@@ -107,22 +108,28 @@ def _demote_buy_roundups_to_fit_cash(
     rules: dict[str, InstrumentExecutionRule],
     available_cash_usd: float,
 ) -> tuple[list[ProposedTrade], list[str]]:
-    """Round buy round-ups back down until total buy notional fits the cash budget.
+    """Round buy round-ups back down until total buy cash requirement fits the budget.
 
-    The budget is available cash plus planned (already-rounded) sell proceeds, matching how
-    ``enforce_buying_power`` nets a same-day rebalance. Largest round-up overshoot is demoted
-    first; a demotion to below the tradable minimum drops the trade entirely.
+    The budget is available cash plus conservative planned (already-rounded) sell proceeds,
+    matching how ``enforce_buying_power`` nets a same-day rebalance. Largest round-up
+    overshoot is demoted first; a demotion to below the tradable minimum drops the trade
+    entirely.
     """
-    buy_notional = sum(trade.notional for trade in trades if trade.side == OrderSide.BUY)
-    sell_notional = sum(trade.notional for trade in trades if trade.side == OrderSide.SELL)
-    budget = available_cash_usd + sell_notional
-    overshoot = buy_notional - budget
+    buy_cash_required = sum(trade.buy_cash_required_usd for trade in trades)
+    sell_cash_credit = sum(trade.sell_cash_credit_usd for trade in trades)
+    budget = available_cash_usd + sell_cash_credit
+    overshoot = buy_cash_required - budget
     if overshoot <= 1e-6:
         return trades, []
 
     demotable = sorted(
         (
-            ((trades[index].quantity - floored) * trades[index].reference_price, index, floored)
+            (
+                (trades[index].quantity - floored)
+                * (trades[index].limit_price or trades[index].reference_price),
+                index,
+                floored,
+            )
             for index, floored in floors_by_index.items()
         ),
         reverse=True,

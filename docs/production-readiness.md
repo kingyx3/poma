@@ -11,7 +11,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Add the paper trading account id as a GitHub Environment Secret.
 - [ ] Deploy with `TRADING_MODE=dry_run` first.
 - [ ] Confirm deploy-time runtime config validation passes.
-- [ ] Confirm the deploy smoke test created a new `reports/rebalance-*.json` file.
+- [ ] Confirm the deploy smoke test created and validated a new dry-run `reports/rebalance-*.json` file with targets, trades, no execution results, and no blocking warnings.
 - [ ] Run **IB Gateway Ops** with `action=configure-paper`.
 - [ ] Confirm `ibgateway.service` is active after reboot.
 - [ ] Confirm `127.0.0.1:7497` is reachable on the VM.
@@ -48,7 +48,11 @@ The deploy workflow now fails before Terraform/app deployment when:
 - Live mode is requested without `ALLOW_LIVE_TRADING=true`.
 - Rendered `.env` values are missing, empty, or still placeholders.
 - Strategy allocations exceed 100%.
+- Strategy allocations contain no non-`cash` sleeve to trade.
 - Paper/live mode uses `DATA_PROVIDER=fixture`.
+- Paper/live mode uses anything other than `EXECUTION_PRICE_SOURCE=ibkr`.
+- Paper/live mode allows execution quotes older than 120 seconds.
+- Live mode allows delayed execution quotes.
 - `MAX_DAILY_TRADES` cannot support a full `MAX_HOLDINGS` bootstrap.
 - `MAX_ORDER_NOTIONAL_USD` is below `MIN_TRADE_NOTIONAL_USD`.
 
@@ -74,7 +78,7 @@ The deploy workflow now fails before Terraform/app deployment when:
 - [ ] Treat any `BrokerUnavailable` report as an infrastructure issue: confirm IBKR Activity shows no accepted orders, rerun **IB Gateway Ops** configure, and require `poma ibkr-check` to pass before trading again.
 - [ ] Review any `failed`, `blocked`, `completed_with_order_issues`, timed-out, cancelled, or partial execution result manually.
 
-Built in and not configurable: `poma monitor` resumes a session a killed process (crash/OOM/VM restart) left `running`, using the *same* `run_id`, and any orderRef already recorded in the ledger for that run (open or terminal) is not resubmitted (`IdempotentReplay`); a rebalance is blocked if unresolved orders exist from a prior session *or* a different run within the same session; and buys are sized against broker cash refreshed *after* the sell phase, never against unconfirmed sell proceeds (`BuyingPowerBlocked` if that refreshed cash falls short).
+Built in and not configurable: `poma monitor` resumes a session a killed process (crash/OOM/VM restart) left `running`, using the *same* `run_id`, and any orderRef already recorded in the ledger for that run (open or terminal) is not resubmitted (`IdempotentReplay`); a rebalance is blocked if unresolved orders exist from a prior session *or* a different run within the same session; and buys are repriced before being checked against broker cash refreshed *after* the sell phase, never against unconfirmed sell proceeds (`BuyingPowerBlocked` if that refreshed cash cannot cover the buy limit cash requirement).
 
 ## Alert expectations
 

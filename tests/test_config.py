@@ -146,6 +146,17 @@ def test_delayed_execution_quotes_default_by_trading_mode() -> None:
     assert explicit.allow_delayed_execution_quotes is False
 
 
+def test_live_trading_rejects_delayed_execution_quotes_even_when_explicit() -> None:
+    with pytest.raises(ValidationError, match="ALLOW_DELAYED_EXECUTION_QUOTES=false"):
+        Settings(
+            TELEGRAM_BOT_TOKEN="token",
+            TELEGRAM_CHAT_ID="chat",
+            TRADING_MODE="live",
+            ALLOW_LIVE_TRADING=True,
+            ALLOW_DELAYED_EXECUTION_QUOTES=True,
+        )
+
+
 def test_ibkr_market_data_exchanges_default_by_trading_mode() -> None:
     paper = Settings(
         TELEGRAM_BOT_TOKEN="token",

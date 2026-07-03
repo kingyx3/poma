@@ -39,7 +39,7 @@ def test_deploy_workflow_bounds_expensive_steps() -> None:
 
     expected_snippets = (
         "timeout --kill-after=30s 2m python ops/scripts/render_env.py",
-        "timeout --kill-after=30s 2m pip install -e .",
+        "timeout --kill-after=30s 2m pip install -e . -c constraints.txt",
         "timeout --kill-after=30s 5m python ops/scripts/validate_data_provider.py",
         "timeout --kill-after=30s 2m gcloud config set project",
         "timeout --kill-after=30s 5m terraform -chdir=infra/gcp-free-tier init",
@@ -145,12 +145,16 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
         "timeout_compose 3m run --rm",
         "smoke_session=\"deploy-smoke-$(date -u +%Y%m%dT%H%M%SZ)\"",
         "poma rebalance --session-date \"${smoke_session}\" --dry-run",
+        "report_path=\"$(find reports -maxdepth 1 -type f -name 'rebalance-*.json'",
+        "report.get(\"session_date\") != session",
+        "unexpectedly contains execution results",
+        "contains blocking warnings",
         "timed \"deploy smoke test\" run_deploy_smoke",
         "DOCKER_PRUNE_TIMEOUT=\"${DOCKER_PRUNE_TIMEOUT:-45s}\"",
         "timeout --kill-after=30s \"${DOCKER_PRUNE_TIMEOUT}\" docker image prune -f",
         "RUN_DOCKER_PRUNE:-true",
         "timed \"dangling image prune\" prune_dangling_images",
-        "DEFAULT_IMAGE_TAG=\"${DEFAULT_IMAGE_TAG:-main}\"",
+        "POMA_IMAGE is required; pass the immutable image ref built by build-app-image.yml.",
     )
     for snippet in expected_snippets:
         assert snippet in script
@@ -161,6 +165,7 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
     assert "docker system df || true" not in script
     assert "docker image prune -f >/dev/null\n}" not in script
     assert "DOCKER_BUILDKIT" not in script
+    assert "DEFAULT_IMAGE_TAG" not in script
 
 
 def test_vm_compose_uses_prebuilt_image() -> None:

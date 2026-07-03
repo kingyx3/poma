@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from poma.models import CurrentPosition, OrderSide, ProposedTrade, TargetPosition
 from poma.risk import (
     enforce_buying_power,
@@ -89,6 +91,25 @@ def test_validate_targets_warns_empty() -> None:
     assert validate_targets([], max_position_pct=0.1) == ["no target positions generated"]
 
 
+def test_validate_targets_blocks_overweight_positions() -> None:
+    warnings = validate_targets([TargetPosition("A", 0.2, 200)], max_position_pct=0.1)
+
+    assert warnings
+    assert "max_position_pct" in warnings[0]
+    assert "block execution" in warnings[0]
+
+
+def test_validate_targets_blocks_total_weight_above_one_hundred_percent() -> None:
+    warnings = validate_targets(
+        [TargetPosition("A", 0.7, 700), TargetPosition("B", 0.4, 400)],
+        max_position_pct=1.0,
+    )
+
+    assert warnings
+    assert "exceed 100%" in warnings[0]
+    assert "block execution" in warnings[0]
+
+
 def _trade(ticker: str, side: OrderSide, notional: float) -> ProposedTrade:
     return ProposedTrade(
         ticker=ticker,
@@ -131,7 +152,7 @@ def test_estimated_transaction_cost_filter_keeps_trades_when_disabled() -> None:
 
 def test_enforce_buying_power_allows_net_buys_within_cash() -> None:
     trades = [_trade("A", OrderSide.BUY, 500), _trade("B", OrderSide.SELL, 200)]
-    assert enforce_buying_power(trades, available_cash_usd=300) == []
+    assert enforce_buying_power(trades, available_cash_usd=301) == []
 
 
 def test_enforce_buying_power_blocks_net_buys_exceeding_cash() -> None:
@@ -141,6 +162,59 @@ def test_enforce_buying_power_blocks_net_buys_exceeding_cash() -> None:
     assert "block execution" in warnings[0]
 
 
+def test_enforce_buying_power_uses_buy_limit_cash_requirement() -> None:
+    trades = [_trade("A", OrderSide.BUY, 100)]
+
+    warnings = enforce_buying_power(trades, available_cash_usd=100)
+
+    assert warnings
+    assert "buy cash requirement" in warnings[0]
+    assert "block execution" in warnings[0]
+
+
+def test_enforce_buying_power_uses_conservative_sell_limit_credit() -> None:
+    buy = _trade("A", OrderSide.BUY, 500)
+    sell = replace(_trade("B", OrderSide.SELL, 400), limit_price=90.0)
+
+    warnings = enforce_buying_power([buy, sell], available_cash_usd=140)
+
+    assert warnings
+    assert "buy cash requirement" in warnings[0]
+
+
 def test_enforce_buying_power_ignores_pure_sells() -> None:
     trades = [_trade("A", OrderSide.SELL, 500)]
     assert enforce_buying_power(trades, available_cash_usd=0) == []
+
+
+def test_generate_trades_uses_broker_position_value_for_missing_price_sell() -> None:
+    trades, warnings = generate_trades(
+        [TargetPosition("A", 0.0, 0.0)],
+        [CurrentPosition("A", quantity=10, market_value=1_000)],
+        latest_prices={},
+        portfolio_value_usd=1_000,
+        min_trade_notional_usd=1,
+        min_weight_delta_pct=0,
+        limit_offset_bps=10,
+    )
+
+    assert len(trades) == 1
+    assert trades[0].side == OrderSide.SELL
+    assert trades[0].quantity == 10
+    assert trades[0].reference_price == 100
+    assert any("broker position market value" in warning for warning in warnings)
+
+
+def test_generate_trades_still_skips_missing_price_buy() -> None:
+    trades, warnings = generate_trades(
+        [TargetPosition("A", 1.0, 1_000)],
+        [],
+        latest_prices={},
+        portfolio_value_usd=1_000,
+        min_trade_notional_usd=1,
+        min_weight_delta_pct=0,
+        limit_offset_bps=10,
+    )
+
+    assert trades == []
+    assert any("missing valid latest price" in warning for warning in warnings)
