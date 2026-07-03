@@ -420,6 +420,21 @@ def main() -> int:
                     "Inspect the visible startup diagnostic and recent IBC/Gateway log hints in the diagnostics group.",
                 )
                 return 1
+            if socket_status == 1:
+                # Per-attempt budget expired but the VM-local startup check saw a
+                # progressing login (it exits 2 on a stall, handled above). Keep
+                # waiting until the overall hard deadline instead of failing a
+                # slow-but-healthy login, e.g. a cold Gateway start on the
+                # CPU-constrained free-tier VM.
+                remaining = int(hard_deadline - time.monotonic())
+                if remaining > 0:
+                    print(
+                        f"Per-attempt readiness budget of {socket_budget}s expired while Gateway startup "
+                        f"was still progressing; retrying the socket wait with up to {remaining}s of "
+                        "overall budget remaining."
+                    )
+                    attempt += 1
+                    continue
             break
         reason = (
             "Broker auth, Gateway API, or trading-permission readiness timed out before the API "
