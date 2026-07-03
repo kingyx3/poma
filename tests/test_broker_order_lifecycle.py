@@ -102,6 +102,7 @@ class FakeIB:
     next_order_id: int = 100
     market_data_by_symbol: dict[str, FakeMarketData] = field(default_factory=dict)
     market_data_after_delayed_by_symbol: dict[str, FakeMarketData] = field(default_factory=dict)
+    requested_market_data_contracts: list[tuple[str, str]] = field(default_factory=list)
     cancelled_market_data_symbols: list[str] = field(default_factory=list)
     market_data_type_requests: list[int] = field(default_factory=list)
     current_market_data_type: int = 1
@@ -150,6 +151,7 @@ class FakeIB:
         return None
 
     def reqMktData(self, contract, *_args, **_kwargs):  # noqa: N802, ANN201 - mirrors ib_insync API
+        self.requested_market_data_contracts.append((contract.symbol, getattr(contract, "exchange", "")))
         if not self.general_errors_emitted and self.general_market_data_errors:
             for code, message in self.general_market_data_errors:
                 self.errorEvent.emit(-1, code, message, None)
@@ -309,7 +311,31 @@ def test_execution_quotes_reads_bid_ask_and_marks_freshness(monkeypatch: pytest.
     assert quote.is_delayed is False
     assert quote.age_seconds is not None
     assert quote.age_seconds < 5.0
+    assert fake_ib.requested_market_data_contracts == [("AAPL", "IEX")]
     assert fake_ib.cancelled_market_data_symbols == ["AAPL"]
+
+
+def test_execution_quotes_falls_back_to_smart_when_direct_venue_has_no_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tick_time = datetime.now(UTC)
+
+    class ExchangeAwareFakeIB(FakeIB):
+        def reqMktData(self, contract, *_args, **_kwargs):  # noqa: N802, ANN201
+            self.requested_market_data_contracts.append((contract.symbol, getattr(contract, "exchange", "")))
+            if contract.exchange == "IEX":
+                return FakeMarketData(contract=contract, time=None)
+            return FakeMarketData(contract=contract, bid=199.90, ask=200.10, time=tick_time)
+
+    fake_ib = ExchangeAwareFakeIB()
+    monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
+    broker = IbkrBroker(_settings(monkeypatch))
+
+    quotes = broker.execution_quotes(["AAPL"])
+
+    assert quotes["AAPL"].is_delayed is False
+    assert fake_ib.requested_market_data_contracts == [("AAPL", "IEX"), ("AAPL", "SMART")]
+    assert fake_ib.cancelled_market_data_symbols == ["AAPL", "AAPL"]
 
 
 def test_execution_quotes_marks_delayed_market_data_type(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,9 +372,8 @@ def test_execution_quotes_treats_missing_tick_time_as_unknown_age(monkeypatch: p
 
     assert quotes["NVDA"].age_seconds is None
     assert quotes["NVDA"].selected_price_as_of_utc is None
-    # With ALLOW_DELAYED_EXECUTION_QUOTES=false no delayed retry is attempted, so only the
-    # live-mode request from _connect() is ever issued.
-    assert fake_ib.market_data_type_requests == [1]
+    # No delayed retry is attempted; the final live request restores the session default.
+    assert fake_ib.market_data_type_requests == [1, 1, 1]
 
 
 def test_connect_requests_live_market_data_type_on_every_connection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -382,8 +407,9 @@ def test_execution_quotes_falls_back_to_delayed_data_when_allowed_and_no_live_ti
 
     assert quotes["NVDA"].is_delayed is True
     assert quotes["NVDA"].age_seconds is not None
-    # live on connect, delayed for the retry, then back to live for any later request this session.
-    assert fake_ib.market_data_type_requests == [1, 3, 1]
+    # live on connect, live for the venue batch, delayed for the retry, then back to live for
+    # any later request this session.
+    assert fake_ib.market_data_type_requests == [1, 1, 3, 1]
     # Frozen data types (2/4) are readiness-probe-only: stale-by-definition quotes must never
     # feed execution pricing.
     assert not {2, 4} & set(fake_ib.market_data_type_requests)
@@ -407,7 +433,7 @@ def test_execution_quotes_does_not_retry_tickers_that_already_have_a_live_tick(
 
     assert quotes["AAPL"].is_delayed is False
     # No missing tickers, so the delayed-data retry path is never entered.
-    assert fake_ib.market_data_type_requests == [1]
+    assert fake_ib.market_data_type_requests == [1, 1, 1]
 
 
 def test_execution_quotes_captures_ibkr_error_when_no_tick_arrives(monkeypatch: pytest.MonkeyPatch) -> None:

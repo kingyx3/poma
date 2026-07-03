@@ -146,6 +146,30 @@ def test_delayed_execution_quotes_default_by_trading_mode() -> None:
     assert explicit.allow_delayed_execution_quotes is False
 
 
+def test_ibkr_market_data_exchanges_default_by_trading_mode() -> None:
+    paper = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        TRADING_MODE="paper",
+    )
+    assert paper.ibkr_market_data_exchange_list() == ("IEX", "SMART")
+
+    live = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        TRADING_MODE="live",
+        ALLOW_LIVE_TRADING=True,
+    )
+    assert live.ibkr_market_data_exchange_list() == ("SMART",)
+
+    explicit = Settings(
+        TELEGRAM_BOT_TOKEN="token",
+        TELEGRAM_CHAT_ID="chat",
+        IBKR_MARKET_DATA_EXCHANGES="iex, smart",
+    )
+    assert explicit.ibkr_market_data_exchange_list() == ("IEX", "SMART")
+
+
 def test_last_price_basis_requires_explicit_fallback_opt_in() -> None:
     with pytest.raises(ValidationError, match="ALLOW_LAST_PRICE_FALLBACK"):
         Settings(

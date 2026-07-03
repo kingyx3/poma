@@ -26,15 +26,15 @@ modes. Two problems remained:
 ## Decision
 
 - `_probe_market_data` walks a probe-only market data type ladder -- live (1), frozen (2),
-  delayed (3), delayed-frozen (4) -- stopping at the first evidence and always restoring live
-  afterwards. Frozen data serves the last real-time quote of a closed session and requires the
-  same entitlement as live, so a frozen tick off-hours proves real-time entitlement
-  ("after-market-hours live pricing"), while a delayed-only tick proves that entitlement is
-  missing. On the frozen steps a finite bid/ask/last/close also counts as evidence, since frozen
-  snapshots may populate prices without a fresh tick timestamp. The ladder exists only in the
-  probe: `execution_quotes`/`_retry_missing_quotes_as_delayed` are untouched, and a regression
-  test pins that the execution path never requests data types 2 or 4 -- frozen quotes are stale
-  by definition and must never price orders.
+  delayed (3), delayed-frozen (4) -- across the configured `IBKR_MARKET_DATA_EXCHANGES`,
+  stopping at the first evidence and always restoring live afterwards. Frozen data serves the
+  last real-time quote of a closed session and requires the same entitlement as live, so a frozen
+  tick off-hours proves real-time entitlement ("after-market-hours live pricing"), while a
+  delayed-only tick proves that entitlement is missing. On the frozen steps a finite
+  bid/ask/last/close also counts as evidence, since frozen snapshots may populate prices without
+  a fresh tick timestamp. The ladder exists only in the probe; execution pricing still never
+  requests data types 2 or 4 -- frozen quotes are stale by definition and must never price
+  orders.
 - The probe returns a structured verdict (`market_data_type`, `market_data_realtime`,
   `market_data_soft_failure` on `IbkrHealth`) instead of a message string that `check_ibkr` had
   to sniff for "warming up" hints. `poma ibkr-check` output now states
@@ -44,14 +44,13 @@ modes. Two problems remained:
   market is open is a hard failure (entitlement or data-farm problem, conclusively); silence
   while closed stays a soft warning but now says "market closed -- probe inconclusive".
 - New `REQUIRE_LIVE_EXECUTION_QUOTES` setting: when true, only a live/frozen tick passes --
-  delayed-only data and market-closed silence both hard-fail. `deploy-gcp-vm.yml` defaults it to
-  `true` for every non-live `TRADING_MODE`, so dev/stg configure fails loudly until the paper
-  account's real-time API market data subscription and paper-account market data sharing are
-  actually fixed, and proves the fix the first time a live/frozen tick arrives. Live keeps
-  `false` because a delayed-only probe already hard-fails there
-  (`ALLOW_DELAYED_EXECUTION_QUOTES=false`), and demanding proof-of-tick would block legitimate
-  off-hours live configures. `ALLOW_DELAYED_EXECUTION_QUOTES=true` stays on for non-live during
-  the transition; flip it to `false` once `verify-market-data` confirms real-time ticks.
+  delayed-only data and market-closed silence both hard-fail. `deploy-gcp-vm.yml` leaves it
+  `false` by default for paper/dev because some paper Gateway sessions classify the available
+  non-consolidated feed as delayed even after the paper account is configured to share live
+  market data. Set it to `true` in the GitHub Environment for a proof-only run after changing
+  IBKR market data subscriptions/sharing. Live keeps `false` because a delayed-only probe
+  already hard-fails there (`ALLOW_DELAYED_EXECUTION_QUOTES=false`), and demanding proof-of-tick
+  would block legitimate off-hours live configures.
 - New probe wait setting `MARKET_DATA_PROBE_WAIT_SECONDS` (default 5s per ladder step; the
   delayed steps wait twice as long per ADR-0003's finding that delayed subscriptions start
   ticking slowly). Worst case ~30s, well inside the 480s ops-side `ibkr-check` timeout (raised
@@ -63,6 +62,11 @@ modes. Two problems remained:
   deployed session genuinely serves entitled quotes. Run it (workflow_dispatch) after changing
   IBKR market data subscriptions/sharing; Telegram notification comes from the existing
   always-on step.
+- New `IBKR_MARKET_DATA_EXCHANGES` setting: paper/dev defaults to `IEX,SMART` so an account with
+  IBKR's US real-time non-consolidated streaming quotes can use a real-time direct-venue feed
+  when the Gateway API exposes one before falling back to SMART/delayed data. Orders still route
+  through SMART; this setting only controls market-data quote/probe contracts. Live defaults to
+  `SMART`.
 - The what-if trading-permission probe now sets `transmit=True` (error 321 fix); `whatIf=True`
   alone already guarantees the order is never executed.
 

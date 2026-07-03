@@ -162,6 +162,9 @@ class Settings(BaseSettings):
         default=5.0,
         alias="MARKET_DATA_PROBE_WAIT_SECONDS",
     )
+    # Quote/probe venues only. Orders still route through SMART. Paper defaults to IEX first so
+    # IBKR's free US non-consolidated streaming subscription can satisfy live quote checks.
+    ibkr_market_data_exchanges: str | None = Field(default=None, alias="IBKR_MARKET_DATA_EXCHANGES")
     allow_last_price_fallback: bool = Field(default=False, alias="ALLOW_LAST_PRICE_FALLBACK")
     allow_unsafe_execution_price_source: bool = Field(
         default=False,
@@ -216,6 +219,8 @@ class Settings(BaseSettings):
 
         if self.allow_delayed_execution_quotes is None:
             self.allow_delayed_execution_quotes = self.trading_mode != TradingMode.LIVE
+        if not self.ibkr_market_data_exchanges:
+            self.ibkr_market_data_exchanges = "SMART" if self.trading_mode == TradingMode.LIVE else "IEX,SMART"
 
         allocations = parse_strategy_allocations(self.strategy_allocations)
         registry = default_registry()
@@ -258,6 +263,14 @@ class Settings(BaseSettings):
                 "ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE=true"
             )
         return self
+
+    def ibkr_market_data_exchange_list(self) -> tuple[str, ...]:
+        exchanges = tuple(
+            exchange.strip().upper()
+            for exchange in (self.ibkr_market_data_exchanges or "").split(",")
+            if exchange.strip()
+        )
+        return exchanges or ("SMART",)
 
     def strategy_allocation_map(self) -> dict[str, float]:
         return parse_strategy_allocations(self.strategy_allocations)

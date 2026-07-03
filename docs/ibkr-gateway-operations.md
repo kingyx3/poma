@@ -62,11 +62,17 @@ When the Gateway runtime sentinel is stale, Gateway Ops uploads the repair helpe
 
 `poma ibkr-check` also requests a live market data tick for a probe symbol (falling back to
 delayed data when `ALLOW_DELAYED_EXECUTION_QUOTES=true`), not just the account/trading-permission
-handshake. A Gateway session can be fully authenticated and trade-enabled while the account still
-has no market data entitlement -- e.g. a paper account whose market data sharing was enabled but
-has not fully propagated yet. Configure now fails loudly on that with the underlying IBKR error
-text (e.g. `354: Requested market data is not subscribed.`) instead of silently succeeding and
-only surfacing the gap later as a `QuoteBlocked` order during the next rebalance. See
+handshake. Quote/probe contracts use `IBKR_MARKET_DATA_EXCHANGES`, so paper/dev tries `IEX`
+before `SMART` to consume IBKR's US real-time non-consolidated streaming quotes when the Gateway
+API exposes them while orders still route through `SMART`. Paper/dev leaves
+`REQUIRE_LIVE_EXECUTION_QUOTES=false` by default, so delayed quotes can still pass when
+`ALLOW_DELAYED_EXECUTION_QUOTES=true`; set it to `true` only for a proof run that should fail
+unless IBKR returns a live/frozen tick. A Gateway session can be fully authenticated and
+trade-enabled while the account still has no market data entitlement -- e.g. a paper account
+whose market data sharing was enabled but has not fully propagated yet. Configure now fails
+loudly on a total quote failure with the underlying IBKR error text (e.g. `354: Requested market
+data is not subscribed.`) instead of silently succeeding and only surfacing the gap later as a
+`QuoteBlocked` order during the next rebalance. See
 [`adr/0003-ibkr-market-data-readiness-check.md`](adr/0003-ibkr-market-data-readiness-check.md).
 
 The service starts raw IB Gateway until `/home/poma/ibc/config.ini` exists. After setup, it starts Gateway through IBC as one foreground systemd process and refuses to fall back to raw Gateway if the configured IBC launch path is broken. The service supervisor only treats the real Java Gateway process or API listener as meaningful startup progress, not wrapper shell commands that merely contain Gateway paths. It also pins `LoginDialogDisplayTimeout=240` before launch so slow e2-micro cold starts do not loop on IBC's default 60-second login-dialog timeout.

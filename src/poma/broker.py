@@ -91,6 +91,7 @@ class IbkrHealth:
     # -- the direct answer to "does this session have real-time entitlement". A soft failure is
     # an inconclusive probe (market closed, no tick, no broker error) that must not fail configure.
     market_data_type: str | None = None
+    market_data_exchange: str | None = None
     market_data_realtime: bool = False
     market_data_soft_failure: bool = False
 
@@ -154,33 +155,85 @@ def _connect_ib(settings: Settings, *, client_id: int, timeout: float) -> IB:
     return ib
 
 
-def _retry_missing_quotes_as_delayed(ib: IB, market_data_by_ticker: dict[str, object], *, allow_delayed: bool) -> None:
-    """Re-request, as delayed data, any ticker that got no tick at all from the live request.
+def _stock_contract(ticker: str, exchange: str) -> Stock:
+    return Stock(ticker, exchange, "USD")
 
-    `reqMarketDataType` only affects subsequent requests, so tickers that already received a
-    live tick keep it; only the ones with no tick are cancelled and re-subscribed under delayed
-    data. Selection still enforces `ALLOW_DELAYED_EXECUTION_QUOTES` per quote, so a symbol
-    without even delayed data available still blocks execution as before.
-    """
-    if not allow_delayed:
-        return
-    missing_tickers = [
-        ticker
-        for ticker, market_data in market_data_by_ticker.items()
-        if not isinstance(getattr(market_data, "time", None), datetime)
-    ]
-    if not missing_tickers:
-        return
-    for ticker in missing_tickers:
-        ib.cancelMktData(getattr(market_data_by_ticker[ticker], "contract"))  # noqa: B009
-    ib.reqMarketDataType(DELAYED_MARKET_DATA_TYPE)
-    for ticker in missing_tickers:
-        market_data_by_ticker[ticker] = ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
-    # Delayed subscriptions take noticeably longer than live ones to produce a first tick (see
-    # DELAYED_PROBE_WAIT_MULTIPLIER); a live-sized wait here reads as "still no quote" and blocks
-    # every fallback ticker even though delayed data was about to arrive.
-    ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS * DELAYED_PROBE_WAIT_MULTIPLIER)
+
+def _has_tick_time(market_data: object) -> bool:
+    return isinstance(getattr(market_data, "time", None), datetime)
+
+
+def _cancel_market_data(ib: IB, market_data_by_ticker: dict[str, object]) -> None:
+    for market_data in market_data_by_ticker.values():
+        ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
+
+
+def _request_execution_quotes_for_type(
+    ib: IB,
+    tickers: set[str],
+    exchanges: Sequence[str],
+    *,
+    market_data_type: int,
+    wait_seconds: float,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Try a market-data type across exchanges, returning ticks and last missing attempts."""
+    remaining = set(tickers)
+    ticked: dict[str, object] = {}
+    last_missing: dict[str, object] = {}
+    if not remaining:
+        return ticked, last_missing
+    ib.reqMarketDataType(market_data_type)
+    for exchange in exchanges:
+        batch = {ticker: ib.reqMktData(_stock_contract(ticker, exchange), "", False, False) for ticker in remaining}
+        ib.sleep(wait_seconds)
+        for ticker, market_data in batch.items():
+            if _has_tick_time(market_data):
+                ticked[ticker] = market_data
+            else:
+                last_missing[ticker] = market_data
+        _cancel_market_data(ib, batch)
+        remaining -= set(ticked)
+        if not remaining:
+            break
+    return ticked, last_missing
+
+
+def _request_execution_quote_market_data(
+    ib: IB,
+    tickers: Sequence[str],
+    exchanges: Sequence[str],
+    *,
+    allow_delayed: bool,
+) -> dict[str, object]:
+    remaining = set(tickers)
+    market_data_by_ticker: dict[str, object] = {}
+    live_ticks, last_missing = _request_execution_quotes_for_type(
+        ib,
+        remaining,
+        exchanges,
+        market_data_type=LIVE_MARKET_DATA_TYPE,
+        wait_seconds=EXECUTION_QUOTE_WAIT_SECONDS,
+    )
+    market_data_by_ticker.update(live_ticks)
+    remaining -= set(live_ticks)
+    if remaining:
+        market_data_by_ticker.update({ticker: last_missing[ticker] for ticker in remaining if ticker in last_missing})
+    if remaining and allow_delayed:
+        delayed_ticks, delayed_missing = _request_execution_quotes_for_type(
+            ib,
+            remaining,
+            exchanges,
+            market_data_type=DELAYED_MARKET_DATA_TYPE,
+            wait_seconds=EXECUTION_QUOTE_WAIT_SECONDS * DELAYED_PROBE_WAIT_MULTIPLIER,
+        )
+        market_data_by_ticker.update(delayed_ticks)
+        remaining -= set(delayed_ticks)
+        if remaining:
+            market_data_by_ticker.update(
+                {ticker: delayed_missing[ticker] for ticker in remaining if ticker in delayed_missing}
+            )
     ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
+    return market_data_by_ticker
 
 
 @dataclass(frozen=True)
@@ -188,6 +241,7 @@ class _MarketDataProbe:
     ok: bool
     message: str
     ticked_type: str | None
+    ticked_exchange: str | None
     realtime: bool
     soft_failure: bool
 
@@ -229,58 +283,72 @@ def _probe_market_data(ib: IB, settings: Settings) -> _MarketDataProbe:
     even outside market hours: a frozen tick proves real-time entitlement off-hours, a
     delayed-only tick proves the real-time entitlement is missing.
     """
-    contract = Stock(MARKET_DATA_PROBE_SYMBOL, "SMART", "USD")
     symbol = MARKET_DATA_PROBE_SYMBOL
     wait_seconds = settings.market_data_probe_wait_seconds
     ticked_code: int | None = None
+    ticked_exchange: str | None = None
     with _collect_market_data_errors(ib) as errors:
         for data_type in PROBE_MARKET_DATA_TYPE_LADDER:
             ib.reqMarketDataType(data_type)
-            market_data = ib.reqMktData(contract, "", False, False)
-            step_wait = wait_seconds * (
-                DELAYED_PROBE_WAIT_MULTIPLIER if data_type in DELAYED_MARKET_DATA_TYPE_CODES else 1
-            )
-            ib.sleep(step_wait)
-            ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
-            if _probe_tick_evidence(market_data, data_type):
-                ticked_code = data_type
+            for exchange in settings.ibkr_market_data_exchange_list():
+                market_data = ib.reqMktData(_stock_contract(symbol, exchange), "", False, False)
+                step_wait = wait_seconds * (
+                    DELAYED_PROBE_WAIT_MULTIPLIER if data_type in DELAYED_MARKET_DATA_TYPE_CODES else 1
+                )
+                ib.sleep(step_wait)
+                ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
+                if _probe_tick_evidence(market_data, data_type):
+                    ticked_code = data_type
+                    ticked_exchange = exchange
+                    break
+            if ticked_code is not None:
                 break
         ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
 
     if ticked_code is not None:
         type_name = MARKET_DATA_TYPE_NAMES[ticked_code]
+        exchange_suffix = f" on {ticked_exchange}" if ticked_exchange else ""
         if ticked_code in REALTIME_MARKET_DATA_TYPE_CODES:
             suffix = "" if ticked_code == LIVE_MARKET_DATA_TYPE else "; market closed, last real-time quote"
             return _MarketDataProbe(
                 ok=True,
-                message=f"received {type_name} tick for {symbol} (real-time entitlement confirmed{suffix})",
+                message=(
+                    f"received {type_name} tick for {symbol}{exchange_suffix} "
+                    f"(real-time entitlement confirmed{suffix})"
+                ),
                 ticked_type=type_name,
+                ticked_exchange=ticked_exchange,
                 realtime=True,
                 soft_failure=False,
             )
         detail = "; ".join(errors.per_symbol.get(symbol, []) or errors.general)
         reason = f"; ibkr said: {detail}" if detail else ""
         message = (
-            f"received {type_name} tick for {symbol} but real-time entitlement MISSING "
+            f"received {type_name} tick for {symbol}{exchange_suffix} but real-time entitlement MISSING "
             f"(best available: {type_name}){reason}"
         )
         if settings.require_live_execution_quotes:
             message += "; REQUIRE_LIVE_EXECUTION_QUOTES=true demands a live/frozen tick"
-            return _MarketDataProbe(False, message, type_name, False, False)
+            return _MarketDataProbe(False, message, type_name, ticked_exchange, False, False)
         if not settings.allow_delayed_execution_quotes:
             message += "; ALLOW_DELAYED_EXECUTION_QUOTES=false so execution would block on every order"
-            return _MarketDataProbe(False, message, type_name, False, False)
-        return _MarketDataProbe(True, message, type_name, False, False)
+            return _MarketDataProbe(False, message, type_name, ticked_exchange, False, False)
+        return _MarketDataProbe(True, message, type_name, ticked_exchange, False, False)
 
     detail = "; ".join(errors.per_symbol.get(symbol, []) or errors.general)
-    base = f"no market data tick received for {symbol} at any market data type (live/frozen/delayed/delayed_frozen)"
+    exchange_list = "/".join(settings.ibkr_market_data_exchange_list())
+    base = (
+        f"no market data tick received for {symbol} on {exchange_list} "
+        "at any market data type (live/frozen/delayed/delayed_frozen)"
+    )
     if detail:
-        return _MarketDataProbe(False, f"{base}; ibkr said: {detail}", None, False, False)
+        return _MarketDataProbe(False, f"{base}; ibkr said: {detail}", None, None, False, False)
     market_open = _probe_is_market_open(settings)
     if market_open:
         return _MarketDataProbe(
             False,
             f"{base}; US market is open so silence is conclusive -- entitlement or market-data-farm failure",
+            None,
             None,
             False,
             False,
@@ -291,10 +359,11 @@ def _probe_market_data(ib: IB, settings: Settings) -> _MarketDataProbe:
             False,
             message + "; REQUIRE_LIVE_EXECUTION_QUOTES=true demands proof of a live/frozen tick",
             None,
+            None,
             False,
             False,
         )
-    return _MarketDataProbe(False, message, None, False, True)
+    return _MarketDataProbe(False, message, None, None, False, True)
 
 
 def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
@@ -315,6 +384,7 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
                 ok=True,
                 message=f"skipped (EXECUTION_PRICE_SOURCE={settings.execution_price_source.value})",
                 ticked_type=None,
+                ticked_exchange=None,
                 realtime=False,
                 soft_failure=False,
             )
@@ -328,6 +398,7 @@ def probe_ibkr(settings: Settings, *, timeout: float = 20.0) -> IbkrHealth:
             market_data_ok=probe.ok,
             market_data_message=probe.message,
             market_data_type=probe.ticked_type,
+            market_data_exchange=probe.ticked_exchange,
             market_data_realtime=probe.realtime,
             market_data_soft_failure=probe.soft_failure,
         )
@@ -832,13 +903,11 @@ class IbkrBroker:
         try:
             self._assert_connected(ib)
             with _collect_market_data_errors(ib) as errors:
-                market_data_by_ticker: dict[str, object] = {
-                    ticker: ib.reqMktData(Stock(ticker, "SMART", "USD"), "", False, False)
-                    for ticker in unique_tickers
-                }
-                ib.sleep(EXECUTION_QUOTE_WAIT_SECONDS)
-                _retry_missing_quotes_as_delayed(
-                    ib, market_data_by_ticker, allow_delayed=self.settings.allow_delayed_execution_quotes
+                market_data_by_ticker = _request_execution_quote_market_data(
+                    ib,
+                    unique_tickers,
+                    self.settings.ibkr_market_data_exchange_list(),
+                    allow_delayed=self.settings.allow_delayed_execution_quotes,
                 )
                 retrieved_at = datetime.now(UTC)
                 quotes = {
@@ -847,8 +916,6 @@ class IbkrBroker:
                     )
                     for ticker, market_data in market_data_by_ticker.items()
                 }
-            for market_data in market_data_by_ticker.values():
-                ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
             return quotes
         finally:
             ib.disconnect()
@@ -1112,6 +1179,17 @@ def _valid_price(value: float | None) -> float | None:
     return parsed
 
 
+def _dedupe_messages(messages: Iterable[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        if message in seen:
+            continue
+        deduped.append(message)
+        seen.add(message)
+    return deduped
+
+
 def _execution_quote_from_market_data(
     ticker: str,
     market_data: object,
@@ -1132,7 +1210,7 @@ def _execution_quote_from_market_data(
         # A farm-wide connectivity/entitlement problem fires without a per-symbol contract, so
         # every ticker in the batch falls back to the same general reason rather than reporting
         # nothing just because IBKR didn't attribute the error to this specific symbol.
-        combined = per_symbol_errors or general_errors
+        combined = _dedupe_messages(per_symbol_errors or general_errors)
         broker_error = "; ".join(combined) if combined else None
     return ExecutionQuote(
         ticker=ticker,
