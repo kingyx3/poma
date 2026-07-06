@@ -38,8 +38,9 @@ flowchart TD
 | 6 | IB Gateway Ops: restart | Existing VM has stale helper or missing service | Repairs helpers and restarts Gateway service |
 | 7 | IB Gateway Ops: configure-paper | VM is healthy and broker login secrets are set | Configures Gateway paper session |
 | 8 | Deploy GCP e2-micro VM: paper | Gateway socket is reachable | Runs app against paper account |
-| 9 | IB Gateway Ops: logs/status/restart/verify-socket | Maintenance or troubleshooting | Diagnoses or restarts Gateway |
-| 10 | Deploy GCP e2-micro VM: undeploy plan, then undeploy apply | Retiring one selected environment's VM foundation | Destroys the selected `gcp-free-tier` resources and verifies Terraform state is empty |
+| 9 | Reconcile Orders | A rebalance is blocked by unresolved open orders or you want an immediate order-lifecycle poll | Runs `poma reconcile-orders` on the deployed VM and prints the open-order ledger before/after |
+| 10 | IB Gateway Ops: logs/status/restart/verify-socket | Maintenance or troubleshooting | Diagnoses or restarts Gateway |
+| 11 | Deploy GCP e2-micro VM: undeploy plan, then undeploy apply | Retiring one selected environment's VM foundation | Destroys the selected `gcp-free-tier` resources and verifies Terraform state is empty |
 
 ## Recovery map
 
@@ -49,6 +50,7 @@ flowchart TD
 | IBC template missing | IB Gateway Ops restart |
 | Gateway service unit missing | IB Gateway Ops restart |
 | Socket not reachable | IB Gateway Ops logs, status, restart, verify-socket |
+| Rebalance blocked by unresolved open orders from another run/session | Reconcile Orders |
 | Selected environment VM should be removed | Deploy GCP e2-micro VM with `deployment_action=undeploy`, first `terraform_action=plan`, then `apply` |
 
 ## Environment secrets summary
@@ -59,6 +61,7 @@ flowchart TD
 | Deploy with `deployment_action=deploy` | Telegram token, Telegram chat id, account selector for selected mode |
 | Deploy with `deployment_action=undeploy` | No runtime secrets; uses generated WIF config for the selected environment |
 | IB Gateway Ops `configure-paper` / `configure-live` | Broker login id and broker login secret |
+| Reconcile Orders | No broker-login secrets; uses generated WIF config plus Telegram token/chat id for the result alert |
 
 ## Safe dev path
 

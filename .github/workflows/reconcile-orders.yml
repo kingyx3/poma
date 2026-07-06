@@ -1,0 +1,69 @@
+name: Reconcile Orders
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: GitHub Environment whose VM should reconcile open POMA orders.
+        required: true
+        type: choice
+        options: [dev, stg, prd]
+        default: dev
+      log_lines:
+        description: Number of order-ledger and reconcile-log lines to print before/after the run.
+        required: true
+        type: number
+        default: 120
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: poma-reconcile-orders-${{ inputs.deploy_environment }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile-orders:
+    name: Reconcile orders (${{ inputs.deploy_environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: ${{ inputs.deploy_environment }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      LOG_LINES: ${{ inputs.log_lines }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Resolve generated deployment config
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source ops/scripts/resolve_gcp_deploy_env.sh
+
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, zone=${GCP_ZONE}, vm=${GCP_VM_NAME}"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          create_credentials_file: true
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Reconcile open orders over IAP SSH
+        run: bash ops/scripts/run_reconcile_orders_workflow.sh
+
+      - name: Notify Telegram (reconcile result)
+        if: ${{ always() }}
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: >-
+            POMA[${{ inputs.deploy_environment }}] reconcile-orders
+            ${{ job.status }} — manual order lifecycle reconciliation finished.
