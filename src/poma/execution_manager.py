@@ -431,18 +431,27 @@ class ExecutionManager:
         """Mark a local open ledger row terminal when IBKR no longer reports it as open.
 
         IBKR's open-order API is the source of truth for whether an order can still be working.
-        A missing POMA orderRef means the order was resolved outside this process (often manually
-        cancelled in IBKR). We may not know whether the terminal broker event was filled,
-        cancelled, rejected, or expired, so use the internal ``expired`` terminal bucket with a
-        precise reason instead of pretending to know the broker's final raw status.
+        If POMA already requested a cancel, a missing POMA orderRef confirms that cancel path has
+        resolved and should be recorded as ``cancelled``. Otherwise the broker no longer has an
+        open order for this ref, but we do not know whether the final broker event was a manual
+        cancel, fill, rejection, or expiration, so record the neutral terminal ``expired`` bucket.
         """
+        cancel_requested = entry.lifecycle_state == OrderLifecycleState.CANCEL_PENDING or entry.raw_status == "PendingCancel"
+        if cancel_requested:
+            lifecycle_state = OrderLifecycleState.CANCELLED
+            raw_status = "Cancelled"
+            terminal_reason = entry.terminal_reason or "broker no longer reports this POMA order as open after cancel request"
+        else:
+            lifecycle_state = OrderLifecycleState.EXPIRED
+            raw_status = "NotOpen"
+            terminal_reason = "broker no longer reports this POMA order as open; treating it as externally resolved"
         return replace(
             entry,
-            lifecycle_state=OrderLifecycleState.EXPIRED,
-            raw_status="NotOpen",
+            lifecycle_state=lifecycle_state,
+            raw_status=raw_status,
             remaining_qty=0.0,
             last_status_at=now.isoformat(),
-            terminal_reason="broker no longer reports this POMA order as open; treating it as externally resolved",
+            terminal_reason=terminal_reason,
         )
 
     def _apply_timeout_policy(
