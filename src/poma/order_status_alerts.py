@@ -38,6 +38,8 @@ def lifecycle_status_alert(entry: OrderLedgerEntry, action: str | None) -> str:
         lines.append(f"Action: replaced with a more aggressive limit (${entry.limit_price:.2f})")
     elif action == "cancel":
         lines.append("Action: cancelled after exceeding the unfilled-order timeout")
+    elif action == "closed":
+        lines.append("Action: marked terminal because IBKR no longer reports it as open")
     if entry.order_id is not None:
         lines.append(f"Order ID: {entry.order_id}")
     quote_line = _quote_line(
