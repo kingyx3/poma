@@ -52,15 +52,17 @@ class OrderStore:
         found: dict[str, OrderLedgerEntry] = {
             entry.ledger_key: entry for entry in self.load_open_orders() if entry.ledger_key in keys
         }
-        remaining = keys - found.keys()
-        if remaining and self.events_path.exists():
+        event_keys = keys - found.keys()
+        if event_keys and self.events_path.exists():
             for line in self.events_path.read_text().splitlines():
                 line = line.strip()
                 if not line:
                     continue
                 payload = json.loads(line)
                 ledger_key = payload.get("ledger_key")
-                if ledger_key in remaining:
+                if ledger_key in event_keys:
+                    # The event log is append-only; keep overwriting as we scan so the value left
+                    # at the end is the latest transition, not the initial planned entry.
                     found[ledger_key] = OrderLedgerEntry.from_json(payload)
         return found
 
