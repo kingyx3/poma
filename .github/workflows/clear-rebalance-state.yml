@@ -9,6 +9,11 @@ on:
         type: choice
         options: [dev, stg]
         default: dev
+      run_monitor_after_clear:
+        description: Run poma monitor immediately after clearing state, using normal market-window guards.
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -22,10 +27,11 @@ jobs:
   clear-state:
     name: Clear rebalance run state (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: ${{ inputs.deploy_environment }}
     env:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      RUN_MONITOR_AFTER_CLEAR: ${{ inputs.run_monitor_after_clear }}
 
     steps:
       - name: Check out repository
@@ -49,24 +55,35 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Clear VM rebalance run-state
+      - name: Clear state and optionally run monitor
         run: |
           set -euo pipefail
           timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}"
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
 
-          timeout --kill-after=30s 5m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command '
+          timeout --kill-after=30s 12m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "
             set -euo pipefail
             sudo install -d -o poma -g poma /opt/poma/state
             if [ -f /opt/poma/state/rebalance_state.json ]; then
-              echo "Clearing existing rebalance state file."
+              echo 'Clearing existing rebalance state file.'
             else
-              echo "No existing rebalance state file found."
+              echo 'No existing rebalance state file found.'
             fi
             sudo rm -f /opt/poma/state/rebalance_state.json
             sudo chown -R poma:poma /opt/poma/state
-            echo "Cleared /opt/poma/state/rebalance_state.json"
-          '
+            echo 'Cleared /opt/poma/state/rebalance_state.json'
+
+            if [ '${RUN_MONITOR_AFTER_CLEAR}' = 'true' ]; then
+              if [ ! -f /opt/poma/docker-compose.vm.yml ]; then
+                echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2
+                exit 1
+              fi
+              echo 'Running poma monitor after clearing state.'
+              sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma monitor'
+            else
+              echo 'Skipping immediate monitor run; cron may run on the next eligible tick.'
+            fi
+          "
 
       - name: Notify Telegram (clear state result)
         if: ${{ always() }}
@@ -76,4 +93,4 @@ jobs:
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
             POMA[${{ inputs.deploy_environment }}] clear-rebalance-state
-            ${{ job.status }} — removed /opt/poma/state/rebalance_state.json
+            ${{ job.status }} — removed /opt/poma/state/rebalance_state.json and monitor-after-clear=${{ inputs.run_monitor_after_clear }}.

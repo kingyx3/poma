@@ -6,9 +6,18 @@ from conftest import FakeBroker, make_settings
 
 from poma.data import FixtureMarketDataClient
 from poma.engine import RebalanceEngine
-from poma.models import OrderSide
+from poma.models import OpenOrderSnapshot, OrderSide
 from poma.order_lifecycle import OrderLedgerEntry
 from poma.order_store import OrderStore
+
+
+class OpenOrderBroker(FakeBroker):
+    def __init__(self, snapshots: list[OpenOrderSnapshot]) -> None:
+        super().__init__()
+        self.snapshots = snapshots
+
+    def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
+        return self.snapshots
 
 
 def _engine(tmp_path: Path, broker: FakeBroker | None = None, **overrides: object) -> RebalanceEngine:
@@ -63,11 +72,27 @@ def test_build_plan_blocks_when_same_session_different_run_orders_are_unresolved
 
 
 def test_build_plan_does_not_block_when_same_run_id_open_orders_exist(tmp_path: Path) -> None:
-    engine = _engine(tmp_path, MAX_TURNOVER_PCT=1.0, MAX_ORDER_NOTIONAL_USD=100_000.0)
+    order_ref = "poma:run-1:0:AAPL:BUY"
+    broker = OpenOrderBroker(
+        [
+            OpenOrderSnapshot(
+                order_ref=order_ref,
+                order_id=123,
+                perm_id=456,
+                ticker="AAPL",
+                side=OrderSide.BUY,
+                raw_status="Submitted",
+                filled=0.0,
+                remaining=5.0,
+                avg_fill_price=None,
+            )
+        ]
+    )
+    engine = _engine(tmp_path, broker=broker, MAX_TURNOVER_PCT=1.0, MAX_ORDER_NOTIONAL_USD=100_000.0)
     engine.order_store.upsert(
         OrderLedgerEntry(
-            ledger_key="poma:run-1:0:AAPL:BUY",
-            order_ref="poma:run-1:0:AAPL:BUY",
+            ledger_key=order_ref,
+            order_ref=order_ref,
             run_id="run-1",
             session_date="2026-07-01",
             ticker="AAPL",

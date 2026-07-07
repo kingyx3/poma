@@ -24,7 +24,7 @@ from poma.order_store import OrderStore
 @dataclass(frozen=True)
 class ReconcileUpdate:
     entry: OrderLedgerEntry
-    action: str | None  # "replace", "cancel", or None (status refresh only, or no broker match)
+    action: str | None  # "replace", "cancel", "closed", or None (status refresh only)
     matched: bool
 
 
@@ -328,13 +328,26 @@ class ExecutionManager:
     def check_stale_orders(self, session_date: str, run_id: str) -> StaleOrderCheck:
         """Block (or cancel) unresolved open orders that are not from this exact run.
 
-        Orders from a prior session, or from a *different* run within the same session, are
-        foreign to this attempt and are blocked (or cancelled, per ``stale_order_policy``)
-        before planning continues. Open orders from *this run* are reported informationally
-        only: a legitimate retry of the same run relies on ``submit_plan``'s idempotent replay
-        rather than being blocked by its own still-working orders.
+        Before deciding, refresh the local open-order ledger against IBKR. Operators may cancel
+        orders manually in TWS/Gateway, and those terminal changes do not update POMA's local
+        ``open_orders.jsonl`` until a reconciliation pass sees that the broker no longer reports
+        the order as open. Without this refresh, a cancelled broker order can keep blocking future
+        rebalances solely because the local ledger is stale.
         """
-        open_entries = [entry for entry in self.store.load_open_orders() if not entry.is_terminal]
+        open_entries = self._open_ledger_entries()
+        if open_entries:
+            try:
+                self.reconcile()
+            except Exception as exc:  # noqa: BLE001 - fail closed if the broker cannot confirm state
+                tickers = ", ".join(sorted({entry.ticker for entry in open_entries}))
+                return StaleOrderCheck(
+                    warnings=(
+                        "unable to refresh local open orders against IBKR before planning "
+                        f"({len(open_entries)} local order(s): {tickers}); block execution: {exc}",
+                    )
+                )
+            open_entries = self._open_ledger_entries()
+
         other_session = [entry for entry in open_entries if entry.session_date != session_date]
         same_session_foreign_run = [
             entry for entry in open_entries if entry.session_date == session_date and entry.run_id != run_id
@@ -385,7 +398,7 @@ class ExecutionManager:
 
     def reconcile(self) -> ReconcileSummary:
         """Poll the broker for open orders and apply the replace-once/cancel timeout policy."""
-        open_entries = [entry for entry in self.store.load_open_orders() if not entry.is_terminal]
+        open_entries = self._open_ledger_entries()
         if not open_entries:
             return ReconcileSummary(checked=0, updates=())
 
@@ -397,7 +410,9 @@ class ExecutionManager:
         for entry in open_entries:
             snapshot = snapshots.get(entry.order_ref)
             if snapshot is None:
-                updates.append(ReconcileUpdate(entry=entry, action=None, matched=False))
+                updated = self._close_unreported_open_entry(entry, now)
+                self.store.upsert(updated)
+                updates.append(ReconcileUpdate(entry=updated, action="closed", matched=False))
                 continue
             updated = entry.with_snapshot(snapshot)
             action_taken = self._apply_timeout_policy(updated, now)
@@ -407,6 +422,37 @@ class ExecutionManager:
             self.store.upsert(updated)
             updates.append(ReconcileUpdate(entry=updated, action=action_name, matched=True))
         return ReconcileSummary(checked=len(open_entries), updates=tuple(updates))
+
+    def _open_ledger_entries(self) -> list[OrderLedgerEntry]:
+        return [entry for entry in self.store.load_open_orders() if not entry.is_terminal]
+
+    @staticmethod
+    def _close_unreported_open_entry(entry: OrderLedgerEntry, now: datetime) -> OrderLedgerEntry:
+        """Mark a local open ledger row terminal when IBKR no longer reports it as open.
+
+        IBKR's open-order API is the source of truth for whether an order can still be working.
+        If POMA already requested a cancel, a missing POMA orderRef confirms that cancel path has
+        resolved and should be recorded as ``cancelled``. Otherwise the broker no longer has an
+        open order for this ref, but we do not know whether the final broker event was a manual
+        cancel, fill, rejection, or expiration, so record the neutral terminal ``expired`` bucket.
+        """
+        cancel_requested = entry.lifecycle_state == OrderLifecycleState.CANCEL_PENDING or entry.raw_status == "PendingCancel"
+        if cancel_requested:
+            lifecycle_state = OrderLifecycleState.CANCELLED
+            raw_status = "Cancelled"
+            terminal_reason = entry.terminal_reason or "broker no longer reports this POMA order as open after cancel request"
+        else:
+            lifecycle_state = OrderLifecycleState.EXPIRED
+            raw_status = "NotOpen"
+            terminal_reason = "broker no longer reports this POMA order as open; treating it as externally resolved"
+        return replace(
+            entry,
+            lifecycle_state=lifecycle_state,
+            raw_status=raw_status,
+            remaining_qty=0.0,
+            last_status_at=now.isoformat(),
+            terminal_reason=terminal_reason,
+        )
 
     def _apply_timeout_policy(
         self,

@@ -1,30 +1,6 @@
 # Workflow execution runbook
 
-This runbook shows the order for the repository workflows, the Auto CI/CD gateway checks, and the recovery path for an existing VM.
-
-## Flowchart
-
-```mermaid
-flowchart TD
-  A([Start]) --> B{Environment bootstrapped?}
-  B -- No --> C[Bootstrap workflow: plan]
-  C --> D[Bootstrap workflow: apply]
-  D --> E[Add environment secrets]
-  B -- Yes --> E
-  E --> F[Deploy workflow: dry-run plan]
-  F --> G[Deploy workflow: dry-run apply]
-  G --> H{Existing VM repair needed?}
-  H -- Yes --> I[IB Gateway Ops restart]
-  H -- No --> J[Gateway Ops configure]
-  I --> J
-  J --> K[Approve phone prompt]
-  K --> L{Gateway socket reachable?}
-  L -- No --> M[Gateway Ops logs status restart]
-  M --> J
-  L -- Yes --> N[Deploy workflow: paper mode]
-  N --> O[Observe paper runs]
-  O --> P[Promote only after review]
-```
+This runbook shows the normal order for repository workflows and recovery checks for an existing VM.
 
 ## Main sequence
 
@@ -33,14 +9,13 @@ flowchart TD
 | 1 | Bootstrap GCP Workload Identity Federation: plan | First setup for an environment | Preview cloud identity setup |
 | 2 | Bootstrap GCP Workload Identity Federation: apply | Bootstrap plan is acceptable | Writes generated deploy config |
 | 3 | Discover Telegram chat ID | Chat id is unknown | Finds alert destination |
-| 4 | Deploy GCP e2-micro VM: plan | Runtime secrets are set | Preview VM/app changes |
+| 4 | Deploy GCP e2-micro VM: plan | Runtime settings are ready | Preview VM and app changes |
 | 5 | Deploy GCP e2-micro VM: apply with dry run | Plan is acceptable | Creates or updates VM and app |
-| 6 | IB Gateway Ops: restart | Existing VM has stale helper or missing service | Repairs helpers and restarts Gateway service |
-| 7 | IB Gateway Ops: configure-paper | VM is healthy and broker login secrets are set | Configures Gateway paper session |
-| 8 | Deploy GCP e2-micro VM: paper | Gateway socket is reachable | Runs app against paper account |
-| 9 | Reconcile Orders | A rebalance is blocked by unresolved open orders or you want an immediate order-lifecycle poll | Runs `poma reconcile-orders` on the deployed VM and prints the open-order ledger before/after |
-| 10 | IB Gateway Ops: logs/status/restart/verify-socket | Maintenance or troubleshooting | Diagnoses or restarts Gateway |
-| 11 | Deploy GCP e2-micro VM: undeploy plan, then undeploy apply | Retiring one selected environment's VM foundation | Destroys the selected `gcp-free-tier` resources and verifies Terraform state is empty |
+| 6 | IB Gateway Ops: restart | Existing VM has stale helper or missing service | Repairs helpers and restarts the Gateway service |
+| 7 | IB Gateway Ops: configure-paper | VM is healthy and paper settings are ready | Configures the paper session |
+| 8 | Deploy GCP e2-micro VM: paper | Gateway socket is reachable | Runs the app against the paper environment |
+| 9 | IB Gateway Ops: logs/status/restart/verify-socket | Maintenance or troubleshooting | Diagnoses or restarts Gateway |
+| 10 | Deploy GCP e2-micro VM: undeploy plan, then undeploy apply | Retiring one selected environment VM | Removes the selected VM foundation |
 
 ## Recovery map
 
@@ -50,30 +25,21 @@ flowchart TD
 | IBC template missing | IB Gateway Ops restart |
 | Gateway service unit missing | IB Gateway Ops restart |
 | Socket not reachable | IB Gateway Ops logs, status, restart, verify-socket |
-| Rebalance blocked by unresolved open orders from another run/session | Reconcile Orders |
+| Rebalance blocked by unresolved open orders from another run/session | Review the blocked report and broker activity. Normal expiry/cancel state is refreshed automatically by cron and by the next monitor guard before the block is decided. |
 | Selected environment VM should be removed | Deploy GCP e2-micro VM with `deployment_action=undeploy`, first `terraform_action=plan`, then `apply` |
 
-## Environment secrets summary
+## Order lifecycle recovery
 
-| Workflow | Secrets needed |
-|---|---|
-| Bootstrap | Temporary bootstrap service account key |
-| Deploy with `deployment_action=deploy` | Telegram token, Telegram chat id, account selector for selected mode |
-| Deploy with `deployment_action=undeploy` | No runtime secrets; uses generated WIF config for the selected environment |
-| IB Gateway Ops `configure-paper` / `configure-live` | Broker login id and broker login secret |
-| Reconcile Orders | No broker-login secrets; uses generated WIF config plus Telegram token/chat id for the result alert |
+The manual Reconcile Orders GitHub workflow has been removed. Accepted limit orders are followed up by the scheduled app lifecycle job on the VM. If an order times out and POMA requests a cancel, the next lifecycle poll or monitor pre-check updates the local ledger from broker open-order state before allowing a stale local row to block a rebalance.
 
 ## Safe dev path
-
-Dev pull requests intentionally run the credentialed `configure-paper` Gateway check when deploy or Gateway paths changed. Keep a phone available to approve IBKR mobile 2FA during that job.
 
 1. Bootstrap plan.
 2. Bootstrap apply.
 3. Discover Telegram chat id if needed.
-4. Add dev runtime secrets.
+4. Add dev runtime settings.
 5. Deploy dry-run plan.
 6. Deploy dry-run apply.
 7. Run IB Gateway Ops `restart` once for existing VMs that need helper/service repair.
-8. Pull-request Auto CI/CD runs IB Gateway Ops `configure-paper` for credentialed dev paper validation.
-9. Approve the IBKR mobile 2FA phone prompt when the dev `configure-paper` workflow reaches broker login.
-10. Deploy paper mode.
+8. Pull-request Auto CI/CD runs IB Gateway Ops `configure-paper` for dev paper validation.
+9. Deploy paper mode.

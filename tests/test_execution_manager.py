@@ -16,7 +16,7 @@ from poma.models import (
     ProposedTrade,
     RebalancePlan,
 )
-from poma.order_lifecycle import OrderLifecycleState
+from poma.order_lifecycle import OrderLedgerEntry, OrderLifecycleState
 from poma.order_store import OrderStore
 
 
@@ -123,6 +123,20 @@ def _plan(trades: list[ProposedTrade], session_date: str = "2026-07-01", run_id:
     )
 
 
+def _snapshot_for_entry(entry: OrderLedgerEntry, raw_status: str = "Submitted") -> OpenOrderSnapshot:
+    return OpenOrderSnapshot(
+        order_ref=entry.order_ref,
+        order_id=entry.order_id,
+        perm_id=entry.perm_id,
+        ticker=entry.ticker,
+        side=entry.side,
+        raw_status=raw_status,
+        filled=entry.filled_qty,
+        remaining=entry.remaining_qty or entry.quantity,
+        avg_fill_price=entry.avg_fill_price,
+    )
+
+
 def test_submit_plan_submits_sells_before_buys_in_separate_batches(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
@@ -172,6 +186,8 @@ def test_check_stale_orders_blocks_on_prior_session_open_orders(tmp_path: Path) 
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-06-30"))
+    entry = store.load_open_orders()[0]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
 
     check = manager.check_stale_orders("2026-07-01", "run-2")
 
@@ -179,11 +195,26 @@ def test_check_stale_orders_blocks_on_prior_session_open_orders(tmp_path: Path) 
     assert broker.cancelled_order_ids == []
 
 
+def test_check_stale_orders_refreshes_closed_broker_orders_before_blocking(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-06-30"))
+    broker.open_order_snapshots = []  # IBKR no longer reports the locally-open order as working.
+
+    check = manager.check_stale_orders("2026-07-01", "run-2")
+
+    assert check.warnings == ()
+    assert store.load_open_orders() == []
+
+
 def test_check_stale_orders_cancel_policy_cancels_prior_session_orders(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings(STALE_ORDER_POLICY="cancel"))
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-06-30"))
+    entry = store.load_open_orders()[0]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
 
     check = manager.check_stale_orders("2026-07-01", "run-2")
 
@@ -199,6 +230,8 @@ def test_check_stale_orders_does_not_block_on_same_run_open_orders(tmp_path: Pat
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-07-01", run_id="run-1"))
+    entry = store.load_open_orders()[0]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
 
     check = manager.check_stale_orders("2026-07-01", "run-1")
 
@@ -211,6 +244,8 @@ def test_check_stale_orders_blocks_on_same_session_different_run_open_orders(tmp
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-07-01", run_id="run-1"))
+    entry = store.load_open_orders()[0]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
 
     check = manager.check_stale_orders("2026-07-01", "run-2")
 
@@ -224,6 +259,8 @@ def test_check_stale_orders_cancel_policy_cancels_same_session_different_run_ord
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings(STALE_ORDER_POLICY="cancel"))
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-07-01", run_id="run-1"))
+    entry = store.load_open_orders()[0]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
 
     check = manager.check_stale_orders("2026-07-01", "run-2")
 
@@ -242,19 +279,7 @@ def test_reconcile_replaces_once_after_replace_after_seconds(tmp_path: Path) -> 
     stale_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
     store.upsert(dc_replace(entry, submitted_at=stale_time))
 
-    broker.open_order_snapshots = [
-        OpenOrderSnapshot(
-            order_ref=entry.order_ref,
-            order_id=entry.order_id,
-            perm_id=None,
-            ticker="AAPL",
-            side=OrderSide.BUY,
-            raw_status="Submitted",
-            filled=0.0,
-            remaining=5.0,
-            avg_fill_price=None,
-        )
-    ]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
 
     summary = manager.reconcile()
 
@@ -273,26 +298,10 @@ def test_reconcile_cancels_after_cancel_after_seconds(tmp_path: Path) -> None:
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.0)]))
 
     entry = store.load_open_orders()[0]
-    from datetime import UTC, datetime, timedelta
-
     stale_time = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
-    from dataclasses import replace as dc_replace
-
     store.upsert(dc_replace(entry, submitted_at=stale_time))
 
-    broker.open_order_snapshots = [
-        OpenOrderSnapshot(
-            order_ref=entry.order_ref,
-            order_id=entry.order_id,
-            perm_id=None,
-            ticker="AAPL",
-            side=OrderSide.BUY,
-            raw_status="Submitted",
-            filled=0.0,
-            remaining=5.0,
-            avg_fill_price=None,
-        )
-    ]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
 
     summary = manager.reconcile()
 
@@ -300,7 +309,7 @@ def test_reconcile_cancels_after_cancel_after_seconds(tmp_path: Path) -> None:
     assert broker.cancelled_order_ids == [entry.order_id]
 
 
-def test_reconcile_leaves_unmatched_orders_unmodified(tmp_path: Path) -> None:
+def test_reconcile_closes_unmatched_orders_that_are_no_longer_open(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())
@@ -311,7 +320,11 @@ def test_reconcile_leaves_unmatched_orders_unmodified(tmp_path: Path) -> None:
 
     assert summary.checked == 1
     assert summary.updates[0].matched is False
-    assert summary.updates[0].action is None
+    assert summary.updates[0].action == "closed"
+    assert summary.updates[0].entry.lifecycle_state == OrderLifecycleState.EXPIRED
+    assert summary.updates[0].entry.raw_status == "NotOpen"
+    assert "no longer reports" in summary.updates[0].entry.terminal_reason
+    assert store.load_open_orders() == []
 
 
 def test_reconcile_with_no_open_orders_is_a_noop(tmp_path: Path) -> None:
@@ -416,19 +429,7 @@ def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_pat
     stale_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
     store.upsert(dc_replace(entry, submitted_at=stale_time))
 
-    broker.open_order_snapshots = [
-        OpenOrderSnapshot(
-            order_ref=entry.order_ref,
-            order_id=entry.order_id,
-            perm_id=None,
-            ticker="AAPL",
-            side=OrderSide.BUY,
-            raw_status="Submitted",
-            filled=0.0,
-            remaining=5.0,
-            avg_fill_price=None,
-        )
-    ]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
     # Ask has since dropped well below the original stale limit price; a fresh-quote replace
     # should follow the market down instead of blindly improving off the stale $100.10 limit.
     broker.quotes_override = {"AAPL": _quote("AAPL", bid=79.80, ask=79.90)}
@@ -453,19 +454,7 @@ def test_reconcile_replace_is_skipped_when_no_fresh_quote_is_available(tmp_path:
     stale_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
     store.upsert(dc_replace(entry, submitted_at=stale_time))
 
-    broker.open_order_snapshots = [
-        OpenOrderSnapshot(
-            order_ref=entry.order_ref,
-            order_id=entry.order_id,
-            perm_id=None,
-            ticker="AAPL",
-            side=OrderSide.BUY,
-            raw_status="Submitted",
-            filled=0.0,
-            remaining=5.0,
-            avg_fill_price=None,
-        )
-    ]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
     broker.quotes_override = {}
 
     summary = manager.reconcile()
