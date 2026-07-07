@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
@@ -33,6 +34,8 @@ BLOCK_MARKER = "block execution"
 COMPLETED_STATUS = "completed"
 COMPLETED_WITH_ORDER_ISSUES_STATUS = "completed_with_order_issues"
 NO_ORDERS_ACCEPTED_STATUS = "no_orders_accepted"
+ACCOUNT_SNAPSHOT_ATTEMPTS = 3
+ACCOUNT_SNAPSHOT_RETRY_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,13 @@ class RebalanceOutcome:
     executed: bool
     blocked: bool
     status: str
+
+
+def _exception_detail(exc: Exception | None) -> str:
+    if exc is None:
+        return "unknown broker snapshot error"
+    detail = str(exc).strip()
+    return detail or exc.__class__.__name__
 
 
 class RebalanceEngine:
@@ -188,10 +198,12 @@ class RebalanceEngine:
         )
 
     def _account_snapshot(self, warnings: list[str]) -> AccountSnapshot:
-        """Read broker cash/positions once per rebalance; block on any unsafe read.
+        """Read broker cash/positions once per rebalance; block only after retrying.
 
         A single snapshot backs both target sizing and trade generation so every strategy
-        sleeve and the risk engine see the same cash and holdings for this run.
+        sleeve and the risk engine see the same cash and holdings for this run. IBKR account
+        rows can arrive a moment after connection/authentication, so retry the snapshot read
+        before falling back to the dry-run value and adding the blocking warning.
         """
         settings = self.settings
         fallback = AccountSnapshot(
@@ -203,12 +215,25 @@ class RebalanceEngine:
         if settings.trading_mode == TradingMode.DRY_RUN:
             return fallback
 
-        try:
-            snapshot = self.broker.account_snapshot()
-        except Exception as exc:  # noqa: BLE001 - broker detail is safer as a blocking warning
+        last_error: Exception | None = None
+        for attempt in range(1, ACCOUNT_SNAPSHOT_ATTEMPTS + 1):
+            try:
+                snapshot = self.broker.account_snapshot()
+                if attempt > 1:
+                    warnings.append(
+                        "broker cash and portfolio balances read succeeded after "
+                        f"{attempt} attempts"
+                    )
+                break
+            except Exception as exc:  # noqa: BLE001 - broker detail is safer as a blocking warning
+                last_error = exc
+                if attempt < ACCOUNT_SNAPSHOT_ATTEMPTS:
+                    time.sleep(ACCOUNT_SNAPSHOT_RETRY_SECONDS)
+        else:
             warnings.append(
-                "unable to read broker cash and portfolio balances before rebalancing; "
-                f"{BLOCK_MARKER}: {exc}"
+                "unable to read broker cash and portfolio balances before rebalancing "
+                f"after {ACCOUNT_SNAPSHOT_ATTEMPTS} attempts; {BLOCK_MARKER}: "
+                f"{_exception_detail(last_error)}"
             )
             return fallback
 
