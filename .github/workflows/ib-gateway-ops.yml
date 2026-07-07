@@ -133,7 +133,23 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
+      - name: Run Gateway logs over IAP SSH
+        if: ${{ inputs.action == 'logs' }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "${GCP_PROJECT_ID}"
+          echo "+ [ssh ${GCP_VM_NAME}] sudo journalctl -u ibgateway -n ${LOG_LINES} --reverse --no-pager"
+          gcloud compute ssh "${GCP_VM_NAME}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet \
+            --verbosity=error \
+            --no-user-output-enabled \
+            --command "sudo journalctl -u ibgateway -n ${LOG_LINES} --reverse --no-pager"
+
       - name: Run Gateway operation over IAP SSH
+        if: ${{ inputs.action != 'logs' }}
         run: python3 ops/scripts/run_gateway_ops_workflow.py
 
       - name: Notify Telegram (gateway ops result)
