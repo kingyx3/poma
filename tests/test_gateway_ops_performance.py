@@ -34,7 +34,7 @@ def test_gateway_ops_workflow_delegates_to_python_runner() -> None:
     assert "IB_GATEWAY_SOCKET_POLL_SECONDS: 5" in workflow
     assert "IB_GATEWAY_LOGIN_PROGRESS_GRACE_SECONDS: 180" in workflow
     assert "IB_GATEWAY_MAX_TRADING_LOGIN_RESTARTS: 1" in workflow
-    assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS: 300" in workflow
+    assert "IB_GATEWAY_IBKR_CHECK_TIMEOUT_SECONDS: 600" in workflow
     assert "IB_GATEWAY_RUNTIME_REPAIR_TIMEOUT_SECONDS: 780" in workflow
     assert "Resolve broker login secrets" in workflow
 
@@ -100,6 +100,27 @@ def test_gateway_market_data_entitlement_failures_skip_fresh_login_restart() -> 
         assert "rerun Gateway configure" in next_action
 
     assert module.classify_non_retriable_ibkr_check("TimeoutError connecting to IBKR API") is None
+
+
+def test_gateway_passing_ibkr_check_output_is_never_classified_non_retriable() -> None:
+    """A wrapper failure around a passing check must stay retriable.
+
+    A delayed-only paper session always logs error 10089 while the market-data probe walks the
+    ladder before soft-passing on delayed data, and the ssh/docker wrapper can still exit
+    non-zero around a passing check (e.g. timed out pulling the freshly deployed image). That
+    combination must not be misreported as a non-retriable IBKR entitlement problem.
+    """
+    module = _load_gateway_runner()
+
+    output = (
+        "command timed out after 300s: gcloud compute ssh poma-dev-free-tier\n"
+        "ibkr ok: connected to 127.0.0.1:7497, accounts=['DU8047849'], stock_positions=33, "
+        "market_data=received delayed tick for AAPL on IEX but real-time entitlement MISSING "
+        "(best available: delayed); ibkr said: 10089: Requested market data requires additional "
+        "subscription for API., market_data_type=delayed, realtime_entitlement=no"
+    )
+
+    assert module.classify_non_retriable_ibkr_check(output) is None
 
 
 def test_gateway_ops_logs_stay_concise_and_error_specific() -> None:

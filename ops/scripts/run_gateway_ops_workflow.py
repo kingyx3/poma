@@ -134,6 +134,14 @@ def build_helper_archive() -> Path:
 
 def classify_non_retriable_ibkr_check(output: str) -> tuple[str, str] | None:
     lower_output = output.lower()
+    # "ibkr ok:" is the check's own success verdict. IBKR error codes can still appear in the
+    # same output as tolerated warnings -- a delayed-only paper session always logs 10089 while
+    # the probe walks the market-data ladder before soft-passing on delayed data. A non-zero
+    # command status alongside the success verdict means the ssh/docker wrapper failed (e.g.
+    # timed out pulling the freshly deployed image), which a retry fixes; it must not be
+    # reported as a non-retriable IBKR account problem.
+    if "ibkr ok:" in lower_output:
+        return None
     if any(code in lower_output and phrase in lower_output for code, phrase in NON_RETRIABLE_IBKR_MARKET_DATA_ERRORS):
         return (
             "poma ibkr-check failed with an IBKR market-data entitlement/session error.",
