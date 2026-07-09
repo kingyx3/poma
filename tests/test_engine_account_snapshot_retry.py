@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from conftest import FakeBroker, make_settings
 
 from poma.data import FixtureMarketDataClient
@@ -8,21 +7,14 @@ from poma.engine import RebalanceEngine
 from poma.models import AccountSnapshot
 
 
-class FlakyBalanceBroker(FakeBroker):
+class UnavailableBalanceBroker(FakeBroker):
     def __init__(self) -> None:
         super().__init__()
         self.account_snapshot_calls = 0
 
     def account_snapshot(self) -> AccountSnapshot:
         self.account_snapshot_calls += 1
-        if self.account_snapshot_calls == 1:
-            raise RuntimeError("transient account summary unavailable")
-        return super().account_snapshot()
-
-
-class EmptyMessageBalanceBroker(FakeBroker):
-    def account_snapshot(self) -> AccountSnapshot:
-        raise RuntimeError()
+        raise TimeoutError()
 
 
 def _paper_engine(broker: FakeBroker) -> RebalanceEngine:
@@ -39,33 +31,18 @@ def _paper_engine(broker: FakeBroker) -> RebalanceEngine:
     )
 
 
-def test_paper_rebalance_retries_transient_account_snapshot_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("poma.engine.time.sleep", lambda _seconds: None)
-    broker = FlakyBalanceBroker()
+def test_paper_rebalance_blocks_when_account_snapshot_is_unavailable() -> None:
+    broker = UnavailableBalanceBroker()
 
     outcome = _paper_engine(broker).run("session", "run")
 
-    assert broker.account_snapshot_calls == 2
-    assert not outcome.blocked
-    assert outcome.executed
-    assert broker.submitted is not None
-    assert any("balances read succeeded after 2 attempts" in warning for warning in outcome.plan.warnings)
-    assert not any("unable to read broker cash" in warning for warning in outcome.plan.warnings)
-
-
-def test_paper_rebalance_reports_empty_snapshot_exception_after_retries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("poma.engine.time.sleep", lambda _seconds: None)
-    broker = EmptyMessageBalanceBroker()
-
-    outcome = _paper_engine(broker).run("session", "run")
-
+    assert broker.account_snapshot_calls == 1
     assert outcome.blocked
     assert not outcome.executed
     assert broker.submitted is None
     assert any(
-        "unable to read broker cash and portfolio balances before rebalancing after 3 attempts; "
-        "block execution: RuntimeError" in warning
+        "unable to read broker cash and portfolio balances before rebalancing; "
+        "block execution: TimeoutError" in warning
         for warning in outcome.plan.warnings
     )
+    assert not any("attempt" in warning or "retrying" in warning for warning in outcome.plan.warnings)
