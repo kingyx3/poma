@@ -34,8 +34,9 @@ BLOCK_MARKER = "block execution"
 COMPLETED_STATUS = "completed"
 COMPLETED_WITH_ORDER_ISSUES_STATUS = "completed_with_order_issues"
 NO_ORDERS_ACCEPTED_STATUS = "no_orders_accepted"
-ACCOUNT_SNAPSHOT_ATTEMPTS = 3
-ACCOUNT_SNAPSHOT_RETRY_SECONDS = 2.0
+ACCOUNT_SNAPSHOT_ATTEMPTS = 5
+ACCOUNT_SNAPSHOT_RETRY_SECONDS = 5.0
+ACCOUNT_SNAPSHOT_ENDPOINT = "broker.account_snapshot"
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,24 @@ def _exception_detail(exc: Exception | None) -> str:
         return "unknown broker snapshot error"
     detail = str(exc).strip()
     return detail or exc.__class__.__name__
+
+
+def _account_snapshot_attempt_warning(
+    *,
+    attempt: int,
+    attempts: int,
+    duration_seconds: float,
+    exc: Exception,
+    retry_seconds: float | None,
+) -> str:
+    retry_detail = f"; retrying in {retry_seconds:.2f}s" if retry_seconds is not None else "; no retries left"
+    return (
+        "broker cash and portfolio balances read failed "
+        f"endpoint={ACCOUNT_SNAPSHOT_ENDPOINT} "
+        f"attempt={attempt}/{attempts} "
+        f"duration_seconds={max(duration_seconds, 0.0):.2f}"
+        f"{retry_detail}: {_exception_detail(exc)}"
+    )
 
 
 class RebalanceEngine:
@@ -203,7 +222,9 @@ class RebalanceEngine:
         A single snapshot backs both target sizing and trade generation so every strategy
         sleeve and the risk engine see the same cash and holdings for this run. IBKR account
         rows can arrive a moment after connection/authentication, so retry the snapshot read
-        before falling back to the dry-run value and adding the blocking warning.
+        before falling back to the dry-run value and adding the blocking warning. Every failed
+        attempt is reported with endpoint, attempt count, duration, and retry delay so operators
+        can tell whether the failure is a one-off warm-up lag or a consistently slow broker read.
         """
         settings = self.settings
         fallback = AccountSnapshot(
@@ -217,18 +238,34 @@ class RebalanceEngine:
 
         last_error: Exception | None = None
         for attempt in range(1, ACCOUNT_SNAPSHOT_ATTEMPTS + 1):
+            started_at = time.monotonic()
             try:
                 snapshot = self.broker.account_snapshot()
-                if attempt > 1:
-                    warnings.append(
-                        "broker cash and portfolio balances read succeeded after "
-                        f"{attempt} attempts"
-                    )
-                break
             except Exception as exc:  # noqa: BLE001 - broker detail is safer as a blocking warning
                 last_error = exc
-                if attempt < ACCOUNT_SNAPSHOT_ATTEMPTS:
-                    time.sleep(ACCOUNT_SNAPSHOT_RETRY_SECONDS)
+                duration_seconds = time.monotonic() - started_at
+                retry_seconds = ACCOUNT_SNAPSHOT_RETRY_SECONDS if attempt < ACCOUNT_SNAPSHOT_ATTEMPTS else None
+                warnings.append(
+                    _account_snapshot_attempt_warning(
+                        attempt=attempt,
+                        attempts=ACCOUNT_SNAPSHOT_ATTEMPTS,
+                        duration_seconds=duration_seconds,
+                        exc=exc,
+                        retry_seconds=retry_seconds,
+                    )
+                )
+                if retry_seconds is not None:
+                    time.sleep(retry_seconds)
+                continue
+
+            if attempt > 1:
+                duration_seconds = time.monotonic() - started_at
+                warnings.append(
+                    "broker cash and portfolio balances read succeeded after "
+                    f"{attempt} attempts endpoint={ACCOUNT_SNAPSHOT_ENDPOINT} "
+                    f"duration_seconds={max(duration_seconds, 0.0):.2f}"
+                )
+            break
         else:
             warnings.append(
                 "unable to read broker cash and portfolio balances before rebalancing "
