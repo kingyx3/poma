@@ -16,7 +16,7 @@ from poma.broker import (
     _has_account_amount,
     _ignored_account_balance_warnings,
 )
-from poma.models import AccountSnapshot, CurrentPosition
+from poma.models import AccountSnapshot
 
 
 def rebalance_account_snapshot(broker: Broker) -> AccountSnapshot:
