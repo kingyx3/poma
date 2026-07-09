@@ -56,6 +56,8 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
 | `IBKR_CLIENT_ID` | paper/live | `101` | Dedicated client id for this bot. |
+| `IBKR_CONNECT_TIMEOUT_SECONDS` | no | `45` | Per-attempt timeout for connecting to the IB Gateway API. ib_insync's connect performs a full account sync-up before returning, which can overrun a short timeout on a small or loaded VM even when the Gateway is healthy. |
+| `IBKR_CONNECT_ATTEMPTS` | no | `3` | How many times a connect to the IB Gateway API is attempted (each on a fresh socket) before the broker is reported unavailable and execution blocks. |
 | `IBKR_ACCOUNT` | paper/live runtime `.env` | none | The app reads this value and now refuses paper/live execution when it is unset. CI renders it from `IBKR_ACCOUNT_PAPER` for paper mode and from `IBKR_ACCOUNT` for live mode. |
 | `IBKR_ACCOUNT_PAPER` | paper CI secret | none | Paper trading account id used by the deploy workflow. It is not written as a separate `.env` key. |
 | `STATE_DIR` | yes | `state` | Local run-state directory. |

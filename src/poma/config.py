@@ -175,6 +175,15 @@ class Settings(BaseSettings):
     ibkr_port: int = Field(default=7497, alias="IBKR_PORT")
     ibkr_client_id: int = Field(default=101, alias="IBKR_CLIENT_ID")
     ibkr_account: str | None = Field(default=None, alias="IBKR_ACCOUNT")
+    # ib_insync's connect() runs a full account sync-up (positions, orders, executions,
+    # account updates) before returning, which can overrun a short timeout on a small or
+    # loaded VM even though the Gateway is healthy. Connecting places no orders, so failed
+    # attempts are retried on a fresh socket before the broker is reported unavailable.
+    ibkr_connect_timeout_seconds: PositiveFloat = Field(
+        default=45.0,
+        alias="IBKR_CONNECT_TIMEOUT_SECONDS",
+    )
+    ibkr_connect_attempts: PositiveInt = Field(default=3, alias="IBKR_CONNECT_ATTEMPTS")
 
     state_dir: Path = Field(default=Path("state"), alias="STATE_DIR")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")

@@ -68,7 +68,7 @@ USD_CURRENCY = "USD"
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
 HEALTH_CLIENT_ID_OFFSET = 90
-IBKR_CONNECT_TIMEOUT_SECONDS = 20.0
+IBKR_CONNECT_RETRY_DELAY_SECONDS = 5.0
 OrderStatusCallback = Callable[[ProposedTrade, OrderResult], None]
 
 
@@ -131,28 +131,45 @@ def _collect_market_data_errors(ib: IB) -> Iterator[_MarketDataErrors]:
         ib.errorEvent -= on_error
 
 
-def _connect_ib(settings: Settings, *, client_id: int, timeout: float) -> IB:
+def _connect_ib(settings: Settings, *, client_id: int, timeout: float | None = None) -> IB:
     """Connect to IBKR and explicitly request live market data on this session.
 
     Gateway remembers whichever market data type was last requested on a client id rather than
     defaulting to live every session, so a fresh connection can otherwise silently return no
     ticks at all even with live entitlements in place.
+
+    ib_insync's ``connect()`` also performs a full account sync-up before returning, which can
+    overrun the timeout on a small or loaded VM even while the Gateway is healthy, surfacing as
+    a bare ``TimeoutError``. Nothing has been submitted at connect time, so each attempt safely
+    retries on a fresh socket; the final failure is raised as ``BrokerUnavailable`` with the
+    connection details instead of an empty timeout.
     """
-    ib = IB()
-    try:
-        ib.connect(
-            settings.ibkr_host,
-            settings.ibkr_port,
-            clientId=client_id,
-            account=settings.ibkr_account or "",
-            timeout=timeout,
-        )
-        ib.RequestTimeout = timeout
-        ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
-    except Exception:
-        ib.disconnect()
-        raise
-    return ib
+    timeout = timeout or settings.ibkr_connect_timeout_seconds
+    attempts = max(1, settings.ibkr_connect_attempts)
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        ib = IB()
+        try:
+            ib.connect(
+                settings.ibkr_host,
+                settings.ibkr_port,
+                clientId=client_id,
+                account=settings.ibkr_account or "",
+                timeout=timeout,
+            )
+            ib.RequestTimeout = timeout
+            ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
+            return ib
+        except Exception as exc:  # noqa: BLE001 - retry any connect failure on a fresh socket
+            ib.disconnect()
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(IBKR_CONNECT_RETRY_DELAY_SECONDS)
+    detail = str(last_error).strip() or last_error.__class__.__name__
+    raise BrokerUnavailable(
+        f"unable to connect to IBKR API at {settings.ibkr_host}:{settings.ibkr_port} "
+        f"(clientId={client_id}, timeout={timeout:g}s) after {attempts} attempt(s): {detail}"
+    ) from last_error
 
 
 def _stock_contract(ticker: str, exchange: str) -> Stock:
@@ -513,7 +530,7 @@ class IbkrBroker:
         self.settings = settings
 
     def _connect(self) -> IB:
-        ib = _connect_ib(self.settings, client_id=self.settings.ibkr_client_id, timeout=IBKR_CONNECT_TIMEOUT_SECONDS)
+        ib = _connect_ib(self.settings, client_id=self.settings.ibkr_client_id)
         try:
             self._assert_connected(ib)
         except Exception:
