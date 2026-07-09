@@ -24,6 +24,22 @@ def test_deployed_cron_schedules_order_reconciliation() -> None:
     assert "poma reconcile-orders" in cron
 
 
+def test_reconcile_cron_never_fires_in_the_same_minute_as_monitor() -> None:
+    """The rebalance kickoff minute must not start a second container on the small VM.
+
+    ``poma monitor`` fires on minutes divisible by 5 and the daily rebalance kickoff always
+    lands on an even minute (market open +10). A reconcile container starting in that same
+    second starves the Gateway JVM long enough that every IBKR API request times out and the
+    rebalance blocks for the day, so the reconcile entry must stay on odd minutes.
+    """
+    cron = POMA_CRON.read_text(encoding="utf-8")
+    reconcile_line = next(
+        line for line in cron.splitlines() if "poma reconcile-orders" in line and not line.startswith("#")
+    )
+
+    assert reconcile_line.startswith("1-59/2 "), reconcile_line
+
+
 def test_deploy_does_not_provision_gateway_runtime() -> None:
     # IB Gateway runtime is owned by the IB Gateway Ops workflow, not the deploy step.
     # Auto CI/CD invokes Gateway Ops after relevant dev/stg deploys; manual deploys run it
