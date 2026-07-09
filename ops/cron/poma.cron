@@ -5,4 +5,8 @@
 # Follow up on working orders independent of the rebalance process lifetime: replaces a
 # still-unfilled limit order once after REPLACE_AFTER_SECONDS, cancels it after
 # CANCEL_AFTER_SECONDS, and alerts on every lifecycle change. No-op when nothing is open.
-*/2 * * * * cd /opt/poma && bash ops/cron/run_logged.sh /opt/poma/logs/poma-reconcile-cron.log /usr/bin/docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma reconcile-orders
+# Odd minutes only: the monitor entry above fires on minutes divisible by 5, and the daily
+# rebalance kickoff always lands on an even minute (market open +10). Starting a second
+# container in that same second starves the Gateway JVM on the single-core VM long enough
+# that every IBKR API request times out and the rebalance blocks for the day.
+1-59/2 * * * * cd /opt/poma && bash ops/cron/run_logged.sh /opt/poma/logs/poma-reconcile-cron.log /usr/bin/docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma reconcile-orders
