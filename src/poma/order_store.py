@@ -66,6 +66,30 @@ class OrderStore:
                     found[ledger_key] = OrderLedgerEntry.from_json(payload)
         return found
 
+    def get_latest_run_trades(self, run_id: str) -> dict[tuple[str, str], OrderLedgerEntry]:
+        """Return the latest entry for each ticker/side previously planned in one run.
+
+        Rebalance retries rebuild the residual plan from the latest account snapshot. A filled or
+        otherwise removed trade can therefore disappear from the plan and shift the sequence
+        number of the remaining trades. Reusing the original ledger key by ``(ticker, side)``
+        keeps orderRef idempotency stable even when those sequence offsets change.
+        """
+        found: dict[tuple[str, str], OrderLedgerEntry] = {}
+        for entry in self.load_open_orders():
+            if entry.run_id == run_id:
+                found[(entry.ticker, entry.side.value)] = entry
+        if self.events_path.exists():
+            for line in self.events_path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                if payload.get("run_id") != run_id:
+                    continue
+                entry = OrderLedgerEntry.from_json(payload)
+                found[(entry.ticker, entry.side.value)] = entry
+        return found
+
     def upsert(self, entry: OrderLedgerEntry) -> None:
         """Record a lifecycle transition; drop the order from the open snapshot once terminal."""
         entries = {existing.ledger_key: existing for existing in self.load_open_orders()}
