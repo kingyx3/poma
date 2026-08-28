@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
-from poma.broker import Broker, OrderStatusCallback
+from poma.broker import (
+    BROKER_UNAVAILABLE_STATUS,
+    ORDER_NOT_ACCEPTED_STATUS,
+    Broker,
+    OrderStatusCallback,
+)
 from poma.config import ExecutionPriceSource, Settings, StaleOrderPolicy
 from poma.execution_pricing import apply_execution_quotes, build_limit_price, compute_spread_bps, select_execution_price
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
@@ -20,11 +26,22 @@ from poma.order_lifecycle import (
 )
 from poma.order_store import OrderStore
 
+EXECUTION_QUOTE_ATTEMPTS = 3
+EXECUTION_QUOTE_RETRY_DELAY_SECONDS = 5.0
+_RETRYABLE_PRE_ACCEPTANCE_STATUSES = frozenset(
+    {
+        EXECUTION_QUOTE_BLOCKED_STATUS,
+        BUYING_POWER_BLOCKED_STATUS,
+        BROKER_UNAVAILABLE_STATUS,
+        ORDER_NOT_ACCEPTED_STATUS,
+    }
+)
+
 
 @dataclass(frozen=True)
 class ReconcileUpdate:
     entry: OrderLedgerEntry
-    action: str | None  # "replace", "cancel", "closed", or None (status refresh only)
+    action: str | None  # "replace", "cancel", "closed", "unverified", or None
     matched: bool
 
 
@@ -68,11 +85,11 @@ class ExecutionManager:
         assumed to provide buying power. Every trade in ``plan.trades`` is tagged with a stable
         ``orderRef`` and recorded in the durable order ledger before submission, so a crash
         mid-run still leaves a trace of what was sent. If a retry of the same run finds a
-        non-terminal ledger entry already recorded for a trade's ``orderRef``, that trade is not
-        resubmitted; an ``IdempotentReplay`` result is returned instead (see
-        ``_idempotent_replay``). Immediately before each phase is sent to the broker, it is
-        repriced off a fresh execution quote (see ``_reprice_for_execution``); trades that fail a
-        freshness/spread/delayed-quote check are blocked instead of submitted.
+        broker-submitted ledger entry already recorded for a trade's ``orderRef``, that trade is
+        not resubmitted; an ``IdempotentReplay`` result is returned instead (see
+        ``_idempotent_replay``). Local pre-acceptance blocks remain retryable under the same
+        orderRef because no broker order exists yet. Immediately before each phase is sent to the
+        broker, it is repriced off a fresh execution quote (see ``_reprice_for_execution``).
         """
         sells = [trade for trade in plan.trades if trade.side == OrderSide.SELL]
         buys = [trade for trade in plan.trades if trade.side == OrderSide.BUY]
@@ -133,17 +150,22 @@ class ExecutionManager:
         trade: ProposedTrade,
         latest_by_ref: dict[str, OrderLedgerEntry],
     ) -> OrderResult | None:
-        """Return a replay result if this orderRef was already submitted by an earlier attempt.
+        """Return a replay result if this orderRef already reached the broker.
 
-        Looks up both open and terminal history (see ``OrderStore.get_latest_many``): a same-run
-        retry must recognize an order that already reached a terminal state (e.g. filled) just as
-        much as one still working, or it would resubmit a duplicate for an order that already
-        completed. Only a ``PLANNED``-only entry does not count, since that means a prior attempt
-        crashed before reaching the broker, so it is safe (and necessary) to submit it now.
+        Quote/cash blocks and broker-unavailable/not-accepted outcomes can be durable ledger rows,
+        but they have no broker order id and no fill. They are safe to retry with the same
+        orderRef. Any other non-PLANNED row is treated as potentially broker-visible and is never
+        resubmitted blindly, including terminal and ``UNKNOWN`` rows.
         """
         assert trade.order_ref is not None
         entry = latest_by_ref.get(trade.order_ref)
         if entry is None or entry.lifecycle_state == OrderLifecycleState.PLANNED:
+            return None
+        if (
+            entry.raw_status in _RETRYABLE_PRE_ACCEPTANCE_STATUSES
+            and entry.order_id is None
+            and entry.filled_qty <= 1e-9
+        ):
             return None
         return OrderResult(
             ticker=trade.ticker,
@@ -230,18 +252,36 @@ class ExecutionManager:
         trades: list[ProposedTrade],
         status_callback: OrderStatusCallback | None,
     ) -> tuple[list[ProposedTrade], list[tuple[ProposedTrade, OrderResult]]]:
-        """Reprice one submission batch off a fresh broker quote fetched right before sending it.
+        """Reprice a batch off fresh broker quotes, retrying transient quote-quality failures.
 
-        Fetching quotes here, immediately before ``broker.submit_trades``, keeps the gap between
-        "read the quote" and "place the order" as small as possible. Trades that fail a
-        freshness/spread/delayed-quote check are recorded as blocked rather than submitted.
+        A single wide/stale/missing snapshot should not consume the whole day's rebalance. Failed
+        tickers are sampled again while already-valid tickers are kept. Only after the bounded
+        quote-attempt budget is exhausted is a trade recorded ``QuoteBlocked``; monitor can then
+        retry that local pre-acceptance block on a later tick using the same run/orderRef.
         """
         if self.settings.execution_price_source != ExecutionPriceSource.IBKR or not trades:
             return trades, []
 
-        quotes = self.broker.execution_quotes([trade.ticker for trade in trades])
-        repriced, warnings = apply_execution_quotes(trades, quotes, self.settings, self.settings.execution_rules())
-        repriced_by_ticker = {trade.ticker: trade for trade in repriced}
+        pending = list(trades)
+        repriced_by_ticker: dict[str, ProposedTrade] = {}
+        warning_by_ticker: dict[str, str] = {}
+        rules = self.settings.execution_rules()
+        for attempt in range(1, EXECUTION_QUOTE_ATTEMPTS + 1):
+            quotes = self.broker.execution_quotes([trade.ticker for trade in pending])
+            repriced, warnings = apply_execution_quotes(pending, quotes, self.settings, rules)
+            for updated in repriced:
+                repriced_by_ticker[updated.ticker] = updated
+            unresolved = [trade for trade in pending if trade.ticker not in repriced_by_ticker]
+            for trade in unresolved:
+                reason = next(
+                    (warning for warning in warnings if trade.ticker in warning),
+                    "execution quote check failed; block execution",
+                )
+                warning_by_ticker[trade.ticker] = reason
+            pending = unresolved
+            if not pending or attempt >= EXECUTION_QUOTE_ATTEMPTS:
+                break
+            time.sleep(EXECUTION_QUOTE_RETRY_DELAY_SECONDS)
 
         submittable: list[ProposedTrade] = []
         blocked: list[tuple[ProposedTrade, OrderResult]] = []
@@ -251,10 +291,11 @@ class ExecutionManager:
                 self._record_planned(plan, updated)
                 submittable.append(updated)
                 continue
-            reason = next(
-                (warning for warning in warnings if trade.ticker in warning),
+            reason = warning_by_ticker.get(
+                trade.ticker,
                 "execution quote check failed; block execution",
             )
+            reason = f"{reason} after {EXECUTION_QUOTE_ATTEMPTS} quote attempts"
             result = self._blocked_result(trade, EXECUTION_QUOTE_BLOCKED_STATUS, reason)
             self._record_result(plan, trade, result)
             if status_callback is not None:
@@ -263,10 +304,25 @@ class ExecutionManager:
         return submittable, blocked
 
     def _tag(self, run_id: str, trades: list[ProposedTrade], *, offset: int) -> list[ProposedTrade]:
-        return [
-            replace(trade, order_ref=build_order_ref(run_id, offset + index, trade.ticker, trade.side))
-            for index, trade in enumerate(trades)
-        ]
+        """Attach stable orderRefs, reusing the first ref for a ticker/side on same-run retries.
+
+        Residual plans can shrink after fills, which changes list offsets. If orderRef identity
+        depended only on the rebuilt sequence, a still-existing trade could receive a new ref and
+        be submitted twice. The ledger therefore wins over the current sequence for any ticker/
+        side already seen in this run; new trades still use the original deterministic format.
+        """
+        prior_by_trade = self.store.get_latest_run_trades(run_id)
+        tagged: list[ProposedTrade] = []
+        for index, trade in enumerate(trades):
+            prior = prior_by_trade.get((trade.ticker, trade.side.value))
+            order_ref = prior.ledger_key if prior is not None else build_order_ref(
+                run_id,
+                offset + index,
+                trade.ticker,
+                trade.side,
+            )
+            tagged.append(replace(trade, order_ref=order_ref))
+        return tagged
 
     def _record_planned(self, plan: RebalancePlan, trade: ProposedTrade) -> None:
         assert trade.order_ref is not None
@@ -380,6 +436,12 @@ class ExecutionManager:
                     f"cancelled {len(group_cancelled)} open order(s) from {label} before planning "
                     f"({tickers})"
                 )
+                unresolved_count = len(group) - len(group_cancelled)
+                if unresolved_count:
+                    warnings.append(
+                        f"{unresolved_count} open order(s) from {label} could not be confirmed cancelled "
+                        f"({tickers}); block execution"
+                    )
             else:
                 warnings.append(
                     f"{len(group)} open order(s) from {label} are still unresolved "
@@ -410,9 +472,13 @@ class ExecutionManager:
         for entry in open_entries:
             snapshot = snapshots.get(entry.order_ref)
             if snapshot is None:
+                if entry.lifecycle_state == OrderLifecycleState.UNKNOWN and entry.raw_status == "NotOpenUnverified":
+                    updates.append(ReconcileUpdate(entry=entry, action=None, matched=False))
+                    continue
                 updated = self._close_unreported_open_entry(entry, now)
                 self.store.upsert(updated)
-                updates.append(ReconcileUpdate(entry=updated, action="closed", matched=False))
+                action = "closed" if updated.is_terminal else "unverified"
+                updates.append(ReconcileUpdate(entry=updated, action=action, matched=False))
                 continue
             updated = entry.with_snapshot(snapshot)
             action_taken = self._apply_timeout_policy(updated, now)
@@ -428,28 +494,33 @@ class ExecutionManager:
 
     @staticmethod
     def _close_unreported_open_entry(entry: OrderLedgerEntry, now: datetime) -> OrderLedgerEntry:
-        """Mark a local open ledger row terminal when IBKR no longer reports it as open.
+        """Resolve a local open row only when the final broker state is actually known.
 
-        IBKR's open-order API is the source of truth for whether an order can still be working.
-        If POMA already requested a cancel, a missing POMA orderRef confirms that cancel path has
-        resolved and should be recorded as ``cancelled``. Otherwise the broker no longer has an
-        open order for this ref, but we do not know whether the final broker event was a manual
-        cancel, fill, rejection, or expiration, so record the neutral terminal ``expired`` bucket.
+        A confirmed cancel request followed by disappearance from IBKR's open-order set can be
+        classified ``cancelled``. Otherwise "not open" is not proof of expiration: the order may
+        have filled, been rejected, or been cancelled outside POMA while disconnected. Keep that
+        row ``UNKNOWN`` and non-terminal so it blocks duplicate resubmission and future sessions
+        until broker history/operator evidence establishes the final state.
         """
         cancel_requested = entry.lifecycle_state == OrderLifecycleState.CANCEL_PENDING or entry.raw_status == "PendingCancel"
         if cancel_requested:
             lifecycle_state = OrderLifecycleState.CANCELLED
             raw_status = "Cancelled"
+            remaining_qty = 0.0
             terminal_reason = entry.terminal_reason or "broker no longer reports this POMA order as open after cancel request"
         else:
-            lifecycle_state = OrderLifecycleState.EXPIRED
-            raw_status = "NotOpen"
-            terminal_reason = "broker no longer reports this POMA order as open; treating it as externally resolved"
+            lifecycle_state = OrderLifecycleState.UNKNOWN
+            raw_status = "NotOpenUnverified"
+            remaining_qty = entry.remaining_qty or max(entry.quantity - entry.filled_qty, 0.0)
+            terminal_reason = (
+                "broker no longer reports this POMA order as open, but its final state is unverified; "
+                "keeping it unresolved to prevent duplicate resubmission"
+            )
         return replace(
             entry,
             lifecycle_state=lifecycle_state,
             raw_status=raw_status,
-            remaining_qty=0.0,
+            remaining_qty=remaining_qty,
             last_status_at=now.isoformat(),
             terminal_reason=terminal_reason,
         )
@@ -465,8 +536,8 @@ class ExecutionManager:
         if elapsed is None:
             return None
         if elapsed >= self.settings.cancel_after_seconds:
-            if entry.order_id is not None:
-                self.broker.cancel_order(entry.order_id)
+            if entry.order_id is None or not self.broker.cancel_order(entry.order_id):
+                return None
             return (
                 replace(
                     entry,

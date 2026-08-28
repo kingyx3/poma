@@ -9,6 +9,7 @@ fi
 log_path="$1"
 shift
 command_text="$*"
+lock_path="${POMA_COMMAND_LOCK_PATH:-/opt/poma/state/poma-command.lock}"
 
 utc_timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -75,7 +76,19 @@ except (OSError, urllib.error.URLError):
 PY
 }
 
-mkdir -p "$(dirname "${log_path}")"
+mkdir -p "$(dirname "${log_path}")" "$(dirname "${lock_path}")"
+
+# Serialize every scheduled command that can start a POMA container. On the single-core VM,
+# overlapping monitor/reconcile containers can starve IB Gateway badly enough for all API calls
+# to time out. Do not queue cron invocations behind a long-running job: a skipped reconcile will
+# run again on the next odd minute, and a skipped monitor will run again on the next 5-minute tick.
+exec 9>"${lock_path}"
+if ! flock -n 9; then
+  printf '[%s] ===== command skipped: lock busy (%s): %s =====\n' \
+    "$(utc_timestamp)" "${lock_path}" "${command_text}" >>"${log_path}"
+  exit 0
+fi
+
 printf '[%s] ===== command start: %s =====\n' "$(utc_timestamp)" "${command_text}" >>"${log_path}"
 
 set +e

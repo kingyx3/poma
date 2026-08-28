@@ -110,11 +110,12 @@ def apply_execution_quotes(
 ) -> tuple[list[ProposedTrade], list[str]]:
     """Reprice every trade off a fresh broker quote, dropping any that fail a safety check.
 
-    Quantity is recomputed from the trade's already-approved notional divided by the newly
-    selected reference price, so a moved quote changes share count rather than order size.
-    When ``rules`` is provided, the recomputed quantity is re-rounded to what the instrument
-    can execute (whole shares by default), so repricing never reintroduces a fractional size
-    the broker would reject.
+    BUY quantity is recomputed from the trade's already-approved notional so price movement does
+    not silently increase the intended buy notional. SELL quantity deliberately preserves the
+    already-approved share delta: recomputing a one-share sell from ``notional / fresh_price``
+    can turn it into 0.99 shares after a small price rise, which then floors to zero under the
+    whole-share execution rule and incorrectly drops the sell. The preserved SELL quantity is
+    still re-rounded against the instrument rule before submission.
     """
     repriced: list[ProposedTrade] = []
     warnings: list[str] = []
@@ -133,13 +134,14 @@ def apply_execution_quotes(
             continue
 
         spread_bps = quote.spread_bps if quote.spread_bps is not None else compute_spread_bps(quote.bid, quote.ask)
-        quantity = trade.notional / price
+        raw_quantity = trade.quantity if trade.side == OrderSide.SELL else trade.notional / price
+        quantity = raw_quantity
         if rules is not None:
             rule = resolve_execution_rule(trade.ticker, rules)
             quantity = rounded_execution_quantity(quantity, trade.side, rule)
             if quantity <= 0 or quantity < rule.min_quantity:
                 warnings.append(
-                    f"{trade.ticker}: repriced quantity {trade.notional / price:.6f} rounds "
+                    f"{trade.ticker}: repriced quantity {raw_quantity:.6f} rounds "
                     "below the tradable minimum for this instrument; skipping trade"
                 )
                 continue

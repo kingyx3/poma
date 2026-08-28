@@ -32,6 +32,7 @@ class RecordingBroker:
         self.execution_quote_requests: list[list[str]] = []
         self.cash_usd = 10_000.0
         self.account_snapshot_calls = 0
+        self.cancel_succeeds = True
 
     def account_snapshot(self) -> AccountSnapshot:
         self.account_snapshot_calls += 1
@@ -84,7 +85,7 @@ class RecordingBroker:
 
     def cancel_order(self, order_id: int) -> bool:
         self.cancelled_order_ids.append(order_id)
-        return True
+        return self.cancel_succeeds
 
     def replace_order(self, *, order_id, ticker, side, quantity, new_limit_price, order_ref) -> OpenOrderSnapshot:
         return OpenOrderSnapshot(
@@ -195,17 +196,20 @@ def test_check_stale_orders_blocks_on_prior_session_open_orders(tmp_path: Path) 
     assert broker.cancelled_order_ids == []
 
 
-def test_check_stale_orders_refreshes_closed_broker_orders_before_blocking(tmp_path: Path) -> None:
+def test_check_stale_orders_keeps_unverified_missing_broker_order_blocking(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-06-30"))
-    broker.open_order_snapshots = []  # IBKR no longer reports the locally-open order as working.
+    broker.open_order_snapshots = []  # Absence from the open-order list does not prove a terminal state.
 
     check = manager.check_stale_orders("2026-07-01", "run-2")
 
-    assert check.warnings == ()
-    assert store.load_open_orders() == []
+    assert any("block execution" in warning for warning in check.warnings)
+    open_orders = store.load_open_orders()
+    assert len(open_orders) == 1
+    assert open_orders[0].lifecycle_state == OrderLifecycleState.UNKNOWN
+    assert open_orders[0].raw_status == "NotOpenUnverified"
 
 
 def test_check_stale_orders_cancel_policy_cancels_prior_session_orders(tmp_path: Path) -> None:
@@ -223,6 +227,23 @@ def test_check_stale_orders_cancel_policy_cancels_prior_session_orders(tmp_path:
     open_orders = store.load_open_orders()
     assert len(open_orders) == 1
     assert open_orders[0].lifecycle_state == OrderLifecycleState.CANCEL_PENDING
+
+
+def test_check_stale_orders_cancel_policy_blocks_when_cancel_cannot_be_confirmed(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    broker.cancel_succeeds = False
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings(STALE_ORDER_POLICY="cancel"))
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)], session_date="2026-06-30"))
+    entry = store.load_open_orders()[0]
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
+
+    check = manager.check_stale_orders("2026-07-01", "run-2")
+
+    assert broker.cancelled_order_ids == [1]
+    assert any("could not be confirmed cancelled" in warning for warning in check.warnings)
+    assert any("block execution" in warning for warning in check.warnings)
+    assert store.load_open_orders()[0].lifecycle_state == OrderLifecycleState.BROKER_ACCEPTED
 
 
 def test_check_stale_orders_does_not_block_on_same_run_open_orders(tmp_path: Path) -> None:
@@ -309,7 +330,27 @@ def test_reconcile_cancels_after_cancel_after_seconds(tmp_path: Path) -> None:
     assert broker.cancelled_order_ids == [entry.order_id]
 
 
-def test_reconcile_closes_unmatched_orders_that_are_no_longer_open(tmp_path: Path) -> None:
+def test_reconcile_does_not_mark_cancel_pending_when_broker_cancel_fails(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    broker.cancel_succeeds = False
+    store = OrderStore(tmp_path)
+    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=5)
+    manager = ExecutionManager(broker, store, settings)
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.0)]))
+
+    entry = store.load_open_orders()[0]
+    stale_time = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
+    store.upsert(dc_replace(entry, submitted_at=stale_time))
+    broker.open_order_snapshots = [_snapshot_for_entry(entry)]
+
+    summary = manager.reconcile()
+
+    assert summary.updates[0].action is None
+    assert broker.cancelled_order_ids == [entry.order_id]
+    assert store.load_open_orders()[0].lifecycle_state == OrderLifecycleState.BROKER_ACCEPTED
+
+
+def test_reconcile_keeps_unmatched_orders_unverified_and_open(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())
@@ -320,11 +361,28 @@ def test_reconcile_closes_unmatched_orders_that_are_no_longer_open(tmp_path: Pat
 
     assert summary.checked == 1
     assert summary.updates[0].matched is False
-    assert summary.updates[0].action == "closed"
-    assert summary.updates[0].entry.lifecycle_state == OrderLifecycleState.EXPIRED
-    assert summary.updates[0].entry.raw_status == "NotOpen"
-    assert "no longer reports" in summary.updates[0].entry.terminal_reason
-    assert store.load_open_orders() == []
+    assert summary.updates[0].action == "unverified"
+    assert summary.updates[0].entry.lifecycle_state == OrderLifecycleState.UNKNOWN
+    assert summary.updates[0].entry.raw_status == "NotOpenUnverified"
+    assert "unverified" in (summary.updates[0].entry.terminal_reason or "")
+    open_orders = store.load_open_orders()
+    assert len(open_orders) == 1
+    assert open_orders[0].lifecycle_state == OrderLifecycleState.UNKNOWN
+
+
+def test_reconcile_does_not_repeat_unverified_lifecycle_action(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
+    broker.open_order_snapshots = []
+
+    first = manager.reconcile()
+    second = manager.reconcile()
+
+    assert first.updates[0].action == "unverified"
+    assert second.updates[0].action is None
+    assert second.updates[0].entry.lifecycle_state == OrderLifecycleState.UNKNOWN
 
 
 def test_reconcile_with_no_open_orders_is_a_noop(tmp_path: Path) -> None:
