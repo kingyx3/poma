@@ -304,10 +304,25 @@ class ExecutionManager:
         return submittable, blocked
 
     def _tag(self, run_id: str, trades: list[ProposedTrade], *, offset: int) -> list[ProposedTrade]:
-        return [
-            replace(trade, order_ref=build_order_ref(run_id, offset + index, trade.ticker, trade.side))
-            for index, trade in enumerate(trades)
-        ]
+        """Attach stable orderRefs, reusing the first ref for a ticker/side on same-run retries.
+
+        Residual plans can shrink after fills, which changes list offsets. If orderRef identity
+        depended only on the rebuilt sequence, a still-existing trade could receive a new ref and
+        be submitted twice. The ledger therefore wins over the current sequence for any ticker/
+        side already seen in this run; new trades still use the original deterministic format.
+        """
+        prior_by_trade = self.store.get_latest_run_trades(run_id)
+        tagged: list[ProposedTrade] = []
+        for index, trade in enumerate(trades):
+            prior = prior_by_trade.get((trade.ticker, trade.side.value))
+            order_ref = prior.ledger_key if prior is not None else build_order_ref(
+                run_id,
+                offset + index,
+                trade.ticker,
+                trade.side,
+            )
+            tagged.append(replace(trade, order_ref=order_ref))
+        return tagged
 
     def _record_planned(self, plan: RebalancePlan, trade: ProposedTrade) -> None:
         assert trade.order_ref is not None
