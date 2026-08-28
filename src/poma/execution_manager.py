@@ -421,6 +421,12 @@ class ExecutionManager:
                     f"cancelled {len(group_cancelled)} open order(s) from {label} before planning "
                     f"({tickers})"
                 )
+                unresolved_count = len(group) - len(group_cancelled)
+                if unresolved_count:
+                    warnings.append(
+                        f"{unresolved_count} open order(s) from {label} could not be confirmed cancelled "
+                        f"({tickers}); block execution"
+                    )
             else:
                 warnings.append(
                     f"{len(group)} open order(s) from {label} are still unresolved "
@@ -451,6 +457,9 @@ class ExecutionManager:
         for entry in open_entries:
             snapshot = snapshots.get(entry.order_ref)
             if snapshot is None:
+                if entry.lifecycle_state == OrderLifecycleState.UNKNOWN and entry.raw_status == "NotOpenUnverified":
+                    updates.append(ReconcileUpdate(entry=entry, action=None, matched=False))
+                    continue
                 updated = self._close_unreported_open_entry(entry, now)
                 self.store.upsert(updated)
                 action = "closed" if updated.is_terminal else "unverified"
@@ -512,8 +521,8 @@ class ExecutionManager:
         if elapsed is None:
             return None
         if elapsed >= self.settings.cancel_after_seconds:
-            if entry.order_id is not None:
-                self.broker.cancel_order(entry.order_id)
+            if entry.order_id is None or not self.broker.cancel_order(entry.order_id):
+                return None
             return (
                 replace(
                     entry,
