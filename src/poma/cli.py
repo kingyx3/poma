@@ -9,7 +9,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from poma.broker import BROKER_UNAVAILABLE_STATUS, build_broker
+from poma.broker import (
+    BROKER_UNAVAILABLE_STATUS,
+    ORDER_NOT_ACCEPTED_STATUS,
+    BrokerUnavailable,
+    build_broker,
+)
 from poma.config import Settings, TradingMode, get_settings
 from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
@@ -20,14 +25,36 @@ from poma.journal import ExecutionJournal
 from poma.market_calendar import should_rebalance_now
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
+from poma.order_lifecycle import (
+    BUYING_POWER_BLOCKED_STATUS,
+    EXECUTION_QUOTE_BLOCKED_STATUS,
+    IDEMPOTENT_REPLAY_STATUS,
+)
 from poma.order_status_alerts import lifecycle_status_alert, order_status_alert
 from poma.order_store import OrderStore
-from poma.state import TERMINAL_STATUSES, LocalState
+from poma.state import RETRY_WAIT_STATUS, TERMINAL_STATUSES, LocalState
 
 app = typer.Typer(no_args_is_help=True, help="POMA market-cap rebalancer.")
 console = Console()
 
 _MAX_SUMMARY_LINES = 15
+# monitor already runs every five minutes. Twelve same-run attempts gives transient quote,
+# gateway, and sell-settlement problems roughly one hour to clear without allowing an endless
+# retry loop through the whole trading session.
+_MAX_REBALANCE_RETRY_ATTEMPTS = 12
+_ACCEPTED_ORDER_STATUSES = frozenset({"PreSubmitted", "Submitted", "Filled"})
+_RETRYABLE_PRE_ACCEPTANCE_STATUSES = frozenset(
+    {
+        EXECUTION_QUOTE_BLOCKED_STATUS,
+        BUYING_POWER_BLOCKED_STATUS,
+        BROKER_UNAVAILABLE_STATUS,
+        ORDER_NOT_ACCEPTED_STATUS,
+    }
+)
+_RETRYABLE_BLOCK_WARNING_MARKERS = (
+    "unable to read broker cash and portfolio balances before rebalancing",
+    "unable to refresh local open orders against IBKR before planning",
+)
 
 
 def _portfolio_status_label(status: str, executed: bool) -> str:
@@ -176,6 +203,54 @@ def _write_report(plan: RebalancePlan, report_dir: Path) -> Path:
         )
     )
     return path
+
+
+def _retryable_outcome_reason(outcome: RebalanceOutcome) -> str | None:
+    """Return a retry reason only when every unresolved problem is safe to replay.
+
+    Broker-accepted results are left to the durable order ledger/reconciler, and
+    ``IdempotentReplay`` is informational. A retry is allowed only for local/no-acceptance
+    failures that have no broker order id or fill, so the same-run retry cannot create a
+    duplicate order.
+    """
+    if outcome.blocked:
+        blocking = [warning for warning in outcome.plan.warnings if "block execution" in warning]
+        if blocking and all(
+            any(marker in warning for marker in _RETRYABLE_BLOCK_WARNING_MARKERS)
+            for warning in blocking
+        ):
+            return "; ".join(blocking)
+        return None
+
+    retryable: list[OrderResult] = []
+    for result in outcome.plan.execution_results:
+        if result.status == IDEMPOTENT_REPLAY_STATUS:
+            continue
+        if result.status in _ACCEPTED_ORDER_STATUSES and not result.message:
+            continue
+        if (
+            result.status in _RETRYABLE_PRE_ACCEPTANCE_STATUSES
+            and result.order_id is None
+            and result.filled <= 1e-9
+        ):
+            retryable.append(result)
+            continue
+        return None
+    if not retryable:
+        return None
+    return "; ".join(
+        f"{result.ticker} {result.status}: {result.message or 'retryable pre-acceptance outcome'}"
+        for result in retryable
+    )
+
+
+def _retryable_exception_reason(exc: Exception) -> str | None:
+    """Classify exceptions known to occur before broker acceptance as retryable."""
+    if isinstance(exc, BrokerUnavailable):
+        return str(exc) or exc.__class__.__name__
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return str(exc) or exc.__class__.__name__
+    return None
 
 
 def _assert_rebalance_market_window(
@@ -363,29 +438,77 @@ def monitor(
     if status in TERMINAL_STATUSES:
         console.print(f"Skipping: session already attempted with status={status}")
         return
-    resuming = status == "running"
+    resuming = status in {"running", RETRY_WAIT_STATUS}
     if not resuming and not decision.should_run:
         console.print(f"Skipping: {decision.reason}")
         return
 
-    # A "running" status with no terminal status ever recorded means the previous attempt was
-    # killed outright (process crash, OOM, VM restart) before it could reach the except handler
-    # below. Resuming with that same run_id lets ExecutionManager recognize orders the previous
-    # attempt already got to the broker (see submit_plan's idempotent replay) instead of treating
-    # them as brand new and resubmitting duplicates.
+    # A running/retry_wait session always resumes with the exact same run_id. Accepted orders
+    # therefore replay idempotently, while local pre-acceptance quote/cash blocks can be retried.
+    # This makes sell -> reconcile -> refreshed-cash -> buy a durable multi-tick workflow without
+    # ever assuming unfilled sell proceeds are available.
     run_id = state.session_run_id(session_date) if resuming else None
     if resuming:
-        console.print(f"Resuming session {session_date} left running by an earlier attempt (run_id={run_id})")
+        console.print(
+            f"Resuming session {session_date} status={status} from an earlier attempt "
+            f"(run_id={run_id})"
+        )
     run_id = run_id or utc_run_id()
-    state.begin_session(session_date, run_id)
+    attempt = state.begin_session(session_date, run_id)
     try:
         outcome, report_path = _run_rebalance(
             session_date=session_date,
             run_id=run_id,
             force_dry_run=dry_run,
         )
+        retry_reason = _retryable_outcome_reason(outcome)
+        if retry_reason is not None and attempt < _MAX_REBALANCE_RETRY_ATTEMPTS:
+            state.mark_retry_wait(
+                session_date,
+                run_id,
+                reason=retry_reason,
+                report_path=str(report_path),
+            )
+            console.print(
+                f"Retryable rebalance outcome; same run will retry on a later monitor tick "
+                f"(attempt {attempt}/{_MAX_REBALANCE_RETRY_ATTEMPTS}): {retry_reason}"
+            )
+            return
         state.mark_session(session_date, run_id, outcome.status, report_path=str(report_path))
+        if retry_reason is not None:
+            send_alert(
+                settings,
+                "\n".join(
+                    [
+                        "🛑 Rebalance retry budget exhausted",
+                        f"Session: {session_date}",
+                        f"Attempts: {attempt}",
+                        f"Final status: {outcome.status}",
+                        f"Detail: {retry_reason}",
+                    ]
+                ),
+            )
     except Exception as exc:
+        retry_reason = _retryable_exception_reason(exc)
+        if retry_reason is not None and attempt < _MAX_REBALANCE_RETRY_ATTEMPTS:
+            state.mark_retry_wait(session_date, run_id, reason=retry_reason)
+            console.print(
+                f"Retryable rebalance exception; same run will retry on a later monitor tick "
+                f"(attempt {attempt}/{_MAX_REBALANCE_RETRY_ATTEMPTS}): {retry_reason}"
+            )
+            if attempt == 1:
+                send_alert(
+                    settings,
+                    "\n".join(
+                        [
+                            "⏳ Rebalance will retry",
+                            f"Session: {session_date}",
+                            f"Attempt: {attempt}/{_MAX_REBALANCE_RETRY_ATTEMPTS}",
+                            f"Reason: {retry_reason}",
+                        ]
+                    ),
+                )
+            return
         state.mark_session(session_date, run_id, "failed", error=str(exc))
         send_alert(
             settings,
