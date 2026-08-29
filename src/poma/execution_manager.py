@@ -8,10 +8,12 @@ from poma.broker import (
     BROKER_UNAVAILABLE_STATUS,
     ORDER_NOT_ACCEPTED_STATUS,
     Broker,
+    IbkrBroker,
     OrderStatusCallback,
 )
 from poma.config import ExecutionPriceSource, Settings, StaleOrderPolicy
 from poma.execution_pricing import apply_execution_quotes, build_limit_price, compute_spread_bps, select_execution_price
+from poma.ibkr_order_history import fetch_completed_order_snapshots as fetch_ibkr_completed_order_snapshots
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.order_lifecycle import (
     BUYING_POWER_BLOCKED_STATUS,
@@ -471,15 +473,21 @@ class ExecutionManager:
         completed_snapshots = {}
         if missing_refs:
             fetch_completed = getattr(self.broker, "fetch_completed_order_snapshots", None)
-            if callable(fetch_completed):
-                try:
+            try:
+                if callable(fetch_completed):
                     completed_snapshots = {
                         snapshot.order_ref: snapshot
                         for snapshot in fetch_completed()
                         if snapshot.order_ref and snapshot.order_ref in missing_refs
                     }
-                except Exception:  # noqa: BLE001 - completed history is a recovery aid; UNKNOWN remains fail-closed
-                    completed_snapshots = {}
+                elif isinstance(self.broker, IbkrBroker):
+                    completed_snapshots = {
+                        snapshot.order_ref: snapshot
+                        for snapshot in fetch_ibkr_completed_order_snapshots(self.settings, missing_refs)
+                        if snapshot.order_ref
+                    }
+            except Exception:  # noqa: BLE001 - history recovery can fail while UNKNOWN remains fail-closed
+                completed_snapshots = {}
 
         now = datetime.now(UTC)
         updates: list[ReconcileUpdate] = []
