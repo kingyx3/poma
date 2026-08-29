@@ -6,6 +6,8 @@ from poma.broker import ORDER_REF_PREFIX, _connect_ib
 from poma.config import Settings
 from poma.models import OpenOrderSnapshot, OrderSide
 
+_TERMINAL_COMPLETED_STATUSES = frozenset({"Filled", "Cancelled", "ApiCancelled", "Inactive"})
+
 
 def fetch_completed_order_snapshots(
     settings: Settings,
@@ -47,7 +49,13 @@ def fetch_completed_order_snapshots(
             perm_id = int(getattr(order, "permId", 0) or 0)
             trade = hydrated_by_perm_id.get(perm_id, completed_trade)
             status = str(getattr(trade.orderStatus, "status", "") or "")
-            if status not in {"Filled", "Cancelled", "ApiCancelled", "Inactive"}:
+            if not status:
+                status = str(getattr(completed_trade.orderStatus, "status", "") or "")
+            if status not in _TERMINAL_COMPLETED_STATUSES:
+                continue
+
+            action = str(getattr(order, "action", "") or "").upper()
+            if action not in {OrderSide.BUY.value, OrderSide.SELL.value}:
                 continue
 
             total_quantity = float(getattr(order, "totalQuantity", 0.0) or 0.0)
@@ -64,7 +72,7 @@ def fetch_completed_order_snapshots(
                     order_id=_optional_positive_int(getattr(order, "orderId", None)),
                     perm_id=_optional_positive_int(getattr(order, "permId", None)),
                     ticker=str(getattr(trade.contract, "symbol", "") or "").upper(),
-                    side=OrderSide.BUY if str(getattr(order, "action", "")).upper() == "BUY" else OrderSide.SELL,
+                    side=OrderSide(action),
                     raw_status=status,
                     filled=filled,
                     remaining=remaining,
