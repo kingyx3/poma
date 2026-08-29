@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pytest
-
 from conftest import make_settings
 
 from poma.execution_manager import ExecutionManager
