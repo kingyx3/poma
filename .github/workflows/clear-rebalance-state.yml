@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       deploy_environment:
-        description: Dev/stg GitHub Environment whose VM rebalance run-state should be cleared.
+        description: Dev/stg GitHub Environment whose VM rebalance session marker should be cleared.
         required: true
         type: choice
         options: [dev, stg]
         default: dev
       run_monitor_after_clear:
-        description: Run poma monitor immediately after clearing state, using normal market-window guards.
+        description: Re-run poma monitor after clearing only the session marker; durable order history is preserved.
         required: true
         type: boolean
         default: true
@@ -55,7 +55,7 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Clear state and optionally run monitor
+      - name: Clear session marker and optionally run monitor
         run: |
           set -euo pipefail
           timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}"
@@ -65,20 +65,20 @@ jobs:
             set -euo pipefail
             sudo install -d -o poma -g poma /opt/poma/state
             if [ -f /opt/poma/state/rebalance_state.json ]; then
-              echo 'Clearing existing rebalance state file.'
+              echo 'Clearing existing rebalance session marker.'
             else
-              echo 'No existing rebalance state file found.'
+              echo 'No existing rebalance session marker found.'
             fi
             sudo rm -f /opt/poma/state/rebalance_state.json
             sudo chown -R poma:poma /opt/poma/state
-            echo 'Cleared /opt/poma/state/rebalance_state.json'
+            echo 'Cleared /opt/poma/state/rebalance_state.json; durable order ledger under /opt/poma/state/orders is preserved.'
 
             if [ '${RUN_MONITOR_AFTER_CLEAR}' = 'true' ]; then
               if [ ! -f /opt/poma/docker-compose.vm.yml ]; then
                 echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2
                 exit 1
               fi
-              echo 'Running poma monitor after clearing state.'
+              echo 'Running poma monitor after clearing the session marker.'
               sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma monitor'
             else
               echo 'Skipping immediate monitor run; cron may run on the next eligible tick.'
@@ -93,4 +93,5 @@ jobs:
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
             POMA[${{ inputs.deploy_environment }}] clear-rebalance-state
-            ${{ job.status }} — removed /opt/poma/state/rebalance_state.json and monitor-after-clear=${{ inputs.run_monitor_after_clear }}.
+            ${{ job.status }} — cleared /opt/poma/state/rebalance_state.json only;
+            durable order ledger preserved; monitor-after-clear=${{ inputs.run_monitor_after_clear }}.

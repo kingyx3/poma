@@ -8,10 +8,12 @@ from poma.broker import (
     BROKER_UNAVAILABLE_STATUS,
     ORDER_NOT_ACCEPTED_STATUS,
     Broker,
+    IbkrBroker,
     OrderStatusCallback,
 )
 from poma.config import ExecutionPriceSource, Settings, StaleOrderPolicy
 from poma.execution_pricing import apply_execution_quotes, build_limit_price, compute_spread_bps, select_execution_price
+from poma.ibkr_order_history import fetch_completed_order_snapshots as fetch_ibkr_completed_order_snapshots
 from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.order_lifecycle import (
     BUYING_POWER_BLOCKED_STATUS,
@@ -459,7 +461,7 @@ class ExecutionManager:
     # --- Reconciliation after the rebalance process exits --------------------------------
 
     def reconcile(self) -> ReconcileSummary:
-        """Poll the broker for open orders and apply the replace-once/cancel timeout policy."""
+        """Reconcile open orders, then use completed broker history before declaring UNKNOWN."""
         open_entries = self._open_ledger_entries()
         if not open_entries:
             return ReconcileSummary(checked=0, updates=())
@@ -467,11 +469,38 @@ class ExecutionManager:
         snapshots = {
             snapshot.order_ref: snapshot for snapshot in self.broker.fetch_open_order_snapshots() if snapshot.order_ref
         }
+        missing_refs = {entry.order_ref for entry in open_entries if entry.order_ref not in snapshots}
+        completed_snapshots = {}
+        if missing_refs:
+            fetch_completed = getattr(self.broker, "fetch_completed_order_snapshots", None)
+            try:
+                if callable(fetch_completed):
+                    completed_snapshots = {
+                        snapshot.order_ref: snapshot
+                        for snapshot in fetch_completed()
+                        if snapshot.order_ref and snapshot.order_ref in missing_refs
+                    }
+                elif isinstance(self.broker, IbkrBroker):
+                    completed_snapshots = {
+                        snapshot.order_ref: snapshot
+                        for snapshot in fetch_ibkr_completed_order_snapshots(self.settings, missing_refs)
+                        if snapshot.order_ref
+                    }
+            except Exception:  # noqa: BLE001 - history recovery can fail while UNKNOWN remains fail-closed
+                completed_snapshots = {}
+
         now = datetime.now(UTC)
         updates: list[ReconcileUpdate] = []
         for entry in open_entries:
             snapshot = snapshots.get(entry.order_ref)
             if snapshot is None:
+                completed_snapshot = completed_snapshots.get(entry.order_ref)
+                if completed_snapshot is not None:
+                    completed_entry = entry.with_snapshot(completed_snapshot)
+                    if completed_entry.is_terminal:
+                        self.store.upsert(completed_entry)
+                        updates.append(ReconcileUpdate(entry=completed_entry, action="closed", matched=True))
+                        continue
                 if entry.lifecycle_state == OrderLifecycleState.UNKNOWN and entry.raw_status == "NotOpenUnverified":
                     updates.append(ReconcileUpdate(entry=entry, action=None, matched=False))
                     continue
