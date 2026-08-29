@@ -30,6 +30,9 @@ idempotently while a local pre-acceptance failure can be retried without creatin
   `BrokerUnavailable`, and `OrderNotAccepted` with no broker order id and no fill. Accepted,
   filled, unknown, or otherwise ambiguous broker states remain idempotent replays and are never
   blindly resubmitted.
+- Keep orderRef identity stable by `(run_id, ticker, side)` once a trade has entered the ledger.
+  A residual plan can shrink after fills and change sequence offsets; retries reuse the original
+  ledger key instead of allocating a new orderRef for the same trade intent.
 - Sample an execution quote up to three times, five seconds apart, before recording a final
   `QuoteBlocked`. Only tickers that still fail quote validation are retried.
 - Preserve SELL share quantity during execution repricing. BUY quantity remains notional-based.
@@ -39,10 +42,21 @@ idempotently while a local pre-acceptance failure can be retried without creatin
   working moves the session to `retry_wait`; later monitor ticks replay accepted sells, allow the
   reconciler to observe their lifecycle, refresh cash again, and submit only buys the broker
   cash can actually fund.
-- If IBKR no longer reports a non-cancelled local order as open, keep it `UNKNOWN` and
-  non-terminal instead of labeling it `expired`. This fails closed: the order cannot be
+- If IBKR no longer reports a local order as open, query completed API orders and execution
+  history before declaring the outcome ambiguous. Only an exact POMA `orderRef` match carrying a
+  terminal broker status may close the ledger row. `Filled` orders use execution fills when
+  available and fall back to the submitted quantity when completed-order history proves a full
+  fill but execution detail has already aged out.
+- If no exact terminal completed-order match is available, keep a non-cancelled order `UNKNOWN`
+  and non-terminal instead of labeling it `expired`. This fails closed: the order cannot be
   resubmitted and later sessions stay blocked until broker/operator evidence establishes the
-  final state.
+  final state. Failure of the completed-history recovery request itself also degrades to this
+  fail-closed state rather than turning a normal reconciliation pass into a crash.
+- `clear-rebalance-state` clears only `/opt/poma/state/rebalance_state.json`, which is the
+  scheduler/session-attempt marker. It deliberately preserves `/opt/poma/state/orders`, including
+  the open snapshot and append-only order event history. With `run_monitor_after_clear=true`, the
+  next monitor pass reconciles that durable ledger, refreshes the actual broker portfolio/cash,
+  recomputes targets, and submits only safe residual trades.
 - Serialize all scheduled POMA commands with a host-wide `flock` acquired before Docker is
   started. A busy cron invocation exits successfully and relies on the next scheduled tick rather
   than queueing another memory/CPU-heavy container behind the active job.
@@ -51,9 +65,12 @@ idempotently while a local pre-acceptance failure can be retried without creatin
 
 - Transient market-quality, Gateway, and sell-settlement conditions no longer automatically lose
   the entire trading day.
+- Explicitly clearing the rebalance session marker remains a supported way to ask POMA to
+  recompute and rebalance again in the same session; it does not erase execution history.
 - The sell-before-buy safety rule is unchanged: unfilled sells never count as buying power.
-- Duplicate-order protection is stricter for ambiguity: unknown broker outcomes remain unresolved
-  rather than being guessed terminal.
+- Orders that disappear from the open-order API normally self-heal from IBKR completed history;
+  duplicate-order protection remains stricter for the residual cases that cannot be proven
+  terminal.
 - The free-tier host has less concurrency pressure, but moving live trading to a host with more
   memory remains operationally preferable to relying on swap.
 - Retry classification is intentionally narrow. New failure classes must be explicitly proven
