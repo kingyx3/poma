@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import suppress
 
 from poma.broker import ORDER_REF_PREFIX, _connect_ib
 from poma.config import Settings
@@ -23,10 +24,10 @@ def fetch_completed_order_snapshots(
     ib = _connect_ib(settings, client_id=settings.ibkr_client_id)
     try:
         completed = list(ib.reqCompletedOrders(apiOnly=True))
-        try:
+        # Terminal completed-order evidence remains usable if detailed execution history has
+        # already aged out or is temporarily unavailable.
+        with suppress(Exception):
             ib.reqExecutions()
-        except Exception:  # noqa: BLE001 - terminal completed-order evidence remains usable without fill history
-            pass
 
         hydrated_by_perm_id = {
             int(getattr(trade.order, "permId", 0) or 0): trade
