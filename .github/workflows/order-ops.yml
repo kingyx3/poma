@@ -4,17 +4,37 @@ on:
   workflow_dispatch:
     inputs:
       deploy_environment:
-        description: GitHub Environment whose VM order ledger should be inspected.
+        description: GitHub Environment whose VM order ledger should be inspected or repaired.
         required: true
         type: choice
         options: [dev, stg, prd]
         default: dev
       action:
-        description: Read-only order operation to run on the VM.
+        description: Order operation to run on the VM.
         required: true
         type: choice
-        options: [inspect-unresolved]
+        options: [inspect-unresolved, resolve-filled]
         default: inspect-unresolved
+      order_ref:
+        description: Required for resolve-filled; exact unresolved POMA orderRef.
+        required: false
+        type: string
+        default: ''
+      perm_id:
+        description: Required for resolve-filled; exact broker permId from the unresolved ledger row.
+        required: false
+        type: string
+        default: ''
+      expected_current_quantity:
+        description: Required for resolve-filled; broker position quantity that must still match at execution time.
+        required: false
+        type: string
+        default: '0'
+      confirmation:
+        description: For resolve-filled only, type exactly RESOLVE FILLED.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -34,7 +54,9 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       REMOTE_INSPECTOR: /tmp/poma-inspect-unresolved-orders.py
-      REMOTE_HELPER: /tmp/poma-run-order-ops-inspect.sh
+      REMOTE_INSPECT_HELPER: /tmp/poma-run-order-ops-inspect.sh
+      REMOTE_RESOLVER: /tmp/poma-resolve-unresolved-order.py
+      REMOTE_RESOLVE_HELPER: /tmp/poma-run-order-ops-resolve.sh
 
     steps:
       - name: Check out repository
@@ -57,11 +79,15 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
+      - name: Configure gcloud project
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}"
+
       - name: Upload read-only inspector
         if: ${{ inputs.action == 'inspect-unresolved' }}
         run: |
           set -euo pipefail
-          timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}"
           timeout --kill-after=30s 3m gcloud compute scp \
             ops/scripts/inspect_unresolved_orders.py \
             "${GCP_VM_NAME}:${REMOTE_INSPECTOR}" \
@@ -71,7 +97,7 @@ jobs:
             --quiet
           timeout --kill-after=30s 3m gcloud compute scp \
             ops/scripts/run_order_ops_inspect_remote.sh \
-            "${GCP_VM_NAME}:${REMOTE_HELPER}" \
+            "${GCP_VM_NAME}:${REMOTE_INSPECT_HELPER}" \
             --zone "${GCP_ZONE}" \
             --tunnel-through-iap \
             --ssh-key-expire-after=15m \
@@ -82,8 +108,70 @@ jobs:
         run: |
           set -euo pipefail
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+          printf -v remote_command 'sudo -u poma bash %q %q' "${REMOTE_INSPECT_HELPER}" "${REMOTE_INSPECTOR}"
           timeout --kill-after=30s 10m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" \
-            --command "sudo -u poma bash '${REMOTE_HELPER}' '${REMOTE_INSPECTOR}'"
+            --command "${remote_command}"
+
+      - name: Validate resolve-filled inputs
+        if: ${{ inputs.action == 'resolve-filled' }}
+        env:
+          ORDER_REF: ${{ inputs.order_ref }}
+          PERM_ID: ${{ inputs.perm_id }}
+          EXPECTED_CURRENT_QUANTITY: ${{ inputs.expected_current_quantity }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test -n "${ORDER_REF}" || { echo 'order_ref is required' >&2; exit 64; }
+          [[ "${PERM_ID}" =~ ^[0-9]+$ ]] || { echo 'perm_id must be a positive integer' >&2; exit 64; }
+          python - "${EXPECTED_CURRENT_QUANTITY}" <<'PY'
+import sys
+float(sys.argv[1])
+PY
+          [ "${CONFIRMATION}" = 'RESOLVE FILLED' ] || {
+            echo 'confirmation must exactly equal RESOLVE FILLED' >&2
+            exit 64
+          }
+
+      - name: Upload guarded resolver
+        if: ${{ inputs.action == 'resolve-filled' }}
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 3m gcloud compute scp \
+            ops/scripts/resolve_unresolved_order.py \
+            "${GCP_VM_NAME}:${REMOTE_RESOLVER}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet
+          timeout --kill-after=30s 3m gcloud compute scp \
+            ops/scripts/run_order_ops_resolve_remote.sh \
+            "${GCP_VM_NAME}:${REMOTE_RESOLVE_HELPER}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet
+
+      - name: Resolve unresolved SELL as filled
+        if: ${{ inputs.action == 'resolve-filled' }}
+        env:
+          ORDER_REF: ${{ inputs.order_ref }}
+          PERM_ID: ${{ inputs.perm_id }}
+          EXPECTED_CURRENT_QUANTITY: ${{ inputs.expected_current_quantity }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+          printf -v remote_command 'sudo -u poma bash %q %q %q %q %q %q %q %q' \
+            "${REMOTE_RESOLVE_HELPER}" \
+            "${REMOTE_RESOLVER}" \
+            "${ORDER_REF}" \
+            "${PERM_ID}" \
+            "${EXPECTED_CURRENT_QUANTITY}" \
+            "${CONFIRMATION}" \
+            "${GITHUB_ACTOR}" \
+            "${GITHUB_RUN_ID}"
+          timeout --kill-after=30s 10m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" \
+            --command "${remote_command}"
 
       - name: Write workflow summary
         if: ${{ always() }}
@@ -93,9 +181,15 @@ jobs:
             echo
             echo "- Environment: \`${DEPLOY_ENVIRONMENT}\`"
             echo "- Action: \`${INPUT_ACTION}\`"
-            echo '- Mode: **read-only**'
-            echo '- Uses the shared POMA command lock before querying IBKR.'
-            echo '- No broker orders or durable ledger records are modified by this workflow.'
+            if [ "${INPUT_ACTION}" = 'inspect-unresolved' ]; then
+              echo '- Mode: **read-only**'
+              echo '- No broker orders or durable ledger records are modified.'
+            else
+              echo '- Mode: **guarded local-ledger repair**'
+              echo '- Repair is restricted to paper mode and UNKNOWN SELL orders.'
+              echo '- No broker order is submitted, cancelled, or replaced.'
+              echo '- Rebalance session state is not cleared and monitor is not run.'
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Notify Telegram (order ops result)
@@ -106,4 +200,4 @@ jobs:
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
             POMA[${{ inputs.deploy_environment }}] order-ops ${{ inputs.action }}
-            ${{ job.status }} — read-only inspection; no order or ledger state modified.
+            ${{ job.status }} — no broker orders submitted; rebalance session state unchanged.
