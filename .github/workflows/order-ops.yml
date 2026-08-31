@@ -34,6 +34,7 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       INPUT_ACTION: ${{ inputs.action }}
       REMOTE_INSPECTOR: /tmp/poma-inspect-unresolved-orders.py
+      REMOTE_HELPER: /tmp/poma-run-order-ops-inspect.sh
 
     steps:
       - name: Check out repository
@@ -68,39 +69,21 @@ jobs:
             --tunnel-through-iap \
             --ssh-key-expire-after=15m \
             --quiet
+          timeout --kill-after=30s 3m gcloud compute scp \
+            ops/scripts/run_order_ops_inspect_remote.sh \
+            "${GCP_VM_NAME}:${REMOTE_HELPER}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet
 
       - name: Inspect unresolved orders
         if: ${{ inputs.action == 'inspect-unresolved' }}
         run: |
           set -euo pipefail
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
-
-          timeout --kill-after=30s 10m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "
-            set -euo pipefail
-            if [ ! -f /opt/poma/docker-compose.vm.yml ]; then
-              echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2
-              exit 1
-            fi
-            test -r '${REMOTE_INSPECTOR}'
-
-            echo '===== unresolved order inspection ====='
-            echo 'This action is read-only: it does not reconcile, cancel, replace, or mutate order state.'
-            echo 'Waiting for the shared POMA command lock so this IBKR read cannot collide with monitor/reconcile.'
-
-            sudo -u poma bash -lc '
-              set -euo pipefail
-              cd /opt/poma
-              exec 9>/opt/poma/state/poma-command.lock
-              if ! flock -w 90 9; then
-                echo "Unable to acquire /opt/poma/state/poma-command.lock within 90 seconds" >&2
-                exit 75
-              fi
-              docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm \
-                --entrypoint python \
-                -v ${REMOTE_INSPECTOR}:${REMOTE_INSPECTOR}:ro \
-                poma ${REMOTE_INSPECTOR}
-            '
-          "
+          timeout --kill-after=30s 10m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" \
+            --command "sudo -u poma bash '${REMOTE_HELPER}' '${REMOTE_INSPECTOR}'"
 
       - name: Write workflow summary
         if: ${{ always() }}
