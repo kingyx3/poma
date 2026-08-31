@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Read-only diagnostics for unresolved durable POMA orders.
 
-Print unresolved ledger records, local lifecycle history, exact POMA orderRef matches, and raw
-IBKR completed/execution evidence correlated by broker permId. This script never submits,
-modifies, cancels, replaces, reconciles, or persists an order.
+Print unresolved ledger records, local lifecycle history, exact POMA orderRef matches, raw IBKR
+completed/execution evidence correlated by broker permId, and retained account-position evidence.
+This script never submits, modifies, cancels, replaces, reconciles, or persists an order.
 """
 
 from __future__ import annotations
 
 import json
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 from poma.broker import IbkrBroker, _connect_ib, build_broker
@@ -71,6 +72,14 @@ def _normalize_side(value: object) -> str:
     return {"BOT": "BUY", "SLD": "SELL"}.get(side, side)
 
 
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _local_events(store: OrderStore, wanted_ledger_keys: set[str]) -> dict[str, list[dict[str, object]]]:
     """Return append-only lifecycle events for the unresolved ledger keys without modifying them."""
     events: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -91,6 +100,53 @@ def _local_events(store: OrderStore, wanted_ledger_keys: set[str]) -> dict[str, 
             event["_event_line"] = line_number
             events[ledger_key].append(event)
     return events
+
+
+def _ticker_event_summary(store: OrderStore, ticker: str, session_date: str) -> list[dict[str, object]]:
+    """Summarize all locally recorded trades for this ticker from the unresolved session onward."""
+    if not store.events_path.exists():
+        return []
+    grouped: dict[str, dict[str, object]] = {}
+    for line_number, raw_line in enumerate(store.events_path.read_text().splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(payload.get("ticker", "")).upper() != ticker.upper():
+            continue
+        if str(payload.get("session_date", "")) < session_date:
+            continue
+        ledger_key = str(payload.get("ledger_key", ""))
+        if not ledger_key:
+            continue
+        summary = grouped.setdefault(
+            ledger_key,
+            {
+                "ledger_key": ledger_key,
+                "first_event_line": line_number,
+                "last_event_line": line_number,
+            },
+        )
+        summary.update(
+            {
+                "last_event_line": line_number,
+                "run_id": payload.get("run_id"),
+                "session_date": payload.get("session_date"),
+                "side": payload.get("side"),
+                "quantity": payload.get("quantity"),
+                "lifecycle_state": payload.get("lifecycle_state"),
+                "raw_status": payload.get("raw_status"),
+                "filled_qty": payload.get("filled_qty"),
+                "remaining_qty": payload.get("remaining_qty"),
+                "order_id": payload.get("order_id"),
+                "perm_id": payload.get("perm_id"),
+                "last_status_at": payload.get("last_status_at"),
+            }
+        )
+    return sorted(grouped.values(), key=lambda row: (str(row.get("session_date", "")), int(row["first_event_line"])))
 
 
 def _raw_completed_json(trade: object) -> dict[str, object]:
@@ -164,6 +220,126 @@ def _execution_summary(entry: OrderLedgerEntry, executions: list[dict[str, objec
     }
 
 
+def _position_from_snapshot(snapshot: object, ticker: str) -> dict[str, object] | None:
+    if not isinstance(snapshot, dict):
+        return None
+    positions = snapshot.get("positions")
+    if not isinstance(positions, list):
+        return None
+    for position in positions:
+        if not isinstance(position, dict):
+            continue
+        if str(position.get("ticker", "")).upper() == ticker.upper():
+            return {
+                "ticker": ticker.upper(),
+                "quantity": position.get("quantity"),
+                "market_value": position.get("market_value"),
+            }
+    return {"ticker": ticker.upper(), "quantity": 0.0, "market_value": 0.0}
+
+
+def _run_journal_evidence(store: OrderStore, entry: OrderLedgerEntry) -> dict[str, object]:
+    planned_path = store.orders_dir / f"{entry.run_id}.json"
+    reconciliation_path = store.orders_dir.parent / "reconciliations" / f"{entry.run_id}.json"
+    planned = _read_json(planned_path)
+    reconciliation = _read_json(reconciliation_path)
+    return {
+        "planned_journal_path": str(planned_path),
+        "planned_journal": planned,
+        "reconciliation_path": str(reconciliation_path),
+        "reconciliation": reconciliation,
+        "planned_ry_position": _position_from_snapshot(
+            planned.get("broker_account_snapshot") if planned else None,
+            entry.ticker,
+        ),
+        "post_submission_ry_position": _position_from_snapshot(
+            reconciliation.get("post_trade_account_snapshot") if reconciliation else None,
+            entry.ticker,
+        ),
+    }
+
+
+def _report_position_timeline(report_dir: Path, entry: OrderLedgerEntry) -> list[dict[str, object]]:
+    """Read retained broker snapshots for this ticker from the unresolved session onward."""
+    rows: list[dict[str, object]] = []
+    if not report_dir.exists():
+        return rows
+    for path in sorted(report_dir.glob("*.json")):
+        payload = _read_json(path)
+        if not payload:
+            continue
+        session = str(payload.get("session_date", ""))
+        if session < entry.session_date:
+            continue
+        snapshot = payload.get("broker_account_snapshot")
+        position = _position_from_snapshot(snapshot, entry.ticker)
+        ticker_trades = [
+            trade
+            for trade in payload.get("trades", [])
+            if isinstance(trade, dict) and str(trade.get("ticker", "")).upper() == entry.ticker.upper()
+        ]
+        ticker_results = [
+            result
+            for result in payload.get("execution_results", [])
+            if isinstance(result, dict) and str(result.get("ticker", "")).upper() == entry.ticker.upper()
+        ]
+        rows.append(
+            {
+                "path": str(path),
+                "run_id": payload.get("run_id"),
+                "session_date": session,
+                "snapshot_timestamp_utc": snapshot.get("timestamp_utc") if isinstance(snapshot, dict) else None,
+                "position": position,
+                "trades": ticker_trades,
+                "execution_results": ticker_results,
+            }
+        )
+    return rows
+
+
+def _current_position(broker: Any, ticker: str) -> dict[str, object] | None:
+    account_snapshot = getattr(broker, "account_snapshot", None)
+    if not callable(account_snapshot):
+        return None
+    snapshot = account_snapshot()
+    positions = getattr(snapshot, "positions", ()) or ()
+    for position in positions:
+        if str(getattr(position, "ticker", "")).upper() == ticker.upper():
+            return {
+                "ticker": ticker.upper(),
+                "quantity": getattr(position, "quantity", None),
+                "market_value": getattr(position, "market_value", None),
+                "snapshot_timestamp_utc": getattr(snapshot, "timestamp_utc", None),
+            }
+    return {
+        "ticker": ticker.upper(),
+        "quantity": 0.0,
+        "market_value": 0.0,
+        "snapshot_timestamp_utc": getattr(snapshot, "timestamp_utc", None),
+    }
+
+
+def _host_log_matches(entry: OrderLedgerEntry, host_logs_dir: Path = Path("/host-logs")) -> list[dict[str, object]]:
+    """Search retained text logs for exact broker/order identities; no broad ticker-only adoption."""
+    if not host_logs_dir.exists():
+        return []
+    needles = [entry.order_ref]
+    if entry.perm_id:
+        needles.append(str(entry.perm_id))
+    matches: list[dict[str, object]] = []
+    for path in sorted(host_logs_dir.glob("*.log")):
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            if any(needle and needle in line for needle in needles):
+                matches.append({"path": str(path), "line": line_number, "text": line})
+                if len(matches) >= 200:
+                    return matches
+    return matches
+
+
 def main() -> int:
     settings = get_settings()
     store = OrderStore(settings.state_dir)
@@ -213,6 +389,20 @@ def main() -> int:
 
         print("local_order_events=")
         print(json.dumps(events_by_key.get(entry.ledger_key, []), indent=2, sort_keys=True, default=str))
+        print("all_ticker_ledger_summary_since_session=")
+        print(json.dumps(_ticker_event_summary(store, entry.ticker, entry.session_date), indent=2, sort_keys=True, default=str))
+        print("original_run_journal_evidence=")
+        print(json.dumps(_run_journal_evidence(store, entry), indent=2, sort_keys=True, default=str))
+        print("retained_report_position_timeline=")
+        print(json.dumps(_report_position_timeline(settings.report_dir, entry), indent=2, sort_keys=True, default=str))
+        try:
+            current_position = _current_position(broker, entry.ticker)
+        except Exception as exc:  # noqa: BLE001 - diagnostic only
+            current_position = {"error": f"{type(exc).__name__}: {exc}"}
+        print("current_broker_position=")
+        print(json.dumps(current_position, indent=2, sort_keys=True, default=str))
+        print("host_log_exact_identity_matches=")
+        print(json.dumps(_host_log_matches(entry), indent=2, sort_keys=True, default=str))
 
         open_matches = [
             _snapshot_json(snapshot)
@@ -254,8 +444,8 @@ def main() -> int:
             )
         else:
             print(
-                "diagnosis=no exact orderRef or permId evidence in currently available IBKR open/completed/execution "
-                "history; keep UNKNOWN/fail-closed"
+                "diagnosis=current IBKR APIs have aged out the exact orderRef/permId evidence; use the retained local "
+                "journal/position timeline above for operator review and keep UNKNOWN unless that evidence is conclusive"
             )
 
     return 0
