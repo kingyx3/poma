@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ops.scripts.inspect_unresolved_orders import _execution_summary, _identity_match, _normalize_side
+from ops.scripts.inspect_unresolved_orders import (
+    _execution_summary,
+    _identity_match,
+    _normalize_side,
+    _position_from_snapshot,
+)
 from poma.models import OpenOrderSnapshot, OrderSide
 from poma.order_lifecycle import OrderLedgerEntry
 
@@ -88,3 +93,28 @@ def test_execution_summary_rejects_wrong_perm_id() -> None:
 
     assert summary["matching_execution_count"] == 0
     assert summary["full_quantity_observed"] is False
+
+
+def test_position_from_snapshot_returns_matching_position() -> None:
+    snapshot = {
+        "positions": [
+            {"ticker": "AAPL", "quantity": 2, "market_value": 400},
+            {"ticker": "RY", "quantity": 3, "market_value": 610},
+        ]
+    }
+
+    assert _position_from_snapshot(snapshot, "RY") == {
+        "ticker": "RY",
+        "quantity": 3,
+        "market_value": 610,
+    }
+
+
+def test_position_from_snapshot_treats_absent_ticker_as_zero() -> None:
+    snapshot = {"positions": [{"ticker": "AAPL", "quantity": 2, "market_value": 400}]}
+
+    assert _position_from_snapshot(snapshot, "RY") == {
+        "ticker": "RY",
+        "quantity": 0.0,
+        "market_value": 0.0,
+    }
