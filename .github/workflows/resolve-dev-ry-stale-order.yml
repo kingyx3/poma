@@ -1,32 +1,35 @@
-name: Resolve DEV RY Stale Order
+name: Resolve Stale Order
 
 on:
   workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: Environment whose single stale unresolved order should be repaired.
+        required: true
+        type: choice
+        options: [dev, stg, prd]
+        default: dev
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: poma-order-ops-dev
+  group: poma-order-ops-${{ inputs.deploy_environment }}
   cancel-in-progress: false
 
 jobs:
   resolve:
-    name: Resolve DEV RY stale order
+    name: Resolve stale order (${{ inputs.deploy_environment }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: dev
+    environment: ${{ inputs.deploy_environment }}
     env:
-      DEPLOY_ENVIRONMENT: dev
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
       REMOTE_RESOLVER: /tmp/resolve_unresolved_order.py
       REMOTE_RESOLVE_HELPER: /tmp/run_order_ops_resolve_remote.sh
       REMOTE_INSPECTOR: /tmp/inspect_unresolved_orders.py
       REMOTE_INSPECT_HELPER: /tmp/run_order_ops_inspect_remote.sh
-      ORDER_REF: poma:rebalance-20260828T153836Z:0:RY:SELL
-      PERM_ID: '1439585329'
-      EXPECTED_CURRENT_QUANTITY: '0'
-      CONFIRMATION: RESOLVE FILLED
 
     steps:
       - name: Check out repository
@@ -71,17 +74,13 @@ jobs:
               --quiet
           done
 
-      - name: Resolve stale RY order
+      - name: Resolve single stale order
         run: |
           set -euo pipefail
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
-          printf -v remote_command 'sudo -u poma bash %q %q %q %q %q %q %q %q' \
+          printf -v remote_command 'sudo -u poma bash %q %q %q' \
             "${REMOTE_RESOLVE_HELPER}" \
             "${REMOTE_RESOLVER}" \
-            "${ORDER_REF}" \
-            "${PERM_ID}" \
-            "${EXPECTED_CURRENT_QUANTITY}" \
-            "${CONFIRMATION}" \
             "${GITHUB_ACTOR}" \
             "${GITHUB_RUN_ID}"
           timeout --kill-after=30s 10m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" \
@@ -103,11 +102,11 @@ jobs:
         if: ${{ always() }}
         run: |
           {
-            echo '## Resolve DEV RY Stale Order'
+            echo '## Resolve Stale Order'
             echo
-            echo '- Target: `poma:rebalance-20260828T153836Z:0:RY:SELL`'
-            echo '- Expected broker permId: `1439585329`'
-            echo '- Expected current RY quantity: `0`'
+            echo "- Environment: \`${DEPLOY_ENVIRONMENT}\`"
+            echo '- Automatically selects only when exactly one unresolved durable order exists.'
+            echo '- Requires UNKNOWN / NotOpenUnverified state, a broker permId, broker acceptance history, no matching open broker order, no later POMA activity in the ticker, and an exact retained-to-current position change matching the order quantity.'
             echo '- No broker order is submitted, cancelled, or replaced.'
             echo '- Rebalance session state is not cleared and monitor is not run.'
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -119,5 +118,5 @@ jobs:
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
-            POMA[dev] resolve DEV RY stale order ${{ job.status }} —
+            POMA[${{ inputs.deploy_environment }}] resolve stale order ${{ job.status }} —
             guarded local-ledger repair only; no broker orders submitted.
