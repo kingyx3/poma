@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from ops.scripts.inspect_unresolved_orders import _identity_match
+from ops.scripts.inspect_unresolved_orders import _execution_summary, _identity_match, _normalize_side
 from poma.models import OpenOrderSnapshot, OrderSide
 from poma.order_lifecycle import OrderLedgerEntry
 
 
-def _entry(order_ref: str) -> OrderLedgerEntry:
+def _entry(order_ref: str, *, perm_id: int | None = 99) -> OrderLedgerEntry:
     return OrderLedgerEntry(
         ledger_key="ledger-1",
         order_ref=order_ref,
@@ -15,6 +15,7 @@ def _entry(order_ref: str) -> OrderLedgerEntry:
         side=OrderSide.SELL,
         quantity=1,
         limit_price=200,
+        perm_id=perm_id,
     )
 
 
@@ -40,3 +41,50 @@ def test_identity_match_does_not_adopt_same_broker_ids_with_different_order_ref(
     entry = _entry("poma:run-1:0:RY:SELL")
     snapshot = _snapshot("poma:other:0:RY:SELL", order_id=10, perm_id=99)
     assert not _identity_match(entry, snapshot)
+
+
+def test_normalize_side_maps_ibkr_execution_codes() -> None:
+    assert _normalize_side("BOT") == "BUY"
+    assert _normalize_side("SLD") == "SELL"
+    assert _normalize_side("SELL") == "SELL"
+
+
+def test_execution_summary_recognizes_full_sell_by_perm_id() -> None:
+    executions = [
+        {
+            "ticker": "RY",
+            "side": "SLD",
+            "shares": 0.4,
+            "perm_id": 99,
+        },
+        {
+            "ticker": "RY",
+            "side": "SLD",
+            "shares": 0.6,
+            "perm_id": 99,
+        },
+        {
+            "ticker": "RY",
+            "side": "BOT",
+            "shares": 1.0,
+            "perm_id": 99,
+        },
+    ]
+
+    summary = _execution_summary(_entry("poma:run-1:0:RY:SELL"), executions)
+
+    assert summary == {
+        "matching_execution_count": 2,
+        "matching_shares": 1.0,
+        "ledger_quantity": 1,
+        "full_quantity_observed": True,
+    }
+
+
+def test_execution_summary_rejects_wrong_perm_id() -> None:
+    executions = [{"ticker": "RY", "side": "SLD", "shares": 1.0, "perm_id": 100}]
+
+    summary = _execution_summary(_entry("poma:run-1:0:RY:SELL"), executions)
+
+    assert summary["matching_execution_count"] == 0
+    assert summary["full_quantity_observed"] is False
