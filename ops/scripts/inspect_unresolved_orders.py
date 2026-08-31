@@ -66,6 +66,11 @@ def _positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _normalize_side(value: object) -> str:
+    side = str(value or "").upper()
+    return {"BOT": "BUY", "SLD": "SELL"}.get(side, side)
+
+
 def _local_events(store: OrderStore, wanted_ledger_keys: set[str]) -> dict[str, list[dict[str, object]]]:
     """Return append-only lifecycle events for the unresolved ledger keys without modifying them."""
     events: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -98,7 +103,7 @@ def _raw_completed_json(trade: object) -> dict[str, object]:
         "perm_id": _positive_int(getattr(order, "permId", None)),
         "account": str(getattr(order, "account", "") or ""),
         "ticker": str(getattr(contract, "symbol", "") or "").upper(),
-        "side": str(getattr(order, "action", "") or "").upper(),
+        "side": _normalize_side(getattr(order, "action", "")),
         "quantity": float(getattr(order, "totalQuantity", 0.0) or 0.0),
         "status": str(getattr(status, "status", "") or ""),
         "filled": float(trade.filled() or 0.0) if hasattr(trade, "filled") else 0.0,
@@ -115,7 +120,7 @@ def _raw_execution_json(fill: object) -> dict[str, object]:
         "time": str(time_value or ""),
         "account": str(getattr(execution, "acctNumber", "") or ""),
         "ticker": str(getattr(contract, "symbol", "") or "").upper(),
-        "side": str(getattr(execution, "side", "") or "").upper(),
+        "side": _normalize_side(getattr(execution, "side", "")),
         "shares": float(getattr(execution, "shares", 0.0) or 0.0),
         "price": float(getattr(execution, "price", 0.0) or 0.0),
         "order_id": _positive_int(getattr(execution, "orderId", None)),
@@ -147,8 +152,8 @@ def _execution_summary(entry: OrderLedgerEntry, executions: list[dict[str, objec
         row
         for row in executions
         if str(row.get("ticker", "")).upper() == entry.ticker.upper()
-        and str(row.get("side", "")).upper() == entry.side.value
-        and (not getattr(entry, "perm_id", None) or _positive_int(row.get("perm_id")) == entry.perm_id)
+        and _normalize_side(row.get("side")) == entry.side.value
+        and (entry.perm_id is None or _positive_int(row.get("perm_id")) == entry.perm_id)
     ]
     shares = sum(float(row.get("shares", 0.0) or 0.0) for row in same_trade)
     return {
