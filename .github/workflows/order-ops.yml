@@ -65,7 +65,6 @@ jobs:
       - name: Resolve generated deployment config
         run: |
           set -euo pipefail
-          # shellcheck source=/dev/null
           source ops/scripts/resolve_gcp_deploy_env.sh
           echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, zone=${GCP_ZONE}, vm=${GCP_VM_NAME}"
 
@@ -123,10 +122,7 @@ jobs:
           set -euo pipefail
           test -n "${ORDER_REF}" || { echo 'order_ref is required' >&2; exit 64; }
           [[ "${PERM_ID}" =~ ^[0-9]+$ ]] || { echo 'perm_id must be a positive integer' >&2; exit 64; }
-          python - "${EXPECTED_CURRENT_QUANTITY}" <<'PY'
-import sys
-float(sys.argv[1])
-PY
+          python -c 'import sys; float(sys.argv[1])' "${EXPECTED_CURRENT_QUANTITY}"
           [ "${CONFIRMATION}" = 'RESOLVE FILLED' ] || {
             echo 'confirmation must exactly equal RESOLVE FILLED' >&2
             exit 64
