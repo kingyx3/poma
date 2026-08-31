@@ -78,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
-          printf -v remote_command 'sudo -u poma bash %q %q %q' \
+          printf -v remote_command 'sudo -u poma bash %q %q %q %q' \
             "${REMOTE_RESOLVE_HELPER}" \
             "${REMOTE_RESOLVER}" \
             "${GITHUB_ACTOR}" \
