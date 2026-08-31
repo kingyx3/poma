@@ -26,4 +26,5 @@ fi
 exec docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm \
   --entrypoint python \
   -v "${inspector_path}:${inspector_path}:ro" \
+  -v /opt/poma/logs:/host-logs:ro \
   poma "${inspector_path}"
