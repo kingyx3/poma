@@ -19,10 +19,10 @@ jobs:
     environment: dev
     env:
       DEPLOY_ENVIRONMENT: dev
-      REMOTE_RESOLVER: /tmp/poma-resolve-unresolved-order.py
-      REMOTE_RESOLVE_HELPER: /tmp/poma-run-order-ops-resolve.sh
-      REMOTE_INSPECTOR: /tmp/poma-inspect-unresolved-orders.py
-      REMOTE_INSPECT_HELPER: /tmp/poma-run-order-ops-inspect.sh
+      REMOTE_RESOLVER: /tmp/resolve_unresolved_order.py
+      REMOTE_RESOLVE_HELPER: /tmp/run_order_ops_resolve_remote.sh
+      REMOTE_INSPECTOR: /tmp/inspect_unresolved_orders.py
+      REMOTE_INSPECT_HELPER: /tmp/run_order_ops_inspect_remote.sh
       ORDER_REF: poma:rebalance-20260828T153836Z:0:RY:SELL
       PERM_ID: '1439585329'
       EXPECTED_CURRENT_QUANTITY: '0'
