@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from ops.scripts.inspect_unresolved_orders import _identity_match
 from poma.models import OpenOrderSnapshot, OrderSide
 from poma.order_lifecycle import OrderLedgerEntry
-from ops.scripts.inspect_unresolved_orders import _identity_match
 
 
 def _entry(order_ref: str) -> OrderLedgerEntry:
