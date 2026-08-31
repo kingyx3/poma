@@ -1,0 +1,214 @@
+name: Order Ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: GitHub Environment whose VM order ledger should be inspected.
+        required: true
+        type: choice
+        options: [dev, stg, prd]
+        default: dev
+      action:
+        description: Read-only order operation to run on the VM.
+        required: true
+        type: choice
+        options: [inspect-unresolved]
+        default: inspect-unresolved
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: poma-order-ops-${{ inputs.deploy_environment }}
+  cancel-in-progress: false
+
+jobs:
+  order-ops:
+    name: Order Ops ${{ inputs.action }} (${{ inputs.deploy_environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.deploy_environment }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      INPUT_ACTION: ${{ inputs.action }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Resolve generated deployment config
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source ops/scripts/resolve_gcp_deploy_env.sh
+          echo "Resolved ${DEPLOY_ENVIRONMENT}: project=${GCP_PROJECT_ID}, zone=${GCP_ZONE}, vm=${GCP_VM_NAME}"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          create_credentials_file: true
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Inspect unresolved orders
+        if: ${{ inputs.action == 'inspect-unresolved' }}
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 2m gcloud config set project "${GCP_PROJECT_ID}"
+          ssh_common=(--zone "${GCP_ZONE}" --tunnel-through-iap --ssh-key-expire-after=15m --quiet)
+
+          timeout --kill-after=30s 10m gcloud compute ssh "${GCP_VM_NAME}" "${ssh_common[@]}" --command "
+            set -euo pipefail
+            if [ ! -f /opt/poma/docker-compose.vm.yml ]; then
+              echo 'POMA app not deployed at /opt/poma (missing docker-compose.vm.yml)' >&2
+              exit 1
+            fi
+
+            echo '===== unresolved order inspection ====='
+            echo 'This action is read-only: it does not reconcile, cancel, replace, or mutate order state.'
+
+            sudo -u poma bash -lc 'cd /opt/poma && docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma python - <<'\''PY'\''
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+
+from poma.broker import build_broker
+from poma.config import get_settings
+from poma.order_store import OrderStore
+
+
+def obj_dict(value):
+    if value is None:
+        return None
+    if is_dataclass(value):
+        return asdict(value)
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if hasattr(value, "__dict__"):
+        return dict(value.__dict__)
+    return {"repr": repr(value)}
+
+
+def first_attr(value, *names):
+    for name in names:
+        if isinstance(value, dict) and name in value:
+            return value[name]
+        if hasattr(value, name):
+            return getattr(value, name)
+    return None
+
+
+settings = get_settings()
+store = OrderStore(settings.state_dir)
+
+# Use the store API when available; fall back to a conservative JSON scan so this
+# diagnostic keeps working across ledger-schema changes without modifying state.
+if hasattr(store, "open_orders"):
+    unresolved = list(store.open_orders())
+elif hasattr(store, "list_open"):
+    unresolved = list(store.list_open())
+else:
+    unresolved = []
+    orders_dir = Path(settings.state_dir) / "orders"
+    for path in sorted(orders_dir.glob("*.json")) if orders_dir.exists() else []:
+        try:
+            payload = json.loads(path.read_text())
+        except Exception as exc:
+            print(f"WARN unable to parse {path}: {exc}")
+            continue
+        status = str(payload.get("status", "")).lower()
+        if status not in {"filled", "cancelled", "canceled", "apicancelled", "inactive", "rejected"}:
+            payload["_source_path"] = str(path)
+            unresolved.append(payload)
+
+print(f"state_dir={settings.state_dir}")
+print(f"unresolved_count={len(unresolved)}")
+if not unresolved:
+    raise SystemExit(0)
+
+broker = build_broker(settings)
+
+try:
+    open_snapshot = list(broker.open_orders()) if hasattr(broker, "open_orders") else []
+except Exception as exc:
+    print(f"OPEN_ORDER_QUERY_ERROR={type(exc).__name__}: {exc}")
+    open_snapshot = []
+
+completed_snapshot = []
+for method_name in ("completed_orders", "completed_order_history", "completed_orders_snapshot"):
+    method = getattr(broker, method_name, None)
+    if method is None:
+        continue
+    try:
+        completed_snapshot = list(method())
+    except Exception as exc:
+        print(f"COMPLETED_ORDER_QUERY_ERROR={type(exc).__name__}: {exc}")
+    break
+
+print(f"broker_open_count={len(open_snapshot)}")
+print(f"broker_completed_count={len(completed_snapshot)}")
+
+for index, row in enumerate(unresolved, start=1):
+    data = obj_dict(row) or {}
+    print()
+    print(f"===== unresolved #{index} =====")
+    print(json.dumps(data, indent=2, sort_keys=True, default=str))
+
+    order_id = first_attr(row, "order_id", "broker_order_id", "orderId")
+    perm_id = first_attr(row, "perm_id", "permId")
+    order_ref = first_attr(row, "order_ref", "orderRef")
+    ticker = first_attr(row, "ticker", "symbol")
+    side = first_attr(row, "side", "action")
+
+    def matches(candidate):
+        c_order_id = first_attr(candidate, "order_id", "broker_order_id", "orderId")
+        c_perm_id = first_attr(candidate, "perm_id", "permId")
+        c_order_ref = first_attr(candidate, "order_ref", "orderRef")
+        c_ticker = first_attr(candidate, "ticker", "symbol")
+        c_side = first_attr(candidate, "side", "action")
+        if perm_id not in (None, 0, "") and c_perm_id == perm_id:
+            return True
+        if order_id not in (None, 0, "") and c_order_id == order_id:
+            return True
+        if order_ref and c_order_ref == order_ref:
+            return True
+        return bool(ticker and c_ticker == ticker and side and str(c_side).upper() == str(side).upper())
+
+    open_matches = [obj_dict(item) for item in open_snapshot if matches(item)]
+    completed_matches = [obj_dict(item) for item in completed_snapshot if matches(item)]
+
+    print("broker_open_matches=")
+    print(json.dumps(open_matches, indent=2, sort_keys=True, default=str))
+    print("broker_completed_matches=")
+    print(json.dumps(completed_matches, indent=2, sort_keys=True, default=str))
+PY'
+          "
+
+      - name: Write workflow summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo '## POMA Order Ops'
+            echo
+            echo "- Environment: \`${DEPLOY_ENVIRONMENT}\`"
+            echo "- Action: \`${INPUT_ACTION}\`"
+            echo '- Mode: **read-only**'
+            echo '- No broker orders or durable ledger records are modified by this workflow.'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Notify Telegram (order ops result)
+        if: ${{ always() }}
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: >-
+            POMA[${{ inputs.deploy_environment }}] order-ops ${{ inputs.action }}
+            ${{ job.status }} — read-only inspection; no order or ledger state modified.
