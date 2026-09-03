@@ -11,9 +11,44 @@ permissions:
 jobs:
   dev-app-logs:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    uses: ./.github/workflows/ib-gateway-ops.yml
-    with:
-      deploy_environment: dev
-      action: app-logs
-      log_lines: 5000
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          create_credentials_file: true
+          workload_identity_provider: projects/998548109048/locations/global/workloadIdentityPools/poma-dev-github/providers/github
+          service_account: poma-dev-github-deployer@poma-dvp.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Show scheduler and reconcile log
+        run: |
+          set -euo pipefail
+          gcloud config set project poma-dvp
+          gcloud compute ssh poma-dev-free-tier \
+            --zone us-west1-b \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet \
+            --verbosity=error \
+            --no-user-output-enabled \
+            --command "echo '===== ubuntu crontab ====='; sudo crontab -l -u ubuntu 2>&1 || true; echo '===== poma crontab ====='; sudo crontab -l -u poma 2>&1 || true; echo '===== reconcile log ====='; sudo tail -n 5000 /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null || echo '(missing)'"
+
+      - name: Show rebalance state
+        run: |
+          set -euo pipefail
+          gcloud config set project poma-dvp
+          gcloud compute ssh poma-dev-free-tier \
+            --zone us-west1-b \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet \
+            --verbosity=error \
+            --no-user-output-enabled \
+            --command "sudo cat /opt/poma/state/rebalance_state.json 2>/dev/null || echo '(missing)'"
