@@ -27,7 +27,7 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Show scheduler and reconcile log
+      - name: Target Sep 2 PANW reconcile evidence
         run: |
           set -euo pipefail
           gcloud config set project poma-dvp
@@ -38,17 +38,4 @@ jobs:
             --quiet \
             --verbosity=error \
             --no-user-output-enabled \
-            --command "echo '===== ubuntu crontab ====='; sudo crontab -l -u ubuntu 2>&1 || true; echo '===== poma crontab ====='; sudo crontab -l -u poma 2>&1 || true; echo '===== reconcile log ====='; sudo tail -n 5000 /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null || echo '(missing)'"
-
-      - name: Show rebalance state
-        run: |
-          set -euo pipefail
-          gcloud config set project poma-dvp
-          gcloud compute ssh poma-dev-free-tier \
-            --zone us-west1-b \
-            --tunnel-through-iap \
-            --ssh-key-expire-after=15m \
-            --quiet \
-            --verbosity=error \
-            --no-user-output-enabled \
-            --command "sudo cat /opt/poma/state/rebalance_state.json 2>/dev/null || echo '(missing)'"
+            --command "echo '===== cron 2026-09-02 13:40-13:50 UTC ====='; sudo journalctl -u cron --since '2026-09-02 13:40:00 UTC' --until '2026-09-02 13:50:00 UTC' --no-pager 2>/dev/null | grep -E 'poma|reconcile-orders|monitor' || true; echo '===== reconcile PANW/order 227 ====='; sudo grep -n -E 'PANW|227|replace|PendingCancel|Cancelled|cancelled after 300s' /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null | tail -n 300 || true; echo '===== reconcile Sep 2 lines ====='; sudo grep -n '2026-09-02' /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null | tail -n 300 || true; echo '===== monitor PANW/order 227 ====='; sudo grep -n -E 'PANW|227|PendingCancel|Cancelled|cancelled after 300s' /opt/poma/logs/poma-cron.log 2>/dev/null | tail -n 120 || true; echo '===== log metadata ====='; sudo ls -lh --full-time /opt/poma/logs/poma-reconcile-cron.log /opt/poma/logs/poma-cron.log 2>/dev/null || true; sudo wc -l /opt/poma/logs/poma-reconcile-cron.log /opt/poma/logs/poma-cron.log 2>/dev/null || true"
