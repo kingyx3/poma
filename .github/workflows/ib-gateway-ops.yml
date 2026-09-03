@@ -16,7 +16,7 @@ on:
         options: [status, restart, logs, app-logs, fix-app-docker-perms, verify-socket, verify-market-data, configure-paper, configure-live, clear-rebalance-state]
         default: status
       log_lines:
-        description: Number of ibgateway journal / poma-cron.log lines for logs/app-logs/status output.
+        description: Number of lines per log for logs/app-logs/status output.
         required: true
         type: number
         default: 200
@@ -148,8 +148,66 @@ jobs:
             --no-user-output-enabled \
             --command "sudo journalctl -u ibgateway -n ${LOG_LINES} --reverse --no-pager"
 
+      - name: Show app scheduler status
+        if: ${{ inputs.action == 'app-logs' }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "${GCP_PROJECT_ID}"
+          gcloud compute ssh "${GCP_VM_NAME}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet \
+            --verbosity=error \
+            --no-user-output-enabled \
+            --command "echo '===== cron service status ====='; sudo systemctl status cron --no-pager --lines=10 || true; echo '===== ubuntu crontab ====='; sudo crontab -l -u ubuntu 2>&1 || echo '(no crontab installed for ubuntu)'; echo '===== poma crontab ====='; sudo crontab -l -u poma 2>&1 || echo '(no crontab installed for poma)'; echo '===== poma docker group membership ====='; getent group docker || true; echo '===== /opt/poma/logs directory ====='; sudo ls -la /opt/poma/logs 2>/dev/null || true"
+
+      - name: Show reconcile cron log
+        if: ${{ inputs.action == 'app-logs' }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "${GCP_PROJECT_ID}"
+          echo "+ [ssh ${GCP_VM_NAME}] tail ${LOG_LINES} lines from poma-reconcile-cron.log"
+          gcloud compute ssh "${GCP_VM_NAME}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet \
+            --verbosity=error \
+            --no-user-output-enabled \
+            --command "sudo tail -n ${LOG_LINES} /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null || echo '(missing)'"
+
+      - name: Show monitor cron log
+        if: ${{ inputs.action == 'app-logs' }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "${GCP_PROJECT_ID}"
+          echo "+ [ssh ${GCP_VM_NAME}] tail ${LOG_LINES} lines from poma-cron.log"
+          gcloud compute ssh "${GCP_VM_NAME}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet \
+            --verbosity=error \
+            --no-user-output-enabled \
+            --command "sudo tail -n ${LOG_LINES} /opt/poma/logs/poma-cron.log 2>/dev/null || echo '(missing)'"
+
+      - name: Show rebalance state
+        if: ${{ inputs.action == 'app-logs' }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "${GCP_PROJECT_ID}"
+          gcloud compute ssh "${GCP_VM_NAME}" \
+            --zone "${GCP_ZONE}" \
+            --tunnel-through-iap \
+            --ssh-key-expire-after=15m \
+            --quiet \
+            --verbosity=error \
+            --no-user-output-enabled \
+            --command "sudo cat /opt/poma/state/rebalance_state.json 2>/dev/null || echo '(missing)'"
+
       - name: Run Gateway operation over IAP SSH
-        if: ${{ inputs.action != 'logs' }}
+        if: ${{ inputs.action != 'logs' && inputs.action != 'app-logs' }}
         run: python3 ops/scripts/run_gateway_ops_workflow.py
 
       - name: Notify Telegram (gateway ops result)
