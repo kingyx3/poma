@@ -25,19 +25,34 @@ def test_deployed_cron_schedules_order_reconciliation() -> None:
 
 
 def test_reconcile_cron_never_fires_in_the_same_minute_as_monitor() -> None:
-    """The rebalance kickoff minute must not start a second container on the small VM.
+    """Reconcile must get timeout-policy opportunities without colliding with monitor.
 
-    ``poma monitor`` fires on minutes divisible by 5 and the daily rebalance kickoff always
-    lands on an even minute (market open +10). A reconcile container starting in that same
-    second starves the Gateway JVM long enough that every IBKR API request times out and the
-    rebalance blocks for the day, so the reconcile entry must stay on odd minutes.
+    ``poma monitor`` fires every 5 minutes and all scheduled POMA commands share a non-blocking
+    lock. Reconcile therefore runs at +2 and +4 minutes within each monitor interval: this keeps
+    the jobs disjoint while ensuring a 120-second replacement threshold is observed before a
+    300-second cancellation threshold under the normal schedule.
     """
     cron = POMA_CRON.read_text(encoding="utf-8")
     reconcile_line = next(
         line for line in cron.splitlines() if "poma reconcile-orders" in line and not line.startswith("#")
     )
+    minute_field = reconcile_line.split(maxsplit=1)[0]
 
-    assert reconcile_line.startswith("1-59/2 "), reconcile_line
+    minutes: set[int] = set()
+    for stepped_range in minute_field.split(","):
+        minute_range, step_text = stepped_range.split("/", 1)
+        start_text, end_text = minute_range.split("-", 1)
+        minutes.update(range(int(start_text), int(end_text) + 1, int(step_text)))
+
+    monitor_minutes = set(range(0, 60, 5))
+    expected_reconcile_minutes = {
+        (monitor_minute + offset) % 60
+        for monitor_minute in monitor_minutes
+        for offset in (2, 4)
+    }
+
+    assert not minutes & monitor_minutes
+    assert minutes == expected_reconcile_minutes
 
 
 def test_deploy_does_not_provision_gateway_runtime() -> None:

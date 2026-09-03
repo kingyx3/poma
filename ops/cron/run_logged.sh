@@ -81,7 +81,8 @@ mkdir -p "$(dirname "${log_path}")" "$(dirname "${lock_path}")"
 # Serialize every scheduled command that can start a POMA container. On the single-core VM,
 # overlapping monitor/reconcile containers can starve IB Gateway badly enough for all API calls
 # to time out. Do not queue cron invocations behind a long-running job: a skipped reconcile will
-# run again on the next odd minute, and a skipped monitor will run again on the next 5-minute tick.
+# run again on the next reconcile slot, and a skipped monitor will run again on the next 5-minute
+# tick.
 exec 9>"${lock_path}"
 if ! flock -n 9; then
   printf '[%s] ===== command skipped: lock busy (%s): %s =====\n' \
