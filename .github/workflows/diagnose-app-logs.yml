@@ -27,7 +27,7 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Target Sep 2 PANW reconcile evidence
+      - name: Show exact Sep 2 order window
         run: |
           set -euo pipefail
           gcloud config set project poma-dvp
@@ -38,4 +38,4 @@ jobs:
             --quiet \
             --verbosity=error \
             --no-user-output-enabled \
-            --command "echo '===== cron 2026-09-02 13:40-13:50 UTC ====='; sudo journalctl -u cron --since '2026-09-02 13:40:00 UTC' --until '2026-09-02 13:50:00 UTC' --no-pager 2>/dev/null | grep -E 'poma|reconcile-orders|monitor' || true; echo '===== reconcile PANW/order 227 ====='; sudo grep -n -E 'PANW|227|replace|PendingCancel|Cancelled|cancelled after 300s' /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null | tail -n 300 || true; echo '===== reconcile Sep 2 lines ====='; sudo grep -n '2026-09-02' /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null | tail -n 300 || true; echo '===== monitor PANW/order 227 ====='; sudo grep -n -E 'PANW|227|PendingCancel|Cancelled|cancelled after 300s' /opt/poma/logs/poma-cron.log 2>/dev/null | tail -n 120 || true; echo '===== log metadata ====='; sudo ls -lh --full-time /opt/poma/logs/poma-reconcile-cron.log /opt/poma/logs/poma-cron.log 2>/dev/null || true; sudo wc -l /opt/poma/logs/poma-reconcile-cron.log /opt/poma/logs/poma-cron.log 2>/dev/null || true"
+            --command "echo '===== reconcile exact lines 233850-233910 ====='; sudo sed -n '233850,233910p' /opt/poma/logs/poma-reconcile-cron.log; echo '===== reconcile 13:41-13:49 markers ====='; sudo grep -n -E '\[2026-09-02T13:4(1|3|5|7|9):' /opt/poma/logs/poma-reconcile-cron.log | head -n 120 || true; echo '===== monitor 13:40-13:46 markers ====='; sudo grep -n -E '\[2026-09-02T13:4(0|5):' /opt/poma/logs/poma-cron.log | head -n 160 || true; echo '===== crontabs ====='; sudo crontab -l -u ubuntu 2>&1 || true; sudo crontab -l -u poma 2>&1 || true"
