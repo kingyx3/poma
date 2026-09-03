@@ -165,7 +165,8 @@ def main() -> int:
     settings = get_settings()
     if settings.trading_mode != TradingMode.PAPER:
         raise SystemExit(
-            f"automatic operator resolution is intentionally limited to paper mode; current mode={settings.trading_mode}"
+            "automatic operator resolution is intentionally limited to paper mode; "
+            f"current mode={settings.trading_mode}"
         )
 
     store = OrderStore(settings.state_dir)

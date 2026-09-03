@@ -390,7 +390,14 @@ def main() -> int:
         print("local_order_events=")
         print(json.dumps(events_by_key.get(entry.ledger_key, []), indent=2, sort_keys=True, default=str))
         print("all_ticker_ledger_summary_since_session=")
-        print(json.dumps(_ticker_event_summary(store, entry.ticker, entry.session_date), indent=2, sort_keys=True, default=str))
+        print(
+            json.dumps(
+                _ticker_event_summary(store, entry.ticker, entry.session_date),
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        )
         print("original_run_journal_evidence=")
         print(json.dumps(_run_journal_evidence(store, entry), indent=2, sort_keys=True, default=str))
         print("retained_report_position_timeline=")
@@ -445,7 +452,8 @@ def main() -> int:
         else:
             print(
                 "diagnosis=current IBKR APIs have aged out the exact orderRef/permId evidence; use the retained local "
-                "journal/position timeline above for operator review and keep UNKNOWN unless that evidence is conclusive"
+                "journal/position timeline above for operator review and keep UNKNOWN unless that evidence is "
+                "conclusive"
             )
 
     return 0

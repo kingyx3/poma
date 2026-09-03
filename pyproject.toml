@@ -47,4 +47,5 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 addopts = "-q --cov=poma --cov-report=term-missing"
+pythonpath = ["."]
 testpaths = ["tests"]
