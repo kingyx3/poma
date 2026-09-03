@@ -1,0 +1,19 @@
+name: Temporary DEV app-log diagnostics
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  dev-app-logs:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/ib-gateway-ops.yml
+    with:
+      deploy_environment: dev
+      action: app-logs
+      log_lines: 5000
+    secrets: inherit
