@@ -175,7 +175,13 @@ class RebalanceEngine:
                 settings.max_daily_trades,
             )
         )
-        warnings.extend(enforce_buying_power(trades, account_snapshot.cash_usd))
+        # Durable paper/live execution stages sells first, then refreshes broker cash immediately
+        # before buys. Applying the planning-time net-cash guard as well can terminally block a
+        # same-run residual buy while confirmed sell proceeds are still propagating through the
+        # account snapshot. Let ExecutionManager emit BuyingPowerBlocked instead; monitor can
+        # safely retry that pre-acceptance result under the same idempotent orderRef.
+        if self.order_store is None or settings.trading_mode == TradingMode.DRY_RUN:
+            warnings.extend(enforce_buying_power(trades, account_snapshot.cash_usd))
 
         return RebalancePlan(
             run_id=run_id,

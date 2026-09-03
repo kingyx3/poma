@@ -119,6 +119,36 @@ def test_build_plan_does_not_block_when_no_order_store_is_configured() -> None:
     assert not engine.is_blocked(plan)
 
 
+def test_build_plan_defers_buying_power_guard_to_durable_execution(tmp_path: Path, monkeypatch) -> None:
+    engine = _engine(tmp_path, MAX_TURNOVER_PCT=1.0, MAX_ORDER_NOTIONAL_USD=100_000.0)
+    monkeypatch.setattr(
+        "poma.engine.enforce_buying_power",
+        lambda _trades, _cash: ["sentinel buying power; block execution"],
+    )
+
+    plan = engine.build_plan("2026-07-01", "run-1")
+
+    assert not any("sentinel buying power" in warning for warning in plan.warnings)
+    assert not engine.is_blocked(plan)
+
+
+def test_build_plan_keeps_buying_power_guard_without_order_store(monkeypatch) -> None:
+    engine = RebalanceEngine(
+        make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567", MAX_ORDER_NOTIONAL_USD=100_000.0),
+        data_client=FixtureMarketDataClient(),
+        broker=FakeBroker(),
+    )
+    monkeypatch.setattr(
+        "poma.engine.enforce_buying_power",
+        lambda _trades, _cash: ["sentinel buying power; block execution"],
+    )
+
+    plan = engine.build_plan("2026-07-01", "run-1")
+
+    assert any("sentinel buying power" in warning for warning in plan.warnings)
+    assert engine.is_blocked(plan)
+
+
 def test_execute_with_order_store_submits_sells_before_buys_and_records_ledger(tmp_path: Path) -> None:
     broker = FakeBroker()
     engine = _engine(tmp_path, broker=broker, MAX_TURNOVER_PCT=1.0, MAX_ORDER_NOTIONAL_USD=100_000.0)
