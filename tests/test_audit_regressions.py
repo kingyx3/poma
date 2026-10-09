@@ -145,7 +145,10 @@ def test_replacement_crash_keeps_new_identity_unresolved(tmp_path, monkeypatch):
         manager.reconcile()
     pending = OrderStore(tmp_path).load_open_orders()[0]
     assert pending.lifecycle_state == OrderLifecycleState.REPLACE_PENDING
-    assert pending.order_ref == entry.order_ref + ':r1'
+    # The original stays the tracked identity; the replacement ref is reserved alongside it so
+    # reconciliation can find whichever order actually exists after the crash.
+    assert pending.order_ref == entry.order_ref
+    assert pending.replacement_order_ref == entry.order_ref + ':r1'
     assert not pending.is_terminal
 
 
