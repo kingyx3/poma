@@ -146,3 +146,47 @@ Live deployments leave the app crontab paused. After a successful `configure-liv
 Gateway Ops installs it only if the rendered app settings are `TRADING_MODE=live`
 and `ALLOW_LIVE_TRADING=true`. A failed configure therefore leaves new scheduled
 trades disabled; manual live deployments must also finish this step.
+
+## Automatic login recovery
+
+Gateway Ops now installs and enables `poma-gateway-watchdog.timer`. It checks the
+configured account and a fresh API response using the deployed app image, about every
+two minutes after the preceding check finishes. This is an authentication check, not a
+market-data entitlement or order-preview check; it places no orders. Configure actions
+verify the same watchdog probe before returning success.
+
+The watchdog gives a newly started Gateway six minutes to finish login/mobile approval,
+and requires three consecutive failed authentication checks before restarting it. It
+holds both the host cron lock and the app runtime lock throughout the check/restart, so
+it skips while a supported trading or maintenance command is running. Failed restarts
+count toward the persisted limit: at least 15 minutes between attempts and at most two
+per hour. A healthy result clears the failure streak, but does not clear the restart
+budget for a flapping session.
+
+IBC logs in with its existing protected local configuration. It retries expired mobile
+approval attempts (`ReloginAfterSecondFactorAuthenticationTimeout=yes`); **you must
+approve fresh IBKR Mobile prompts**. Telegram notifications report a restart, continued
+unavailability (rate limited), configuration mismatch, failed restart, and recovery.
+Wrong accounts, wrong state-volume mappings and app/Docker failures do not trigger a
+Gateway restart. A deliberately stopped Gateway stays stopped. Gateway Ops pauses the
+watchdog during explicit configure/restart work and resumes the timer afterwards,
+including failures. Disabling `poma-gateway-watchdog.timer` pauses automated recovery.
+
+The engine sets `AutoRestartTime=11:45 PM` before every launch, including an existing
+configuration, using IBC's required `hh:mm AM/PM` format in the Gateway's configured
+timezone. Gateway/IBC logs are retained across restarts. Weekly session expiry, changed
+credentials and broker restrictions can still require human intervention; this loop
+cannot complete mobile approval on your behalf.
+
+Inspect or verify it without restarting Gateway:
+
+```bash
+sudo systemctl status poma-gateway-watchdog.timer --no-pager
+sudo journalctl -u poma-gateway-watchdog.service -n 30 --no-pager
+sudo poma-gateway-auth-watchdog --check-only
+```
+
+The timer is installed by Gateway Ops runtime repair, not by merging main alone.
+Existing manual deployments need an updated app image followed by `configure-paper`,
+`configure-live` or `restart` to install the new helpers. Production still requires its
+real environment configuration and a successful live Gateway/account verification.

@@ -11,6 +11,9 @@ from pathlib import Path
 
 HELPER_TARGET = Path("/usr/local/bin/poma-configure-ibc")
 RUNNER_TARGET = Path("/usr/local/bin/poma-run-ib-gateway")
+WATCHDOG_TARGET = Path("/usr/local/bin/poma-gateway-auth-watchdog")
+WATCHDOG_SERVICE_TARGET = Path("/etc/systemd/system/poma-gateway-watchdog.service")
+WATCHDOG_TIMER_TARGET = Path("/etc/systemd/system/poma-gateway-watchdog.timer")
 SERVICE_TARGET = Path("/etc/systemd/system/ibgateway.service")
 APP_USER = "poma"
 IB_GATEWAY_DIR = Path("/opt/ibgateway")
@@ -91,7 +94,7 @@ set_ini TradingMode "${trading_mode}"
 set_ini ReloginAfterSecondFactorAuthenticationTimeout yes
 set_ini AcceptNonBrokerageAccountWarning yes
 set_ini ExistingSessionDetectedAction primaryoverride
-set_ini AutoRestartTime 23:45
+set_ini AutoRestartTime "11:45 PM"
 # Paper/live configure must prove the API can actually submit paper/live orders. Do not preserve
 # sample or stale read-only login settings, because those make ibkr-check fail with read-only API
 # errors and would also prevent later paper order submission.
@@ -203,6 +206,31 @@ MemoryMax=850M
 
 [Install]
 WantedBy=multi-user.target
+"""
+
+
+WATCHDOG_SERVICE_TEXT = """[Unit]
+Description=POMA authenticated Gateway recovery watchdog
+After=docker.service ibgateway.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/poma-gateway-auth-watchdog
+TimeoutStartSec=360
+KillMode=control-group
+"""
+
+WATCHDOG_TIMER_TEXT = """[Unit]
+Description=Check POMA Gateway authentication periodically
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=2min
+AccuracySec=15s
+Unit=poma-gateway-watchdog.service
+
+[Install]
+WantedBy=timers.target
 """
 
 
@@ -388,8 +416,11 @@ def main() -> int:
     install_text(HELPER_TARGET, CONFIG_HELPER_TEXT, stat.S_IRWXU | stat.S_IXGRP | stat.S_IRGRP)
     install_text(RUNNER_TARGET, RUNNER_TEXT, 0o755)
     install_text(SERVICE_TARGET, SERVICE_TEXT, 0o644)
+    install_text(WATCHDOG_TARGET, Path(__file__).with_name("gateway_auth_watchdog.py").read_text(), 0o755)
+    install_text(WATCHDOG_SERVICE_TARGET, WATCHDOG_SERVICE_TEXT, 0o644)
+    install_text(WATCHDOG_TIMER_TARGET, WATCHDOG_TIMER_TEXT, 0o644)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "ibgateway"], check=True)
+    subprocess.run(["systemctl", "enable", "ibgateway", "poma-gateway-watchdog.timer"], check=True)
     print(f"Installed {HELPER_TARGET}, {RUNNER_TARGET}, and {SERVICE_TARGET}")
     return 0
 

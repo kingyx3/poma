@@ -17,6 +17,7 @@ HELPER_SCRIPTS = [
     "ops/scripts/ensure_ibgateway_service.sh",
     "ops/scripts/diagnose_ib_gateway_runtime.py",
     "ops/scripts/wait_ib_gateway_2fa.py",
+    "ops/scripts/gateway_auth_watchdog.py",
 ]
 HELPER_ARCHIVE_NAME = "poma-gateway-helpers.tar.gz"
 NON_RETRIABLE_IBKR_MARKET_DATA_ERRORS = (
@@ -225,6 +226,8 @@ def main() -> int:
             "test -x /usr/local/bin/poma-run-ib-gateway && "
             "test -x /usr/local/bin/poma-diagnose-ibgateway && "
             "test -x /usr/local/bin/poma-wait-ibgateway-2fa && "
+            "test -x /usr/local/bin/poma-gateway-auth-watchdog && "
+            "systemctl cat poma-gateway-watchdog.timer >/dev/null && "
             "systemctl cat ibgateway >/dev/null"
         )
         if timed("IAP SSH/runtime sentinel check", lambda: remote(check, timeout=45)) == 0:
@@ -459,140 +462,169 @@ def main() -> int:
     if timed("GCP project configuration", lambda: gcloud("config", "set", "project", project_id, timeout=60)) != 0:
         return 1
 
-    if action == "status":
-        return remote(f"sudo systemctl status ibgateway --no-pager --lines={log_lines} || true", timeout=180)
-    if action == "restart":
-        if repair_runtime() != 0:
-            return 1
-        return remote("sudo systemctl restart ibgateway", timeout=180)
-    if action == "logs":
-        return remote(f"sudo journalctl -u ibgateway -n {log_lines} --no-pager", timeout=180)
-    if action == "app-logs":
-        return remote(
-            "echo '===== cron service status ====='; "
-            "sudo systemctl status cron --no-pager --lines=10 || true; "
-            "echo '===== poma crontab ====='; "
-            "sudo crontab -l -u poma 2>&1 || echo '(no crontab installed for poma)'; "
-            "echo '===== poma docker group membership ====='; "
-            "getent group docker || echo '(no docker group)'; "
-            "echo '===== /opt/poma/logs directory ====='; "
-            "sudo ls -la /opt/poma/logs 2>&1 || echo '(missing)'; "
-            "echo '===== poma-cron.log (tail) ====='; "
-            f"sudo tail -n {log_lines} /opt/poma/logs/poma-cron.log 2>/dev/null || echo '(missing)'; "
-            "echo '===== poma-reconcile-cron.log (tail) ====='; "
-            f"sudo tail -n {log_lines} /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null || echo '(missing)'; "
-            "echo '===== rebalance_state.json ====='; "
-            "sudo cat /opt/poma/state/rebalance_state.json 2>/dev/null || echo '(missing)'",
-            timeout=180,
-        )
-    if action == "fix-app-docker-perms":
-        return remote(
-            # poma is intentionally created non-unique on uid/gid 1000, shared with the cloud
-            # image's default "ubuntu" account (see infra/gcp-free-tier/startup.sh). crontab -u
-            # poma and the cron daemon itself both resolve that shared uid back to "ubuntu" for
-            # ownership/session purposes, so the crontab actually runs as ubuntu, not poma -- add
-            # both names to the docker group so the fix holds regardless of which one a given tool
-            # resolves the shared uid to.
-            "sudo usermod -aG docker poma && "
-            "sudo usermod -aG docker ubuntu && "
-            "sudo systemctl restart cron && "
-            "getent group docker && "
-            "echo 'poma and ubuntu added to the docker group and cron restarted; "
-            "the next monitor/reconcile-orders tick should reach the Docker API.'",
-            timeout=180,
-        )
-    if action == "clear-rebalance-state":
-        return remote(
-            "sudo install -d -o poma -g poma /opt/poma/state && "
-            "sudo rm -f /opt/poma/state/rebalance_state.json && "
-            "echo 'Cleared /opt/poma/state/rebalance_state.json; next eligible monitor run may rebalance again.'",
-            timeout=180,
-        )
-    if action == "verify-socket":
-        if repair_runtime() != 0:
-            return 1
-        remote("sudo systemctl restart ibgateway || true", timeout=180)
-        return api_ready("live" if deploy_environment == "prd" else "paper", required=True)
-    if action == "verify-market-data":
-        # Read-only market data entitlement verification: no repair, no restart. Runs poma
-        # ibkr-check against the *currently running* Gateway session, so a green run proves the
-        # account is genuinely serving entitled quotes (live during market hours, frozen after
-        # hours; REQUIRE_LIVE_EXECUTION_QUOTES in the deployed .env decides how strict that is).
-        return timed(
-            "Market data entitlement check (poma ibkr-check)",
-            lambda: remote(ibkr_check_command("live" if deploy_environment == "prd" else "paper", required=True), timeout=ibkr_check_timeout_seconds),
-        )
-
-    if action not in {"configure-paper", "configure-live"}:
-        print(f"unknown action: {action}", file=sys.stderr)
-        return 2
-
-    login_id = env("BROKER_LOGIN_ID")
-    login_secret = env("BROKER_LOGIN_VALUE")
-    if repair_runtime() != 0:
-        return 1
-    mode = action.removeprefix("configure-")
-    if any(char in value for value in (login_id, login_secret) for char in "\r\n\x00"):
-        raise SystemExit("Broker credentials must be single-line values")
-    configure_input = f"{login_id}\n{login_secret}\n{mode}\n"
-    if timed(
-        "Configure IBC auth values",
-        lambda: gcloud(
-            "compute",
-            "ssh",
-            vm_name,
-            *ssh_common,
-            "--command",
-            "sudo POMA_CONFIGURE_IBC_RESTART=0 poma-configure-ibc",
-            timeout=180,
-            input_text=configure_input,
-        ),
+    mutates_gateway = action in {"restart", "verify-socket", "configure-paper", "configure-live"}
+    if mutates_gateway and remote(
+        "if systemctl cat poma-gateway-watchdog.timer >/dev/null 2>&1; then "
+        "sudo systemctl stop poma-gateway-watchdog.timer poma-gateway-watchdog.service; fi",
+        timeout=120,
     ) != 0:
         return 1
-    if timed("Validate IBC configuration", lambda: remote(f"sudo poma-diagnose-ibgateway validate --mode {mode}", timeout=120)) != 0:
-        return 1
-    if timed("Checkpoint Gateway auth logs", lambda: remote("sudo poma-wait-ibgateway-2fa --checkpoint-logs-only", timeout=120)) != 0:
-        return 1
-    print("Force fresh ibgateway login after IBC configuration")
-    # Fresh 2FA challenge wait is enforced for live configure only; paper skips it.
-    if timed("Restart ibgateway after IBC configuration", lambda: remote("sudo systemctl restart ibgateway", timeout=240)) != 0:
-        diagnose(
-            "gateway-restart",
-            "ibgateway service restart failed after IBC configuration.",
-            "Inspect systemctl status and journalctl in the diagnostics group, then rerun configure after the service is repaired.",
-        )
-        return 1
-    if mode == "paper":
-        print("Paper Gateway configure will verify API and trading readiness directly.")
-        return api_ready(mode, required=True)
+    try:
+        if action == "status":
+            return remote(f"sudo systemctl status ibgateway --no-pager --lines={log_lines} || true", timeout=180)
+        if action == "restart":
+            if repair_runtime() != 0:
+                return 1
+            return remote("sudo systemctl restart ibgateway", timeout=180)
+        if action == "logs":
+            return remote(f"sudo journalctl -u ibgateway -n {log_lines} --no-pager", timeout=180)
+        if action == "app-logs":
+            return remote(
+                "echo '===== cron service status ====='; "
+                "sudo systemctl status cron --no-pager --lines=10 || true; "
+                "echo '===== poma crontab ====='; "
+                "sudo crontab -l -u poma 2>&1 || echo '(no crontab installed for poma)'; "
+                "echo '===== poma docker group membership ====='; "
+                "getent group docker || echo '(no docker group)'; "
+                "echo '===== /opt/poma/logs directory ====='; "
+                "sudo ls -la /opt/poma/logs 2>&1 || echo '(missing)'; "
+                "echo '===== poma-cron.log (tail) ====='; "
+                f"sudo tail -n {log_lines} /opt/poma/logs/poma-cron.log 2>/dev/null || echo '(missing)'; "
+                "echo '===== poma-reconcile-cron.log (tail) ====='; "
+                f"sudo tail -n {log_lines} /opt/poma/logs/poma-reconcile-cron.log 2>/dev/null || echo '(missing)'; "
+                "echo '===== rebalance_state.json ====='; "
+                "sudo cat /opt/poma/state/rebalance_state.json 2>/dev/null || echo '(missing)'",
+                timeout=180,
+            )
+        if action == "fix-app-docker-perms":
+            return remote(
+                # poma is intentionally created non-unique on uid/gid 1000, shared with the cloud
+                # image's default "ubuntu" account (see infra/gcp-free-tier/startup.sh). crontab -u
+                # poma and the cron daemon itself both resolve that shared uid back to "ubuntu" for
+                # ownership/session purposes, so the crontab actually runs as ubuntu, not poma -- add
+                # both names to the docker group so the fix holds regardless of which one a given tool
+                # resolves the shared uid to.
+                "sudo usermod -aG docker poma && "
+                "sudo usermod -aG docker ubuntu && "
+                "sudo systemctl restart cron && "
+                "getent group docker && "
+                "echo 'poma and ubuntu added to the docker group and cron restarted; "
+                "the next monitor/reconcile-orders tick should reach the Docker API.'",
+                timeout=180,
+            )
+        if action == "clear-rebalance-state":
+            return remote(
+                "sudo install -d -o poma -g poma /opt/poma/state && "
+                "sudo rm -f /opt/poma/state/rebalance_state.json && "
+                "echo 'Cleared /opt/poma/state/rebalance_state.json; next eligible monitor run may rebalance again.'",
+                timeout=180,
+            )
+        if action == "verify-socket":
+            if repair_runtime() != 0:
+                return 1
+            remote("sudo systemctl restart ibgateway || true", timeout=180)
+            return api_ready("live" if deploy_environment == "prd" else "paper", required=True)
+        if action == "verify-market-data":
+            # Read-only market data entitlement verification: no repair, no restart. Runs poma
+            # ibkr-check against the *currently running* Gateway session, so a green run proves the
+            # account is genuinely serving entitled quotes (live during market hours, frozen after
+            # hours; REQUIRE_LIVE_EXECUTION_QUOTES in the deployed .env decides how strict that is).
+            return timed(
+                "Market data entitlement check (poma ibkr-check)",
+                lambda: remote(ibkr_check_command("live" if deploy_environment == "prd" else "paper", required=True), timeout=ibkr_check_timeout_seconds),
+            )
 
-    wait_command = (
-        f"sudo poma-wait-ibgateway-2fa --log-lines 80 --timeout-seconds {twofa_timeout} "
-        f"--poll-seconds {poll_seconds} --fail-no-progress-after {no_progress_after}"
-    )
-    if timed("Fresh live 2FA challenge wait", lambda: remote(wait_command, timeout=int(twofa_timeout) + 60)) != 0:
-        print("No fresh IBKR mobile 2FA evidence appeared; refusing live configure success.", file=sys.stderr)
-        diagnose(
-            "live-2fa",
-            "Live login did not reach a fresh challenge or API readiness before the timeout.",
-            "Approve the IBKR Mobile prompt and rerun configure-live. If no prompt appears, inspect the IBC login-stage diagnostics.",
+        if action not in {"configure-paper", "configure-live"}:
+            print(f"unknown action: {action}", file=sys.stderr)
+            return 2
+
+        login_id = env("BROKER_LOGIN_ID")
+        login_secret = env("BROKER_LOGIN_VALUE")
+        if repair_runtime() != 0:
+            return 1
+        mode = action.removeprefix("configure-")
+        if any(char in value for value in (login_id, login_secret) for char in "\r\n\x00"):
+            raise SystemExit("Broker credentials must be single-line values")
+        configure_input = f"{login_id}\n{login_secret}\n{mode}\n"
+        if timed(
+            "Configure IBC auth values",
+            lambda: gcloud(
+                "compute",
+                "ssh",
+                vm_name,
+                *ssh_common,
+                "--command",
+                "sudo POMA_CONFIGURE_IBC_RESTART=0 poma-configure-ibc",
+                timeout=180,
+                input_text=configure_input,
+            ),
+        ) != 0:
+            return 1
+        if timed("Validate IBC configuration", lambda: remote(f"sudo poma-diagnose-ibgateway validate --mode {mode}", timeout=120)) != 0:
+            return 1
+        if timed("Checkpoint Gateway auth logs", lambda: remote("sudo poma-wait-ibgateway-2fa --checkpoint-logs-only", timeout=120)) != 0:
+            return 1
+        print("Force fresh ibgateway login after IBC configuration")
+        # Fresh 2FA challenge wait is enforced for live configure only; paper skips it.
+        if timed("Restart ibgateway after IBC configuration", lambda: remote("sudo systemctl restart ibgateway", timeout=240)) != 0:
+            diagnose(
+                "gateway-restart",
+                "ibgateway service restart failed after IBC configuration.",
+                "Inspect systemctl status and journalctl in the diagnostics group, then rerun configure after the service is repaired.",
+            )
+            return 1
+        if mode == "paper":
+            print("Paper Gateway configure will verify API and trading readiness directly.")
+            readiness = api_ready(mode, required=True)
+            if readiness != 0:
+                return readiness
+            return timed(
+                "Verify authenticated recovery watchdog",
+                lambda: remote("sudo poma-gateway-auth-watchdog --check-only", timeout=210),
+            )
+
+        wait_command = (
+            f"sudo poma-wait-ibgateway-2fa --log-lines 80 --timeout-seconds {twofa_timeout} "
+            f"--poll-seconds {poll_seconds} --fail-no-progress-after {no_progress_after}"
         )
-        return 1
-    readiness = api_ready(mode, required=True)
-    if readiness != 0:
-        return readiness
-    # Deploy removed the app crontab. Arm it only after live authentication and only
-    # when the rendered app config explicitly opts into live trading.
-    return timed(
-        "Enable authenticated live schedule",
-        lambda: remote(
-            "if sudo grep -qx TRADING_MODE=live /opt/poma/.env && "
-            "sudo grep -qx ALLOW_LIVE_TRADING=true /opt/poma/.env; then "
-            "sudo -u poma crontab /opt/poma/ops/cron/poma.cron && sudo systemctl restart cron; "
-            "else echo 'App is not configured for live trading; leaving its schedule unchanged.'; fi",
-            timeout=120,
-        ),
-    )
+        if timed("Fresh live 2FA challenge wait", lambda: remote(wait_command, timeout=int(twofa_timeout) + 60)) != 0:
+            print("No fresh IBKR mobile 2FA evidence appeared; refusing live configure success.", file=sys.stderr)
+            diagnose(
+                "live-2fa",
+                "Live login did not reach a fresh challenge or API readiness before the timeout.",
+                "Approve the IBKR Mobile prompt and rerun configure-live. If no prompt appears, inspect the IBC login-stage diagnostics.",
+            )
+            return 1
+        readiness = api_ready(mode, required=True)
+        if readiness != 0:
+            return readiness
+        if timed(
+            "Verify authenticated recovery watchdog",
+            lambda: remote("sudo poma-gateway-auth-watchdog --check-only", timeout=210),
+        ) != 0:
+            return 1
+        # Deploy removed the app crontab. Arm it only after live authentication and only
+        # when the rendered app config explicitly opts into live trading.
+        return timed(
+            "Enable authenticated live schedule",
+            lambda: remote(
+                "if sudo grep -qx TRADING_MODE=live /opt/poma/.env && "
+                "sudo grep -qx ALLOW_LIVE_TRADING=true /opt/poma/.env; then "
+                "sudo -u poma crontab /opt/poma/ops/cron/poma.cron && sudo systemctl restart cron; "
+                "else echo 'App is not configured for live trading; leaving its schedule unchanged.'; fi",
+                timeout=120,
+            ),
+        )
+
+    finally:
+        if mutates_gateway:
+            resumed = remote(
+                "if systemctl cat poma-gateway-watchdog.timer >/dev/null 2>&1; then "
+                "sudo systemctl start poma-gateway-watchdog.timer; fi",
+                timeout=60,
+            )
+            if resumed != 0:
+                raise SystemExit("Unable to resume Gateway authentication watchdog; inspect systemctl status.")
 
 
 if __name__ == "__main__":

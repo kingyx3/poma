@@ -234,9 +234,11 @@ def test_auto_cicd_runs_gateway_ops_only_for_gateway_relevant_changes() -> None:
     # probe, so changing them must also re-validate Gateway configure, not just redeploy the app.
     assert "src/poma/broker.py" in shared_paths
     assert "src/poma/health.py" in shared_paths
+    assert "src/poma/gateway_auth.py" in shared_paths
     assert ".github/workflows/ib-gateway-ops.yml" in gateway_paths
     assert "ops/scripts/repair_ib_gateway_runtime.py" in gateway_paths
     assert "ops/scripts/wait_ib_gateway_2fa.py" in gateway_paths
+    assert "ops/scripts/gateway_auth_watchdog.py" in gateway_paths
     assert "ops/scripts/run_gateway_ops_workflow.py" in gateway_paths
     assert ".github/workflows/deploy-gcp-vm.yml" not in gateway_paths
     assert ".github/workflows/auto-cicd.yml" not in gateway_paths
