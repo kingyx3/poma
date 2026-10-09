@@ -35,6 +35,11 @@ class HistoricalMarketDataClient(MarketDataClient, Protocol):
         """Return daily normalized snapshots for a lookback window when supported."""
 
 
+class PriceHistoryClient(Protocol):
+    def close_price_history(self, tickers: list[str], lookback_days: int) -> pd.DataFrame:
+        """Return daily closes (DatetimeIndex rows, one column per ticker) for ``lookback_days``."""
+
+
 def _chunked(items: list[str], size: int) -> list[list[str]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
 
@@ -206,11 +211,28 @@ class YahooFinanceMarketDataClient:
                 snapshots[as_of] = _normalise_snapshot(records, require_price=True)
         return snapshots
 
+    def close_price_history(self, tickers: list[str], lookback_days: int) -> pd.DataFrame:
+        """Daily dividend-adjusted closes for instruments outside the screener universe (e.g. ETFs).
+
+        Adjusted closes keep a moving-average trend signal from reading ex-dividend drops as
+        price declines; the latest bar's adjusted close equals its actual close.
+        """
+        end = date.today()
+        start = end - timedelta(days=lookback_days)
+        prices = self._download_close_prices(
+            list(tickers),
+            start,
+            end,
+            price_columns=("Adj Close", "Close"),
+        )
+        return pd.DataFrame(prices).sort_index()
+
     def _download_close_prices(
         self,
         symbols: list[str],
         start: date,
         end: date,
+        price_columns: tuple[str, ...] = ("Close", "Adj Close"),
     ) -> dict[str, pd.Series]:
         data = self._yf.download(
             tickers=" ".join(symbols),
@@ -227,7 +249,7 @@ class YahooFinanceMarketDataClient:
         prices: dict[str, pd.Series] = {}
         if isinstance(data.columns, pd.MultiIndex):
             for symbol in symbols:
-                for price_column in ("Close", "Adj Close"):
+                for price_column in price_columns:
                     key = (symbol, price_column)
                     if key in data.columns:
                         prices[symbol] = pd.to_numeric(data[key], errors="coerce")
@@ -236,7 +258,7 @@ class YahooFinanceMarketDataClient:
 
         if len(symbols) == 1:
             symbol = symbols[0]
-            for price_column in ("Close", "Adj Close"):
+            for price_column in price_columns:
                 if price_column in data.columns:
                     prices[symbol] = pd.to_numeric(data[price_column], errors="coerce")
                     break
@@ -359,6 +381,14 @@ class FixtureMarketDataClient:
                 },
             ]
         )
+
+
+    def close_price_history(self, tickers: list[str], lookback_days: int) -> pd.DataFrame:
+        """Deterministic gently rising daily closes so fixture dry-runs can plan ETF strategies."""
+        end = pd.Timestamp(date.today())
+        index = pd.bdate_range(end=end, periods=max(int(lookback_days * 5 / 7), 1))
+        steps = pd.Series(range(len(index)), index=index, dtype=float)
+        return pd.DataFrame({ticker: 100.0 * (1.0003**steps) for ticker in tickers})
 
 
 def build_data_client(settings: Settings) -> MarketDataClient:

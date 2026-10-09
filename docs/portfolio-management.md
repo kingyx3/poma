@@ -1,6 +1,6 @@
 # Portfolio management
 
-This page documents POMA's strategy-neutral portfolio management model. Strategy selection logic belongs in strategy-specific docs, such as [`docs/strategies/rank-velocity-size-equal-weight.md`](strategies/rank-velocity-size-equal-weight.md).
+This page documents POMA's strategy-neutral portfolio management model. Strategy selection logic belongs in strategy-specific docs, such as [`docs/strategies/core-etf.md`](strategies/core-etf.md).
 
 ## Capital source
 

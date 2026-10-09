@@ -13,3 +13,4 @@ data/
 var/
 logs/
 *.egg-info/
+research/.cache/

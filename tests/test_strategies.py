@@ -7,6 +7,7 @@ import pytest
 from conftest import make_settings
 
 from poma.strategies import StrategyContext, StrategyRegistry, default_registry
+from poma.strategies.core_etf import NAME as CORE_ETF_STRATEGY_NAME
 from poma.strategies.rank_velocity_size_equal_weight import NAME as RANK_STRATEGY_NAME
 from poma.strategies.rank_velocity_size_equal_weight import RankVelocitySizeEqualWeightStrategy
 
@@ -17,17 +18,18 @@ def _snapshot(tickers: list[str]) -> pd.DataFrame:
     )
 
 
-def test_default_registry_only_contains_rank_velocity_strategy() -> None:
+def test_default_registry_contains_core_etf_and_rank_velocity_strategies() -> None:
     registry = default_registry()
 
-    assert registry.names() == (RANK_STRATEGY_NAME,)
+    assert registry.names() == (CORE_ETF_STRATEGY_NAME, RANK_STRATEGY_NAME)
     assert registry.get(RANK_STRATEGY_NAME).name == RANK_STRATEGY_NAME
+    assert registry.get(CORE_ETF_STRATEGY_NAME).name == CORE_ETF_STRATEGY_NAME
 
 
 def test_registry_get_unknown_strategy_lists_available_names() -> None:
     registry = default_registry()
 
-    with pytest.raises(KeyError, match="available strategies: " + RANK_STRATEGY_NAME):
+    with pytest.raises(KeyError, match=f"available strategies: {CORE_ETF_STRATEGY_NAME}, {RANK_STRATEGY_NAME}"):
         registry.get("does_not_exist")
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
+import pandas as pd
+
 from poma.account_snapshot import rebalance_account_snapshot
 from poma.broker import (
     Broker,
@@ -28,7 +30,13 @@ from poma.risk import (
     generate_trades,
     validate_targets,
 )
-from poma.strategies import StrategyContext, StrategyRegistry, default_registry
+from poma.strategies import (
+    StrategyContext,
+    StrategyDataRequirements,
+    StrategyRegistry,
+    default_registry,
+    strategy_data_requirements,
+)
 
 BLOCK_MARKER = "block execution"
 COMPLETED_STATUS = "completed"
@@ -100,17 +108,28 @@ class RebalanceEngine:
             0.0,
         )
 
-        current = self.data_client.current_universe_snapshot()
+        sleeves = [
+            (sleeve, self.strategy_registry.get(sleeve.name))
+            for sleeve in capital_plan.tradeable_sleeves()
+        ]
+        requirements = [strategy_data_requirements(strategy, settings) for _, strategy in sleeves]
+
+        current = pd.DataFrame(columns=["ticker", "market_cap", "price"])
         historical = None
-        today = datetime.now(UTC).date()
-        if self.history is not None:
-            target_date = today - timedelta(days=settings.rank_lookback_days)
-            historical = self.history.load_asof(target_date)
-            self.history.save(current, today)
+        if any(requirement.uses_universe for requirement in requirements):
+            current = self.data_client.current_universe_snapshot()
+            today = datetime.now(UTC).date()
+            if self.history is not None:
+                target_date = today - timedelta(days=settings.rank_lookback_days)
+                historical = self.history.load_asof(target_date)
+                self.history.save(current, today)
+        price_history = self._price_history(requirements, warnings)
 
         strategy_books: list[StrategyTargetBook] = []
-        for sleeve in capital_plan.tradeable_sleeves():
-            strategy = self.strategy_registry.get(sleeve.name)
+        for (sleeve, strategy), requirement in zip(sleeves, requirements, strict=True):
+            sleeve_history = None
+            if price_history is not None and requirement.price_history_tickers:
+                sleeve_history = price_history.reindex(columns=list(requirement.price_history_tickers))
             context = StrategyContext(
                 strategy_name=sleeve.name,
                 allocation_pct=sleeve.allocation_pct,
@@ -118,6 +137,7 @@ class RebalanceEngine:
                 current_universe=current,
                 historical_universe=historical,
                 settings=settings,
+                price_history=sleeve_history,
             )
             book = strategy.build_targets(context)
             strategy_books.append(book)
@@ -135,6 +155,11 @@ class RebalanceEngine:
             for row in current.itertuples()
             if getattr(row, "price", None) is not None
         }
+        if price_history is not None:
+            for ticker in price_history.columns:
+                closes = pd.to_numeric(price_history[ticker], errors="coerce").dropna()
+                if ticker not in prices and not closes.empty:
+                    prices[str(ticker)] = float(closes.iloc[-1])
         positions = list(account_snapshot.positions)
         trades, trade_warnings = generate_trades(
             targets=targets,
@@ -157,7 +182,10 @@ class RebalanceEngine:
             available_cash_usd=account_snapshot.cash_usd,
         )
 
-        warnings.extend(validate_targets(targets, settings.max_position_pct))
+        fund_tickers = frozenset(
+            ticker for book in strategy_books for ticker in book.diversified_fund_tickers
+        )
+        warnings.extend(validate_targets(targets, settings.max_position_pct, fund_tickers))
         warnings.extend(trade_warnings)
         warnings.extend(cost_warnings)
         warnings.extend(execution_policy_warnings)
@@ -200,6 +228,43 @@ class RebalanceEngine:
             total_allocated_pct=capital_plan.total_allocated_pct,
             total_allocated_usd=capital_plan.total_allocated_usd,
         )
+
+    def _price_history(
+        self,
+        requirements: list[StrategyDataRequirements],
+        warnings: list[str],
+    ) -> pd.DataFrame | None:
+        """Load daily closes for every non-universe instrument the allocated strategies need.
+
+        Fails closed: without prices the plan cannot size those targets, so a load failure or a
+        missing ticker blocks execution rather than silently leaving the sleeve in cash.
+        """
+        tickers = sorted({ticker for req in requirements for ticker in req.price_history_tickers})
+        if not tickers:
+            return None
+        days = max(req.price_history_days for req in requirements if req.price_history_tickers)
+        loader = getattr(self.data_client, "close_price_history", None)
+        if loader is None:
+            warnings.append(
+                f"data provider cannot load price history for {', '.join(tickers)}; {BLOCK_MARKER}"
+            )
+            return None
+        try:
+            history = loader(tickers, days)
+        except Exception as exc:  # noqa: BLE001 - provider detail is safer as a blocking warning
+            warnings.append(
+                f"unable to load price history for {', '.join(tickers)}; {BLOCK_MARKER}: "
+                f"{_exception_detail(exc)}"
+            )
+            return None
+        missing = [
+            ticker
+            for ticker in tickers
+            if ticker not in history.columns or pd.to_numeric(history[ticker], errors="coerce").dropna().empty
+        ]
+        if missing:
+            warnings.append(f"no price history returned for {', '.join(missing)}; {BLOCK_MARKER}")
+        return history
 
     def _account_snapshot(self, warnings: list[str]) -> AccountSnapshot:
         """Read broker cash/positions once per rebalance.

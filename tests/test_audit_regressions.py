@@ -153,7 +153,7 @@ def test_fresh_sell_price_cannot_bypass_order_notional_cap():
     from poma.execution_pricing import apply_execution_quotes
     trade = _trade('AAPL', OrderSide.SELL)
     trades, warnings = apply_execution_quotes(
-        [trade], {'AAPL': _quote(bid=1000, ask=1001)}, make_settings()
+        [trade], {'AAPL': _quote(bid=1000, ask=1001)}, make_settings(MAX_ORDER_NOTIONAL_USD=2000)
     )
     assert trades == []
     assert 'notional safety limits' in warnings[0]
