@@ -40,7 +40,7 @@ def test_gateway_verify_socket_is_the_strict_readiness_gate() -> None:
 def test_live_schedule_is_installed_only_after_authenticated_readiness():
     workflow = (REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text()
     runner = (REPO_ROOT / "ops/scripts/run_gateway_ops_workflow.py").read_text()
-    block = workflow.split('if [ "${{ inputs.trading_mode }}" = "live" ]; then', 1)[1].split('fi', 1)[0]
+    block = workflow.split('if [ "${{ inputs.trading_mode }}" = "live" ]; then', 1)[1].split('            fi', 1)[0]
     assert 'crontab' not in block.split('else', 1)[0]
     assert 'crontab ops/cron/poma.cron' in block.split('else', 1)[1]
     enable = runner.index('Enable authenticated live schedule')
