@@ -164,13 +164,13 @@ def tick(*, check_only: bool = False) -> int:
     if not all(path.is_file() for path in (APP_DIR / '.env', APP_DIR / '.compose.env',
                                           APP_DIR / 'docker-compose.vm.yml', IBC_CONFIG)) or not state_dir.is_dir():
         print('Watchdog skipped: configured app/Gateway is not installed.')
-        return 0
+        return 1 if check_only else 0
     service = run(['systemctl', 'show', 'ibgateway', '--property=ActiveState',
                    '--property=ActiveEnterTimestampMonotonic'])
     props = dict(line.split('=', 1) for line in service.stdout.splitlines() if '=' in line)
     if service.returncode != 0 or props.get('ActiveState') != 'active':
         print('Watchdog skipped: Gateway is stopped or starting; systemd owns process recovery.')
-        return 0
+        return 1 if check_only else 0
     try:
         age = time.monotonic() - int(props['ActiveEnterTimestampMonotonic']) / 1_000_000
     except (ValueError, KeyError):
@@ -207,7 +207,7 @@ def tick(*, check_only: bool = False) -> int:
             return 0
     except BlockingIOError:
         print('Watchdog skipped: trading/maintenance command holds the state lock.')
-        return 0
+        return 75 if check_only else 0
 
 
 def main(*, check_only: bool = False) -> int:

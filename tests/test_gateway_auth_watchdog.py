@@ -339,3 +339,15 @@ def test_restart_timeout_still_alerts_and_retains_budget(installed_watchdog, mon
     assert watchdog.main() == 0
     assert events == ['restart_failed']
     assert watchdog.load_state(watchdog.STATE_PATH).restarts == [10000]
+
+
+def test_check_only_never_claims_success_when_skipped(installed_watchdog, monkeypatch):
+    path, _ = installed_watchdog
+    monkeypatch.setattr(watchdog, 'compose', lambda *a, **k: pytest.fail('busy state was probed'))
+    with runtime_lock(path / 'state'):
+        assert watchdog.main(check_only=True) == 75
+    monkeypatch.setattr(watchdog, 'run', lambda *a, **k: subprocess.CompletedProcess([], 0,
+                        'ActiveState=inactive\nActiveEnterTimestampMonotonic=1\n', ''))
+    assert watchdog.main(check_only=True) == 1
+    watchdog.IBC_CONFIG.unlink()
+    assert watchdog.main(check_only=True) == 1
