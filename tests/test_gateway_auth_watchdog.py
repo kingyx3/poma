@@ -382,15 +382,17 @@ def test_privileged_lock_open_refuses_hard_links_and_directory_links(tmp_path):
         pytest.fail('symlinked state directory was accepted')
 
 
-def test_volume_replacement_during_probe_cannot_restart_gateway(installed_watchdog, monkeypatch):
+@pytest.mark.parametrize('stale_payload', [False, True])
+def test_volume_replacement_during_probe_cannot_restart_gateway(installed_watchdog, monkeypatch, stale_payload):
     path, commands = installed_watchdog
     watchdog.save_state(watchdog.STATE_PATH, watchdog.State(failures=2))
 
     def compose(command, timeout):
         if command[0] == 'gateway-auth-check':
+            original = result_for('unavailable', path / 'state')
             (path / 'state').rename(path / 'previous-state')
             (path / 'state').mkdir()
-            return result_for('unavailable', path / 'state')
+            return original if stale_payload else result_for('unavailable', path / 'state')
         return subprocess.CompletedProcess(command, 0, '', '')
 
     monkeypatch.setattr(watchdog, 'compose', compose)

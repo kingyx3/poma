@@ -159,7 +159,11 @@ def authentication_status(
         if result.returncode != expected_code:
             return 'probe_error'
         if status != 'configuration_error':
-            mounted = expected_state if expected_state is not None else state_dir.stat()
+            mounted = state_dir.stat()
+            if expected_state is not None and (
+                mounted.st_ino, mounted.st_dev
+            ) != (expected_state.st_ino, expected_state.st_dev):
+                return 'configuration_error'
             if (payload.get('state_inode'), payload.get('state_device')) != (mounted.st_ino, mounted.st_dev):
                 return 'configuration_error'
         return status
