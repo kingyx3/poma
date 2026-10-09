@@ -80,6 +80,9 @@ class StrategyTargetBook:
     capital_usd: float
     targets: tuple[StrategyTarget, ...]
     warnings: tuple[str, ...] = ()
+    # Diversified funds (e.g. broad-market ETFs) this book targets. MAX_POSITION_PCT is a
+    # single-company concentration cap, so these tickers are exempt from it.
+    diversified_fund_tickers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

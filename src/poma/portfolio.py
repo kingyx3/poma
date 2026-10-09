@@ -4,9 +4,12 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+# The original daily top-market-cap stock strategy. Still registered; select it through
+# STRATEGY_ALLOCATIONS to restore the pre-core_etf behavior.
 CURRENT_STRATEGY_NAME = "rank_velocity_size_equal_weight"
+DEFAULT_STRATEGY_NAME = "core_etf"
 CASH_STRATEGY_NAME = "cash"
-DEFAULT_STRATEGY_ALLOCATIONS = f"{CURRENT_STRATEGY_NAME}=0.98,{CASH_STRATEGY_NAME}=0.02"
+DEFAULT_STRATEGY_ALLOCATIONS = f"{DEFAULT_STRATEGY_NAME}=0.98,{CASH_STRATEGY_NAME}=0.02"
 
 
 @dataclass(frozen=True)

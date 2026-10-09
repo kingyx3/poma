@@ -53,6 +53,21 @@ def test_turnover_limit_blocks_execution() -> None:
     assert "block execution" in warnings[0]
 
 
+def test_turnover_limit_counts_a_full_rotation_once() -> None:
+    trades, _ = generate_trades(
+        [TargetPosition("B", 0.98, 980)],
+        [CurrentPosition("A", quantity=10, market_value=980)],
+        latest_prices={"A": 98, "B": 98},
+        portfolio_value_usd=1_000,
+        min_trade_notional_usd=1,
+        min_weight_delta_pct=0,
+        limit_offset_bps=10,
+    )
+    assert {trade.side for trade in trades} == {OrderSide.BUY, OrderSide.SELL}
+    assert enforce_turnover_limit(trades, portfolio_value_usd=1_000, max_turnover_pct=1.0) == []
+    assert enforce_turnover_limit(trades, portfolio_value_usd=1_000, max_turnover_pct=0.9)
+
+
 def test_order_limits_block_oversized_orders() -> None:
     targets = [TargetPosition("A", 0.5, 500)]
     trades, _ = generate_trades(

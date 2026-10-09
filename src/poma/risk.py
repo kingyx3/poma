@@ -6,12 +6,17 @@ from poma.models import CurrentPosition, OrderSide, ProposedTrade, TargetPositio
 # --- Target risk: combined portfolio-level target checks -----------------------------------
 
 
-def validate_targets(targets: list[TargetPosition], max_position_pct: float) -> list[str]:
+def validate_targets(
+    targets: list[TargetPosition],
+    max_position_pct: float,
+    exempt_tickers: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Check combined targets; ``exempt_tickers`` are diversified funds outside the single-name cap."""
     warnings: list[str] = []
     total_weight = sum(t.target_weight for t in targets)
     if total_weight > 1.000001:
         warnings.append(f"target weights exceed 100%: {total_weight:.4f}; block execution")
-    if any(t.target_weight > max_position_pct + 1e-9 for t in targets):
+    if any(t.target_weight > max_position_pct + 1e-9 and t.ticker not in exempt_tickers for t in targets):
         warnings.append("one or more target weights exceed max_position_pct; block execution")
     if not targets:
         warnings.append("no target positions generated")
@@ -98,9 +103,17 @@ def enforce_turnover_limit(
     portfolio_value_usd: float,
     max_turnover_pct: float,
 ) -> list[str]:
+    """Block when one-sided turnover (the larger of total buys and total sells) exceeds the limit.
+
+    One-sided turnover counts a full rotation (sell everything, buy something else) once, as
+    100%, rather than twice, so MAX_TURNOVER_PCT=1.0 permits switching strategies in one run while
+    still blocking a plan that would trade more than the whole portfolio in either direction.
+    """
     turnover = 0.0
     if portfolio_value_usd:
-        turnover = sum(t.notional for t in trades) / portfolio_value_usd
+        buys = sum(t.notional for t in trades if t.side == OrderSide.BUY)
+        sells = sum(t.notional for t in trades if t.side == OrderSide.SELL)
+        turnover = max(buys, sells) / portfolio_value_usd
     if turnover > max_turnover_pct:
         return [
             f"turnover {turnover:.2%} exceeds limit {max_turnover_pct:.2%}; block execution"

@@ -19,7 +19,7 @@ This repo is production-ready for **dry-run deployment** once CI is green and th
 - [ ] Confirm the `poma reconcile-orders` cron entry is installed alongside the rebalance cron entry (`ops/cron/poma.cron`), so accepted-but-unfilled orders are followed up independent of the rebalance process lifetime.
 - [ ] Confirm the paper account cash + portfolio balance is the intended rebalance sizing base.
 - [ ] Confirm `STRATEGY_ALLOCATIONS` splits no more than 100% of the broker-derived account value; see [`portfolio-management.md`](portfolio-management.md).
-- [ ] Confirm the default allocation is intentional: `rank_velocity_size_equal_weight=0.98,cash=0.02`; see [`strategies/rank-velocity-size-equal-weight.md`](strategies/rank-velocity-size-equal-weight.md) for the current strategy behavior.
+- [ ] Confirm the default allocation is intentional: `core_etf=0.98,cash=0.02`; see [`strategies/core-etf.md`](strategies/core-etf.md) for the current strategy behavior and the audit of the previous `rank_velocity_size_equal_weight` strategy.
 
 ## Required before live mode
 
