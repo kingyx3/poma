@@ -4,7 +4,7 @@ import math
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -672,12 +672,15 @@ class IbkrBroker:
         consecutive_acceptance_failures = 0
         try:
             for index, proposed in enumerate(trades):
+                submission_started = False
+                submitted = None
                 try:
                     self._assert_connected(ib)
                     contract = Stock(proposed.ticker, "SMART", "USD")
                     order = self._build_order(proposed)
                     if self.settings.ibkr_account:
                         order.account = self.settings.ibkr_account
+                    submission_started = True
                     submitted = ib.placeOrder(contract, order)
                     self._emit_status(
                         status_callback,
@@ -716,6 +719,25 @@ class IbkrBroker:
                             )
                         break
                 except Exception as exc:  # noqa: BLE001 - report per-order failures without hiding context
+                    if submission_started:
+                        # Once placeOrder is called, a timeout/disconnect (or a failing status
+                        # callback) cannot prove rejection. Preserve identity and fail closed.
+                        result = (
+                            self._order_result(proposed, submitted, fallback_status="SubmissionUnconfirmed")
+                            if submitted is not None
+                            else _manual_result(proposed, "SubmissionUnconfirmed")
+                        )
+                        result = replace(
+                            result, status="SubmissionUnconfirmed",
+                            message=f"submission outcome uncertain; reconcile before retry: {exc}",
+                        )
+                        self._emit_status(status_callback, proposed, result)
+                        results.append(result)
+                        results.extend(self._unsubmitted_results(
+                            trades[index + 1:], status_callback,
+                            "stopped after uncertain submission; remaining orders not submitted",
+                        ))
+                        break
                     if _looks_like_connection_failure(ib, exc):
                         results.extend(
                             self._unsubmitted_results(
@@ -943,7 +965,10 @@ class IbkrBroker:
             self._assert_connected(ib)
             ib.reqAllOpenOrders()
             ib.sleep(1.0)
-            target = next((trade.order for trade in ib.openTrades() if trade.order.orderId == order_id), None)
+            target = next((trade.order for trade in ib.openTrades()
+                           if trade.order.orderId == order_id
+                           and trade.order.account == self.settings.ibkr_account
+                           and str(trade.order.orderRef).startswith("poma:")), None)
             if target is None:
                 return False
             ib.cancelOrder(target)
@@ -973,7 +998,12 @@ class IbkrBroker:
             self._assert_connected(ib)
             ib.reqAllOpenOrders()
             ib.sleep(1.0)
-            target_trade = next((trade for trade in ib.openTrades() if trade.order.orderId == order_id), None)
+            target_trade = next((trade for trade in ib.openTrades()
+                                 if trade.order.orderId == order_id
+                                 and trade.order.account == self.settings.ibkr_account
+                                 and str(trade.order.orderRef).startswith("poma:")
+                                 and trade.contract.symbol == ticker
+                                 and trade.order.action == side.value), None)
             if target_trade is None:
                 raise RuntimeError(f"cannot replace order {order_id}: original order is no longer open")
             ib.cancelOrder(target_trade.order)

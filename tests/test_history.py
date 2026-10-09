@@ -45,3 +45,15 @@ def test_load_asof_returns_none_before_any_snapshot(tmp_path) -> None:
     assert history.load_asof(date(2026, 3, 25)) is None
     history.save(pd.DataFrame([{"ticker": "AAPL", "market_cap": 100}]), date(2026, 3, 20))
     assert history.load_asof(date(2026, 3, 1)) is None
+
+
+def test_asof_compares_dates_across_legacy_and_current_directories(tmp_path):
+    history = CapSnapshotHistory(tmp_path)
+    history.save(pd.DataFrame([{'ticker': 'AAPL', 'market_cap': 100}]), date(2026, 3, 1))
+    history.legacy_dir.mkdir()
+    pd.DataFrame([{'ticker': 'AAPL', 'market_cap': 200}]).to_csv(
+        history.legacy_dir / '2026-03-20.csv', index=False
+    )
+    assert history.load_asof(date(2026, 3, 25)).iloc[0].market_cap == 200
+    history.save(pd.DataFrame([{'ticker': 'AAPL', 'market_cap': 300}]), date(2026, 3, 20))
+    assert history.load_asof(date(2026, 3, 25)).iloc[0].market_cap == 300

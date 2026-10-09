@@ -6,7 +6,7 @@ See [`adr/0001-ibkr-credentials-in-github-secrets.md`](adr/0001-ibkr-credentials
 
 ## Production flow
 
-Use this flow for manual paper/live setup and for production promotion. Auto CI/CD also invokes Gateway Ops automatically for dev pull requests and staging pushes when deploy or Gateway paths changed.
+Use this flow for manual paper/live setup and for production promotion. Auto CI/CD invokes Gateway Ops for relevant dev pull requests and for production releases. Merging main alone does not publish a production release.
 
 1. Deploy the VM using [`deployment-gcp-free-tier.md`](deployment-gcp-free-tier.md).
 2. Add the required GitHub Environment Secrets for the target environment:
@@ -44,7 +44,7 @@ For startup-stage diagnosis when no mobile approval prompt appears, see [`ib-gat
 
 The VM startup script keeps boot light: it installs only Docker, cron, the app user, and runtime
 directories. The IB Gateway runtime is installed and enabled by the **IB Gateway Ops** workflow.
-Auto CI/CD runs Gateway Ops after its dev/stg deploy jobs when deploy or Gateway paths changed;
+Auto CI/CD runs Gateway Ops after relevant dev PR deployments and production release deployments;
 manual deploys require an explicit Gateway Ops action. Gateway Ops provisions:
 
 - IB Gateway in `/opt/ibgateway`.
@@ -56,7 +56,7 @@ manual deploys require an explicit Gateway Ops action. Gateway Ops provisions:
 
 The **IB Gateway Ops** workflow reads `IBKR_LOGIN_ID_PAPER` and `IBKR_LOGIN_SECRET_PAPER` from GitHub Environment Secrets only for `configure-paper`. It reads `IBKR_LOGIN_ID` and `IBKR_LOGIN_SECRET` only for `configure-live`. The selected pair is sent to `sudo poma-configure-ibc` over IAP SSH stdin and is not written to the app `.env`.
 
-The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Pull-request Auto CI/CD uses `configure-paper` for the dev Gateway check so paper broker-login and authenticated API regressions are caught before merge. Configure and socket verification wait on the VM for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, which avoids repeated IAP SSH polling from GitHub Actions. The VM-local wait runs a startup progress check after the no-progress grace period, prints the redacted handshake tail on failure, and allows one bounded fresh-login restart when the socket opens but `ibkr-check` still fails. The workflow does not restart on explicit IBKR market-data entitlement or competing-session errors (`354`, `10089`, `10197`), because a fresh Gateway login does not fix those account states. Gateway Ops allows up to 300 seconds per login attempt by default so stalled starts fail quickly instead of holding the shared e2-micro deploy path. First-time runtime repair is separately bounded at 780 seconds because the IB Gateway installer is CPU/disk heavy on the e2-micro; repeated runs should take the sentinel path and skip the heavy repair. Live configure also waits for fresh mobile-approval evidence before the authenticated API check.
+The same ops workflow repairs the Gateway runtime before `restart`, `verify-socket`, `configure-paper`, and `configure-live`. The repair is intentionally self-healing: it can reinstall missing headless packages, rebuild the runtime wrapper/service, install missing IB Gateway and IBC artifacts, fix stale `/tmp/poma-ibgateway` ownership, and move sidecar logs to the systemd-managed `/var/log/poma/ibgateway` directory. Pull-request Auto CI/CD uses `configure-paper` for the dev Gateway check so paper broker-login and authenticated API regressions are caught before merge. Configure and socket verification wait on the VM for two stable `127.0.0.1:7497` polls before running the real `poma ibkr-check` handshake, which avoids repeated IAP SSH polling from GitHub Actions. The VM-local wait runs a startup progress check after the no-progress grace period, prints the redacted handshake tail on failure, and allows one bounded fresh-login restart when the socket opens but `ibkr-check` still fails. The workflow does not restart on explicit IBKR market-data entitlement or competing-session errors (`354`, `10089`, `10197`), because a fresh Gateway login does not fix those account states. Gateway Ops allows up to 300 seconds per login attempt by default so stalled starts fail quickly instead of holding the shared e2-micro deploy path. First-time runtime repair is separately bounded at 780 seconds because the IB Gateway installer is CPU/disk heavy on the e2-micro; repeated runs should take the sentinel path and skip the heavy repair. Live configure checkpoints log offsets without deleting diagnostics, then waits for a new authentication dialog or a resumed API socket. A dialog only means approval is pending; success still requires the configured account, trading preview, and market-data API checks. A broker-resumed authenticated session does not need a new mobile notification.
 
 When the Gateway runtime sentinel is stale, Gateway Ops uploads the repair helpers as one small tarball through IAP SSH instead of SCP'ing each helper separately. The upload is still bounded at 4 minutes, then the bundle is extracted on the VM before the existing repair/install commands run. Diagnostic helpers are installed before the heavy repair starts, so a timeout or installer failure emits a compact GitHub error and redacted VM-side runtime diagnostics instead of a silent status-only failure.
 
@@ -121,3 +121,28 @@ Do not switch to `trading_mode=live` until:
 - The latest rebalance report is manually reviewed.
 
 IBKR authentication can still require operator action for mobile approval, session reset, or account prompts. The repo supervises and restarts Gateway, but it does not bypass broker authentication requirements.
+
+## Production verification prerequisites
+
+The repository currently contains generated `dev.env` and `stg.env`, but no
+`ops/deploy/environments/prd.env`. Bootstrap the real production WIF configuration and
+commit its generated non-secret environment file before production workflows can run.
+Do not copy another environment's project/account identifiers to make this check pass.
+
+`verify-market-data` and `verify-socket` select live mode for `prd`, so they cannot
+silently certify production using paper quote policy. Both require a deployed app;
+`verify-market-data` leaves the Gateway session untouched. `configure-live` still
+requires human mobile approval whenever IBKR requests it. Configuration names and
+ordinary notification log messages are not authentication evidence.
+
+After provisioning production, run `configure-live`, approve any IBKR prompt, and
+verify the configured live account, what-if trading permission, and entitled market
+data. Repeat `verify-market-data` during market hours: a market-closed soft pass is
+not proof of a fresh executable quote. Keep scheduled trading paused until the live
+readiness checklist is complete. These checks submit only a what-if preview, not a
+real order.
+
+Live deployments leave the app crontab paused. After a successful `configure-live`,
+Gateway Ops installs it only if the rendered app settings are `TRADING_MODE=live`
+and `ALLOW_LIVE_TRADING=true`. A failed configure therefore leaves new scheduled
+trades disabled; manual live deployments must also finish this step.

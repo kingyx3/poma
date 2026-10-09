@@ -291,6 +291,7 @@ def _normalise_snapshot(rows: list[dict[str, Any]], require_price: bool = False)
         if column in frame
     ]
     frame = frame[columns].copy()
+    frame = frame.dropna(subset=["ticker"])
     frame["ticker"] = frame["ticker"].astype(str).str.upper().str.strip()
     for column in [
         "market_cap",
@@ -305,6 +306,7 @@ def _normalise_snapshot(rows: list[dict[str, Any]], require_price: bool = False)
         if column in frame:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
     required_subset = ["ticker", "market_cap"] + (["price"] if require_price else [])
+    frame = frame.replace([float("inf"), float("-inf")], float("nan"))
     frame = frame.dropna(subset=required_subset)
     frame = frame[frame["ticker"] != ""]
     frame = frame[frame["market_cap"] > 0]

@@ -187,7 +187,7 @@ def test_gateway_wait_helper_runs_locally_on_vm_and_prints_progress() -> None:
     helper = WAIT_HELPER.read_text(encoding="utf-8")
 
     for snippet in (
-        "configure_requires_fresh_2fa=true",
+        "configure_requires_authenticated_api=true",
         "Fresh 2FA startup classification",
         "Fresh IBKR mobile 2FA/login-auth evidence detected",
         "Gateway API socket opened before fresh IBKR mobile 2FA evidence",

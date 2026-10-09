@@ -7,7 +7,7 @@ from poma.models import OrderSide
 from poma.order_lifecycle import OrderLedgerEntry, OrderLifecycleState
 
 
-def test_close_unreported_cancel_pending_order_as_cancelled() -> None:
+def test_missing_cancel_pending_order_requires_terminal_evidence() -> None:
     entry = OrderLedgerEntry(
         ledger_key="poma:run-1:0:AAPL:BUY",
         order_ref="poma:run-1:0:AAPL:BUY",
@@ -27,10 +27,10 @@ def test_close_unreported_cancel_pending_order_as_cancelled() -> None:
 
     updated = ExecutionManager._close_unreported_open_entry(entry, datetime.now(UTC))
 
-    assert updated.lifecycle_state == OrderLifecycleState.CANCELLED
-    assert updated.raw_status == "Cancelled"
-    assert updated.remaining_qty == 0.0
-    assert updated.terminal_reason == "cancelled after 300s unfilled"
+    assert updated.lifecycle_state == OrderLifecycleState.UNKNOWN
+    assert updated.raw_status == "NotOpenUnverified"
+    assert updated.remaining_qty == 1.0
+    assert not updated.is_terminal
 
 
 def test_close_unreported_non_cancel_order_stays_unresolved() -> None:

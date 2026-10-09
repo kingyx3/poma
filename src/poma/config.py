@@ -57,6 +57,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        allow_inf_nan=False,
     )
 
     app_env: str = Field(default="development", alias="APP_ENV")

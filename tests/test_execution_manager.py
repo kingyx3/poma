@@ -223,7 +223,7 @@ def test_check_stale_orders_cancel_policy_cancels_prior_session_orders(tmp_path:
     check = manager.check_stale_orders("2026-07-01", "run-2")
 
     assert broker.cancelled_order_ids == [1]
-    assert not any("block execution" in warning for warning in check.warnings)
+    assert any("block execution" in warning for warning in check.warnings)
     open_orders = store.load_open_orders()
     assert len(open_orders) == 1
     assert open_orders[0].lifecycle_state == OrderLifecycleState.CANCEL_PENDING
@@ -286,7 +286,7 @@ def test_check_stale_orders_cancel_policy_cancels_same_session_different_run_ord
     check = manager.check_stale_orders("2026-07-01", "run-2")
 
     assert broker.cancelled_order_ids == [1]
-    assert not any("block execution" in warning for warning in check.warnings)
+    assert any("block execution" in warning for warning in check.warnings)
 
 
 def test_reconcile_replaces_once_after_replace_after_seconds(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -199,6 +200,8 @@ class ExecutionManager:
             refreshed = self.broker.account_snapshot()
         except Exception as exc:  # noqa: BLE001 - fail closed on an unreadable post-sell cash read
             return f"unable to refresh broker cash before submitting buys; block buys: {exc}"
+        if not math.isfinite(refreshed.cash_usd):
+            return "broker returned non-finite cash; block buys"
         if refreshed.cash_usd + 1e-6 < buy_cash_required:
             return (
                 f"refreshed broker cash (${refreshed.cash_usd:,.2f}) does not cover planned buy "
@@ -240,6 +243,12 @@ class ExecutionManager:
             results_by_ticker[trade.ticker] = result
         if not submittable:
             return
+        # Persist uncertainty BEFORE crossing the network boundary. A process killed after
+        # placeOrder but before its first callback must never leave a retryable PLANNED row.
+        for trade in submittable:
+            self._record_result(plan, trade, self._blocked_result(
+                trade, "SubmissionUnconfirmed", "submission started; broker outcome requires reconciliation"
+            ))
         phase_results = self.broker.submit_trades(
             submittable,
             status_callback=self._wrap_callback(plan, status_callback),
@@ -435,9 +444,11 @@ class ExecutionManager:
                         group_cancelled.append(entry.ledger_key)
                 cancelled.extend(group_cancelled)
                 warnings.append(
-                    f"cancelled {len(group_cancelled)} open order(s) from {label} before planning "
+                    f"requested cancellation of {len(group_cancelled)} open order(s) from {label} before planning "
                     f"({tickers})"
                 )
+                if group_cancelled:
+                    warnings.append("cancellation awaiting broker terminal confirmation; block execution")
                 unresolved_count = len(group) - len(group_cancelled)
                 if unresolved_count:
                     warnings.append(
@@ -523,28 +534,14 @@ class ExecutionManager:
 
     @staticmethod
     def _close_unreported_open_entry(entry: OrderLedgerEntry, now: datetime) -> OrderLedgerEntry:
-        """Resolve a local open row only when the final broker state is actually known.
-
-        A confirmed cancel request followed by disappearance from IBKR's open-order set can be
-        classified ``cancelled``. Otherwise "not open" is not proof of expiration: the order may
-        have filled, been rejected, or been cancelled outside POMA while disconnected. Keep that
-        row ``UNKNOWN`` and non-terminal so it blocks duplicate resubmission and future sessions
-        until broker history/operator evidence establishes the final state.
-        """
-        cancel_requested = entry.lifecycle_state == OrderLifecycleState.CANCEL_PENDING or entry.raw_status == "PendingCancel"
-        if cancel_requested:
-            lifecycle_state = OrderLifecycleState.CANCELLED
-            raw_status = "Cancelled"
-            remaining_qty = 0.0
-            terminal_reason = entry.terminal_reason or "broker no longer reports this POMA order as open after cancel request"
-        else:
-            lifecycle_state = OrderLifecycleState.UNKNOWN
-            raw_status = "NotOpenUnverified"
-            remaining_qty = entry.remaining_qty or max(entry.quantity - entry.filled_qty, 0.0)
-            terminal_reason = (
-                "broker no longer reports this POMA order as open, but its final state is unverified; "
-                "keeping it unresolved to prevent duplicate resubmission"
-            )
+        """Disappearance is not proof of cancellation: a fill can race a cancel request."""
+        lifecycle_state = OrderLifecycleState.UNKNOWN
+        raw_status = "NotOpenUnverified"
+        remaining_qty = entry.remaining_qty or max(entry.quantity - entry.filled_qty, 0.0)
+        terminal_reason = (
+            "broker no longer reports this POMA order as open, but its final state is unverified; "
+            "keeping it unresolved to prevent duplicate resubmission"
+        )
         return replace(
             entry,
             lifecycle_state=lifecycle_state,
@@ -580,6 +577,12 @@ class ExecutionManager:
             if new_limit is None:
                 return None
             new_ref = f"{entry.ledger_key}:r{entry.replace_count + 1}"
+            # Track the replacement identity before cancel-and-submit crosses the network.
+            # If the process dies, unresolved replacement intent blocks blind resubmission.
+            self.store.upsert(replace(
+                entry, order_ref=new_ref, lifecycle_state=OrderLifecycleState.REPLACE_PENDING,
+                raw_status="ReplacementUnconfirmed", replace_count=entry.replace_count + 1,
+            ))
             snapshot = self.broker.replace_order(
                 order_id=entry.order_id,
                 ticker=entry.ticker,
