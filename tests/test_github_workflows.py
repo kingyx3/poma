@@ -200,6 +200,7 @@ def test_auto_cicd_builds_and_deploys_the_ref_under_test() -> None:
 
     # Image-affecting changes must trigger the build+deploy path so a PR validates its own image.
     deploy_paths = workflow.split("is_deploy_path()", 1)[1].split("is_gateway_path()", 1)[0]
+    assert "ops/scripts/validate_deployment_plan.py" in deploy_paths
     assert "constraints.txt" in deploy_paths
     assert "docker-compose.vm.yml" in deploy_paths
     assert ".github/workflows/build-app-image.yml" in deploy_paths

@@ -81,6 +81,7 @@ jobs:
               ops/scripts/render_env.py|\
               ops/scripts/resolve_gcp_deploy_env.sh|\
               ops/scripts/validate_runtime_config.py|\
+              ops/scripts/validate_deployment_plan.py|\
               ops/scripts/validate_data_provider.py)
                 return 0
                 ;;

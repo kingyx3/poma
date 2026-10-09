@@ -19,6 +19,7 @@ from poma.broker import build_broker
 from poma.config import TradingMode, get_settings
 from poma.order_lifecycle import OrderLedgerEntry, OrderLifecycleState
 from poma.order_store import OrderStore
+from poma.runtime_lock import RuntimeBusy, runtime_lock
 
 _ZERO_TOLERANCE = 1e-9
 _STALE_RAW_STATUS = "NotOpenUnverified"
@@ -158,6 +159,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    try:
+        with runtime_lock(get_settings().state_dir):
+            return _resolve()
+    except RuntimeBusy as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _resolve() -> int:
     args = _parse_args()
     if not args.apply:
         raise SystemExit("refusing to mutate without --apply")

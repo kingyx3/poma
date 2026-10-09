@@ -21,6 +21,18 @@ cron, GitHub workflows, Terraform and operational documentation.
 | Medium | Provider normalization converted missing tickers into strings and accepted infinite prices/caps. | Drop missing tickers and non-finite required values. |
 | Medium | History lookup sorted full paths, allowing an older current-layout snapshot to beat newer legacy history. | Compare dates across layouts and prefer current layout only on equal dates; save CSV snapshots atomically. |
 
+## Follow-up after merge to main (`eb55427`)
+
+- CLI `rebalance`, `monitor`, `reconcile-orders` and the operator resolution helper
+  share a nonblocking process lock in `STATE_DIR`, covering decisions, broker calls
+  and durable writes. Manual rebalance returns exit 75 on contention; scheduled
+  commands skip that invocation. Tests cover process death, exceptions, CLI exclusion
+  and independent state directories. The existing host cron lock remains in place.
+- Routine Terraform deploys inspect the saved plan before apply and reject deletion,
+  replacement or removal from management of VM/disk resources. Unknown protected
+  actions and malformed/incomplete plans fail closed. Fresh creation and in-place
+  updates remain supported. Explicit undeploy remains a destructive operator action.
+
 ## Validation
 
 Baseline: 408 tests passed; Ruff passed. Added behavioral regression tests for the
@@ -41,12 +53,14 @@ was used for verification.
 - **Live deployment now pauses scheduling until Gateway verification succeeds.** Manual live
   deployments must be followed by configure-live; a failed configure leaves scheduling paused.
   This protects new schedules, not containers already running before a deployment starts.
-- **VM replacement can lose local history:** Terraform replaces the instance when startup
-  changes, and state is on its boot disk. Back up and verify restoration of order/state/data
-  before any replacement. Atomic files protect process crashes, not disk destruction.
-- **Serialization is an operational requirement:** scheduled commands share the existing
-  flock wrapper. Run manual mutations under that same lock; atomic snapshots are not a
-  multi-writer transaction database.
+- **VM replacement needs a migration:** startup changes can require replacement and state
+  is on the boot disk. Routine deploy now refuses that plan. Pause trading, drain commands,
+  back up and verify restoration of order/state/data before a reviewed migration. Explicit
+  undeploy or out-of-band cloud deletion can still destroy the disk; this is not a backup.
+- **Serialization scope is one shared state directory on one host:** supported mutation
+  commands now lock internally. Custom scripts calling persistence classes directly must
+  also acquire `poma.runtime_lock.runtime_lock`; atomic files alone are not multi-writer
+  transactions. All containers must mount the same durable state volume.
 - **Uncertainty is deliberately fail-closed:** truncated journals, missing broker terminal
   history or an interrupted replacement can require operator reconciliation. Do not delete
   the ledger or clear state to force execution without checking broker records.
