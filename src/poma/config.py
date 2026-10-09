@@ -152,6 +152,9 @@ class Settings(BaseSettings):
     # midpoint and never beyond the far side of the quote. Set equal to EXECUTION_MAX_SPREAD_BPS
     # to restore strict blocking.
     execution_wide_spread_max_bps: PositiveFloat = Field(default=150.0, alias="EXECUTION_WIDE_SPREAD_MAX_BPS")
+    # Where a first side-of-market order rests inside a two-sided quote: 0 = midpoint, 1 = far
+    # side (ask for buys, bid for sells). The reconcile replace then crosses at the far side.
+    execution_limit_aggression: float = Field(default=0.5, ge=0.0, le=1.0, alias="EXECUTION_LIMIT_AGGRESSION")
     # Whether a delayed broker quote may price an order. Defaults by trading mode when unset:
     # true for dry_run/paper (accounts commonly lack the separate IBKR "API market data"
     # real-time opt-in even when delayed data is available), false for live (deploy validation

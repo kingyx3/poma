@@ -24,7 +24,13 @@ from poma.broker import CancelNotConfirmed, IbkrBroker
 from poma.cli import _retryable_outcome_reason
 from poma.engine import RebalanceOutcome
 from poma.execution_manager import ExecutionManager
-from poma.execution_pricing import WIDE_SPREAD_MIDPOINT_BASIS, apply_execution_quotes, select_execution_price
+from poma.execution_pricing import (
+    WIDE_SPREAD_MIDPOINT_BASIS,
+    apply_execution_quotes,
+    inside_spread_limit_price,
+    price_from_quote,
+    select_execution_price,
+)
 from poma.models import ExecutionQuote, OpenOrderSnapshot, OrderResult, OrderSide, RebalancePlan
 from poma.order_lifecycle import (
     CONTRACT_UNRESOLVED_STATUS,
@@ -43,26 +49,71 @@ def test_wide_spread_is_blocked_while_quote_retries_remain() -> None:
     assert "wide quote" in warnings[0]
 
 
-def test_final_attempt_prices_moderately_wide_spread_off_midpoint_capped_at_ask() -> None:
-    settings = make_settings(LIMIT_OFFSET_BPS=100)
+def test_final_attempt_prices_moderately_wide_spread_inside_the_spread() -> None:
     trade = _pricing_trade(notional=200.0)
     repriced, warnings = apply_execution_quotes(
-        [trade], {"AAPL": _quote(bid=99.0, ask=99.75)}, settings, allow_wide_spread=True
+        [trade], {"AAPL": _quote(bid=99.0, ask=99.75)}, make_settings(), allow_wide_spread=True
     )
     assert warnings == []
     assert repriced[0].reference_price == pytest.approx(99.375)
     assert repriced[0].reference_price_basis == WIDE_SPREAD_MIDPOINT_BASIS
-    # Midpoint + 100bps would be ~100.37; the limit never pays more than the ask.
-    assert repriced[0].limit_price == 99.75
+    # Halfway from the 99.375 midpoint to the 99.75 ask, rounded down to the cent.
+    assert repriced[0].limit_price == 99.56
 
 
-def test_sell_wide_spread_limit_is_floored_at_bid() -> None:
-    settings = make_settings(LIMIT_OFFSET_BPS=100)
+def test_sell_wide_spread_limit_rests_inside_the_spread() -> None:
     trade = _pricing_trade(side=OrderSide.SELL, notional=200.0)
     repriced, _ = apply_execution_quotes(
-        [trade], {"AAPL": _quote(bid=99.0, ask=99.75)}, settings, allow_wide_spread=True
+        [trade], {"AAPL": _quote(bid=99.0, ask=99.75)}, make_settings(), allow_wide_spread=True
     )
-    assert repriced[0].limit_price == 99.0
+    assert repriced[0].limit_price == 99.19
+
+
+@pytest.mark.parametrize(
+    ("side", "aggression", "expected"),
+    [
+        (OrderSide.BUY, 0.0, 100.00),
+        (OrderSide.BUY, 0.5, 100.02),
+        (OrderSide.BUY, 1.0, 100.05),
+        (OrderSide.SELL, 0.0, 100.00),
+        (OrderSide.SELL, 0.5, 99.98),
+        (OrderSide.SELL, 1.0, 99.95),
+    ],
+)
+def test_inside_spread_limit_rounds_passively_and_stays_within_quote(side, aggression, expected) -> None:
+    assert inside_spread_limit_price(side, 99.95, 100.05, aggression) == expected
+
+
+def test_one_tick_spread_buy_rests_on_bid_and_sell_on_ask() -> None:
+    assert inside_spread_limit_price(OrderSide.BUY, 50.00, 50.01, 0.5) == 50.00
+    assert inside_spread_limit_price(OrderSide.SELL, 50.00, 50.01, 0.5) == 50.01
+
+
+def test_sub_dollar_quotes_use_sub_penny_ticks() -> None:
+    assert inside_spread_limit_price(OrderSide.BUY, 0.5000, 0.5010, 0.5) == 0.5007
+
+
+def test_full_aggression_takes_the_far_side_without_extra_offset() -> None:
+    settings = make_settings(EXECUTION_LIMIT_AGGRESSION=1.0)
+    repriced, _ = apply_execution_quotes([_pricing_trade()], {"AAPL": _quote()}, settings)
+    assert repriced[0].limit_price == 200.10
+
+
+def test_replace_crosses_a_wide_spread_exactly_at_the_far_side() -> None:
+    pricing = price_from_quote(
+        _quote(bid=99.0, ask=99.75), OrderSide.BUY, make_settings(), 15.0, allow_wide_spread=True
+    )
+    assert pricing.limit_price == 99.75
+
+
+def test_replace_on_a_normal_spread_still_crosses_with_price_improvement() -> None:
+    pricing = price_from_quote(_quote(), OrderSide.BUY, make_settings(), 15.0)
+    assert pricing.limit_price == round(200.10 * 1.0015, 2)
+
+
+def test_limit_aggression_must_be_between_zero_and_one() -> None:
+    with pytest.raises(ValueError):
+        make_settings(EXECUTION_LIMIT_AGGRESSION=1.5)
 
 
 def test_spread_beyond_hard_ceiling_is_still_blocked() -> None:

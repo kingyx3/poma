@@ -603,7 +603,8 @@ def test_submit_plan_blocks_repriced_buy_when_limit_cash_exceeds_refreshed_cash(
     tmp_path: Path,
 ) -> None:
     broker = RecordingBroker()
-    broker.cash_usd = 500.50
+    # 5 shares at the inside-spread limit of $100.02 need $500.10.
+    broker.cash_usd = 500.05
     broker.quotes_override = {"AAPL": _quote("AAPL", bid=99.95, ask=100.05)}
     store = OrderStore(tmp_path)
     manager = ExecutionManager(broker, store, make_settings())

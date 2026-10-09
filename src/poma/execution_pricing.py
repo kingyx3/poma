@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import isfinite
+from math import ceil, floor, isfinite
 
 from poma.config import ExecutionPriceBasis, Settings
 from poma.execution_policy import resolve_execution_rule, rounded_execution_quantity
@@ -18,6 +18,30 @@ def build_limit_price(side: OrderSide, reference_price: float, offset_bps: float
     """
     multiplier = 1 + offset_bps / 10_000 if side == OrderSide.BUY else 1 - offset_bps / 10_000
     return round(reference_price * multiplier, 2)
+
+
+def price_tick(price: float) -> float:
+    """US equity minimum price increment: $0.01 at or above $1, $0.0001 below."""
+    return 0.01 if price >= 1.0 else 0.0001
+
+
+def inside_spread_limit_price(side: OrderSide, bid: float, ask: float, aggression: float) -> float:
+    """A limit inside the spread: ``aggression`` of the way from the midpoint to the far side.
+
+    0 rests at the midpoint, 1 takes the far side (the ask for a BUY, the bid for a SELL).
+    The price is rounded to the tick in the passive direction (down for a BUY, up for a SELL)
+    and always stays within [bid, ask], so it never pays more than the far side of the quote.
+    """
+    midpoint = (bid + ask) / 2
+    half_spread = (ask - bid) / 2
+    tick = price_tick(midpoint)
+    if side == OrderSide.BUY:
+        raw = midpoint + aggression * half_spread
+        rounded = floor(raw / tick + 1e-9) * tick
+        return round(min(max(rounded, bid), ask), 4)
+    raw = midpoint - aggression * half_spread
+    rounded = ceil(raw / tick - 1e-9) * tick
+    return round(max(min(rounded, ask), bid), 4)
 
 
 # --- Quote spread ---------------------------------------------------------------------------
@@ -73,22 +97,30 @@ def price_from_quote(
     offset_bps: float,
     *,
     allow_wide_spread: bool = False,
+    aggression: float | None = None,
 ) -> QuotePricing:
-    """Reference price plus offset limit price for one trade.
+    """Reference price plus limit price for one trade, from one fresh broker quote.
 
-    A wide-spread midpoint reference is the only case where the offset limit is capped: it is
-    never allowed past the far side of the quote (the ask for a BUY, the bid for a SELL), so a
-    wide-spread order is always at least as passive as plain side-of-market pricing.
+    With ``aggression`` set and a two-sided quote under side-of-market pricing, the limit is
+    placed inside the spread (see ``inside_spread_limit_price``) instead of at the far side plus
+    ``offset_bps``: a first order then waits to be filled at a better price than crossing the
+    whole spread, and the single reconcile replace crosses if it has not filled.
+
+    Without ``aggression`` (the reconcile replace) the limit is the reference offset by
+    ``offset_bps``, except that a wide-spread quote is crossed exactly at its far side: the
+    replace must be more aggressive than the inside-spread original, yet a wide-spread order
+    never pays more than plain side-of-market pricing.
     """
     price, basis, warnings = _select_execution_price(quote, side, settings, allow_wide_spread=allow_wide_spread)
     if price is None:
         return QuotePricing(None, None, basis, warnings)
+    two_sided = quote.bid is not None and quote.ask is not None
+    inside_basis = basis in (ExecutionPriceBasis.SIDE_OF_MARKET.value, WIDE_SPREAD_MIDPOINT_BASIS)
+    if aggression is not None and two_sided and inside_basis:
+        return QuotePricing(price, inside_spread_limit_price(side, quote.bid, quote.ask, aggression), basis, warnings)
+    if basis == WIDE_SPREAD_MIDPOINT_BASIS and two_sided:
+        return QuotePricing(price, inside_spread_limit_price(side, quote.bid, quote.ask, 1.0), basis, warnings)
     limit_price = build_limit_price(side, price, offset_bps)
-    if basis == WIDE_SPREAD_MIDPOINT_BASIS:
-        if side == OrderSide.BUY and quote.ask is not None:
-            limit_price = min(limit_price, round(quote.ask, 2))
-        elif side == OrderSide.SELL and quote.bid is not None:
-            limit_price = max(limit_price, round(quote.bid, 2))
     return QuotePricing(price, limit_price, basis, warnings)
 
 
@@ -196,7 +228,12 @@ def apply_execution_quotes(
             continue
 
         pricing = price_from_quote(
-            quote, trade.side, settings, settings.limit_offset_bps, allow_wide_spread=allow_wide_spread
+            quote,
+            trade.side,
+            settings,
+            settings.limit_offset_bps,
+            allow_wide_spread=allow_wide_spread,
+            aggression=settings.execution_limit_aggression,
         )
         price, limit_price = pricing.reference_price, pricing.limit_price
         if price is None or limit_price is None:
