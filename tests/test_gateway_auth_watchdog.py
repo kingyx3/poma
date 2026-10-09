@@ -351,3 +351,49 @@ def test_check_only_never_claims_success_when_skipped(installed_watchdog, monkey
     assert watchdog.main(check_only=True) == 1
     watchdog.IBC_CONFIG.unlink()
     assert watchdog.main(check_only=True) == 1
+
+
+@pytest.mark.parametrize('name', ['poma-command.lock', 'poma-runtime.lock'])
+def test_privileged_lock_open_refuses_symlinks_before_chown(tmp_path, monkeypatch, name):
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    victim = tmp_path / 'protected-file'
+    victim.write_text('retained')
+    (state_dir / name).symlink_to(victim)
+    changed = []
+    monkeypatch.setattr(watchdog.os, 'fchown', lambda fd, uid, gid: changed.append(os.fstat(fd).st_ino))
+    with pytest.raises(OSError), watchdog.command_locks(state_dir):
+        pytest.fail('symlink lock was accepted')
+    assert victim.stat().st_ino not in changed
+    assert victim.read_text() == 'retained'
+
+
+def test_privileged_lock_open_refuses_hard_links_and_directory_links(tmp_path):
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    victim = tmp_path / 'protected-file'
+    victim.write_text('retained')
+    os.link(victim, state_dir / 'poma-command.lock')
+    with pytest.raises(ValueError), watchdog.command_locks(state_dir):
+        pytest.fail('hard-linked lock was accepted')
+    alias = tmp_path / 'alias'
+    alias.symlink_to(state_dir, target_is_directory=True)
+    with pytest.raises(OSError), watchdog.command_locks(alias):
+        pytest.fail('symlinked state directory was accepted')
+
+
+def test_volume_replacement_during_probe_cannot_restart_gateway(installed_watchdog, monkeypatch):
+    path, commands = installed_watchdog
+    watchdog.save_state(watchdog.STATE_PATH, watchdog.State(failures=2))
+
+    def compose(command, timeout):
+        if command[0] == 'gateway-auth-check':
+            (path / 'state').rename(path / 'previous-state')
+            (path / 'state').mkdir()
+            return result_for('unavailable', path / 'state')
+        return subprocess.CompletedProcess(command, 0, '', '')
+
+    monkeypatch.setattr(watchdog, 'compose', compose)
+    assert watchdog.main() == 0
+    assert ['systemctl', 'restart', 'ibgateway'] not in commands
+    assert watchdog.load_state(watchdog.STATE_PATH).restarts == []

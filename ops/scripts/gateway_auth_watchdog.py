@@ -10,6 +10,7 @@ import fcntl
 import json
 import math
 import os
+import stat
 import subprocess
 import tempfile
 import time
@@ -108,21 +109,26 @@ def save_state(path: Path, state: State) -> None:
 
 
 @contextmanager
-def command_locks(state_dir: Path) -> Iterator[None]:
+def command_locks(state_dir: Path) -> Iterator[os.stat_result]:
     # Both the cron host wrapper and direct CLI commands must be idle. Lock files
     # created by root inherit the mounted state directory's app ownership.
     descriptors = []
-    owner = state_dir.stat()
+    directory_fd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
+        owner = os.fstat(directory_fd)
         for name in ('poma-command.lock', 'poma-runtime.lock'):
-            fd = os.open(state_dir / name, os.O_CREAT | os.O_RDWR, 0o600)
+            fd = os.open(name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=directory_fd)
             descriptors.append(fd)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError('watchdog lock must be a regular file without aliases')
             os.fchown(fd, owner.st_uid, owner.st_gid)
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+        yield owner
     finally:
         for fd in reversed(descriptors):
             os.close(fd)
+        os.close(directory_fd)
 
 
 def run(command: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -141,7 +147,9 @@ def compose(command: list[str], timeout: int) -> subprocess.CompletedProcess[str
         run(['docker', 'rm', '-f', CONTAINER_NAME], timeout=15)
 
 
-def authentication_status(result: subprocess.CompletedProcess[str], state_dir: Path) -> str:
+def authentication_status(
+    result: subprocess.CompletedProcess[str], state_dir: Path, *, expected_state: os.stat_result | None = None,
+) -> str:
     # Docker/CLI crashes and unknown commands are NOT authentication failures.
     # Never restart Gateway because an app upgrade or docker daemon is broken.
     try:
@@ -151,7 +159,7 @@ def authentication_status(result: subprocess.CompletedProcess[str], state_dir: P
         if result.returncode != expected_code:
             return 'probe_error'
         if status != 'configuration_error':
-            mounted = state_dir.stat()
+            mounted = expected_state if expected_state is not None else state_dir.stat()
             if (payload.get('state_inode'), payload.get('state_device')) != (mounted.st_ino, mounted.st_dev):
                 return 'configuration_error'
         return status
@@ -180,8 +188,10 @@ def tick(*, check_only: bool = False) -> int:
         print('Watchdog skipped: Gateway startup/mobile approval grace period.')
         return 0
     try:
-        with command_locks(state_dir):
-            status = authentication_status(compose(['gateway-auth-check'], timeout=150), state_dir)
+        with command_locks(state_dir) as locked_dir:
+            status = authentication_status(
+                compose(['gateway-auth-check'], timeout=150), state_dir, expected_state=locked_dir,
+            )
             if check_only:
                 print(f'Gateway watchdog verification: {status}')
                 return 0 if status in {'authenticated', 'disabled'} else 1
