@@ -48,8 +48,8 @@ IBC_DIR="/opt/ibc"
 IBC_HOME="/home/poma/ibc"
 IBC_CONFIG="${IBC_HOME}/config.ini"
 
-read -r -p "IBKR login id: " ib_login_id
-read -r -s -p "IBKR password: " ib_password
+IFS= read -r -p "IBKR login id: " ib_login_id
+IFS= read -r -s -p "IBKR password: " ib_password
 echo
 read -r -p "Trading mode [paper/live] (default paper): " trading_mode
 trading_mode="${trading_mode:-paper}"
@@ -75,8 +75,8 @@ set_ini() {
   local value="$2"
   local tmp
   tmp="$(mktemp)"
-  awk -v key="${key}" -v value="${value}" '
-    BEGIN { done = 0 }
+  POMA_INI_VALUE="${value}" awk -v key="${key}" '
+    BEGIN { done = 0; value = ENVIRON["POMA_INI_VALUE"] }
     index($0, key "=") == 1 { print key "=" value; done = 1; next }
     { print }
     END { if (!done) print key "=" value }

@@ -380,7 +380,7 @@ def main() -> int:
             socket_budget = min(timeout_seconds, remaining)
             socket_status = wait_for_stable_api_socket(attempt, socket_budget)
             if socket_status == 0:
-                check_status, check_output = remote_capture(ibkr_check_command(mode, required), timeout=ibkr_check_timeout_seconds)
+                check_status, check_output = remote_capture(ibkr_check_command(mode, required), timeout=max(1, min(ibkr_check_timeout_seconds, int(hard_deadline - time.monotonic()))))
                 if check_status == 0:
                     print("IBKR API handshake, trading preview, and market-data readiness check succeeded; Gateway is ready to submit orders.")
                     return 0
@@ -512,7 +512,7 @@ def main() -> int:
         if repair_runtime() != 0:
             return 1
         remote("sudo systemctl restart ibgateway || true", timeout=180)
-        return api_ready("paper", required=False)
+        return api_ready("live" if deploy_environment == "prd" else "paper", required=True)
     if action == "verify-market-data":
         # Read-only market data entitlement verification: no repair, no restart. Runs poma
         # ibkr-check against the *currently running* Gateway session, so a green run proves the
@@ -520,7 +520,7 @@ def main() -> int:
         # hours; REQUIRE_LIVE_EXECUTION_QUOTES in the deployed .env decides how strict that is).
         return timed(
             "Market data entitlement check (poma ibkr-check)",
-            lambda: remote(ibkr_check_command("paper", required=True), timeout=ibkr_check_timeout_seconds),
+            lambda: remote(ibkr_check_command("live" if deploy_environment == "prd" else "paper", required=True), timeout=ibkr_check_timeout_seconds),
         )
 
     if action not in {"configure-paper", "configure-live"}:
@@ -532,6 +532,8 @@ def main() -> int:
     if repair_runtime() != 0:
         return 1
     mode = action.removeprefix("configure-")
+    if any(char in value for value in (login_id, login_secret) for char in "\r\n\x00"):
+        raise SystemExit("Broker credentials must be single-line values")
     configure_input = f"{login_id}\n{login_secret}\n{mode}\n"
     if timed(
         "Configure IBC auth values",
@@ -549,7 +551,8 @@ def main() -> int:
         return 1
     if timed("Validate IBC configuration", lambda: remote(f"sudo poma-diagnose-ibgateway validate --mode {mode}", timeout=120)) != 0:
         return 1
-    timed("Clear stale Gateway auth logs", lambda: remote("sudo poma-wait-ibgateway-2fa --truncate-logs-only", timeout=120))
+    if timed("Checkpoint Gateway auth logs", lambda: remote("sudo poma-wait-ibgateway-2fa --checkpoint-logs-only", timeout=120)) != 0:
+        return 1
     print("Force fresh ibgateway login after IBC configuration")
     # Fresh 2FA challenge wait is enforced for live configure only; paper skips it.
     if timed("Restart ibgateway after IBC configuration", lambda: remote("sudo systemctl restart ibgateway", timeout=240)) != 0:
@@ -571,11 +574,25 @@ def main() -> int:
         print("No fresh IBKR mobile 2FA evidence appeared; refusing live configure success.", file=sys.stderr)
         diagnose(
             "live-2fa",
-            "Fresh live 2FA approval evidence was not observed before the timeout.",
+            "Live login did not reach a fresh challenge or API readiness before the timeout.",
             "Approve the IBKR Mobile prompt and rerun configure-live. If no prompt appears, inspect the IBC login-stage diagnostics.",
         )
         return 1
-    return api_ready(mode, required=True)
+    readiness = api_ready(mode, required=True)
+    if readiness != 0:
+        return readiness
+    # Deploy removed the app crontab. Arm it only after live authentication and only
+    # when the rendered app config explicitly opts into live trading.
+    return timed(
+        "Enable authenticated live schedule",
+        lambda: remote(
+            "if sudo grep -qx TRADING_MODE=live /opt/poma/.env && "
+            "sudo grep -qx ALLOW_LIVE_TRADING=true /opt/poma/.env; then "
+            "sudo -u poma crontab /opt/poma/ops/cron/poma.cron && sudo systemctl restart cron; "
+            "else echo 'App is not configured for live trading; leaving its schedule unchanged.'; fi",
+            timeout=120,
+        ),
+    )
 
 
 if __name__ == "__main__":

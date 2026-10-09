@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import time
@@ -13,11 +14,12 @@ LOG_PATHS = (
     Path("/var/log/poma/ibgateway"),
     Path("/tmp/poma-ibgateway"),
 )
+CHECKPOINT_PATH = Path("/var/lib/poma/ib-gateway-auth-log-checkpoint.json")
+# Match runtime dialog/state events, never IBC's configuration dump or generic notifications.
 TWO_FA_HINTS = re.compile(
-    r"second factor|2fa|two[- ]?factor|twofa|mfa|multi[- ]?factor|"
-    r"mobile authentication|mobile app|ib key|ibkr mobile|approve|approval|"
-    r"security code|verification code|authentication code|manual authentication|"
-    r"notification|challenge|awaiting.*auth|waiting.*auth",
+    r"(?:detected|opened|displayed).*?(?:Second Factor Authentication|Security Code Card Authentication)|"
+    r"(?:login state.*|setLoginState.*)TWO_FA_IN_PROGRESS|"
+    r"(?:awaiting|waiting for).*?(?:2fa|second factor|mobile.*approval)",
     re.IGNORECASE,
 )
 STARTUP_STAGE = re.compile(r"^STARTUP_STAGE=(.*)$", re.MULTILINE)
@@ -35,36 +37,40 @@ def run(command: list[str], timeout: int = 60) -> subprocess.CompletedProcess[st
     )
 
 
-def truncate_logs() -> int:
-    count = 0
+def checkpoint_logs() -> int:
+    checkpoint = {}
     for directory in LOG_PATHS:
-        if not directory.exists():
-            continue
-        for path in sorted(directory.rglob("*")):
-            if not path.is_file():
-                continue
-            try:
-                path.write_text("", encoding="utf-8")
-                count += 1
-            except OSError as exc:
-                print(f"warning: could not truncate {path}: {exc}")
-    print(f"truncated_gateway_auth_log_files={count}")
+        if directory.exists():
+            for path in directory.rglob("*"):
+                if path.is_file() and not path.is_symlink():
+                    st = path.stat()
+                    checkpoint[str(path)] = [st.st_ino, st.st_size]
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CHECKPOINT_PATH.write_text(json.dumps(checkpoint), encoding="utf-8")
+    print(f"checkpointed_gateway_auth_log_files={len(checkpoint)}")
     return 0
 
 
 def tail_log_text(log_lines: int) -> str:
+    checkpoint = json.loads(CHECKPOINT_PATH.read_text())
     chunks: list[str] = []
     for directory in LOG_PATHS:
         if not directory.exists():
             continue
         for path in sorted(directory.rglob("*")):
-            if not path.is_file():
+            if not path.is_file() or path.is_symlink():
                 continue
             try:
-                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                st = path.stat()
+                inode, offset = checkpoint.get(str(path), [st.st_ino, 0])
+                if inode != st.st_ino or st.st_size < offset:
+                    offset = 0
+                with path.open("rb") as handle:
+                    # Bound memory even when Gateway logs are large.
+                    handle.seek(max(offset, st.st_size - 256_000))
+                    lines = handle.read().decode("utf-8", errors="replace").splitlines()
             except OSError:
                 continue
-            chunks.append(f"--- {path} ---")
             chunks.extend(lines[-log_lines:])
     return "\n".join(chunks)
 
@@ -88,7 +94,7 @@ def wait_for_2fa(
 ) -> int:
     deadline = time.monotonic() + timeout_seconds
     attempt = 0
-    print("configure_requires_fresh_2fa=true")
+    print("configure_requires_authenticated_api=true")
     print(f"Waiting up to {timeout_seconds}s for fresh IBKR mobile 2FA evidence on the VM.")
     while time.monotonic() < deadline:
         attempt += 1
@@ -111,13 +117,13 @@ def wait_for_2fa(
         stage = extract(STARTUP_STAGE, result.stdout)
         action = extract(STARTUP_ACTION, result.stdout)
         log_text = tail_log_text(log_lines)
-        if TWO_FA_HINTS.search(log_text) or stage == "login-reached-2fa-pending":
+        if TWO_FA_HINTS.search(log_text):
             print("Fresh IBKR mobile 2FA/login-auth evidence detected in current logs.")
             return 0
         if stage == "api-socket-open":
             print("Gateway API socket opened before fresh IBKR mobile 2FA evidence.")
-            print_progress(log_lines)
-            return 3
+            print("Broker may have resumed an authenticated session; API/account/trading checks are still required.")
+            return 0
         if action == "fail":
             print(f"Gateway startup reached failing stage before fresh 2FA evidence: {stage}")
             print_progress(log_lines)
@@ -136,10 +142,12 @@ def main() -> int:
     parser.add_argument("--poll-seconds", type=int, default=5)
     parser.add_argument("--log-lines", type=int, default=80)
     parser.add_argument("--fail-no-progress-after", type=int, default=200)
-    parser.add_argument("--truncate-logs-only", action="store_true")
+    parser.add_argument("--checkpoint-logs-only", "--truncate-logs-only", action="store_true")
     args = parser.parse_args()
-    if args.truncate_logs_only:
-        return truncate_logs()
+    if args.checkpoint_logs_only:
+        return checkpoint_logs()
+    if min(args.timeout_seconds, args.poll_seconds, args.log_lines, args.fail_no_progress_after) <= 0:
+        parser.error("timeouts, poll interval and log lines must be positive")
     return wait_for_2fa(
         timeout_seconds=args.timeout_seconds,
         poll_seconds=args.poll_seconds,

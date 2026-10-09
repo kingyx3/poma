@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from math import isfinite
 
 from poma.config import ExecutionPriceBasis, Settings
 from poma.execution_policy import resolve_execution_rule, rounded_execution_quantity
@@ -46,6 +47,14 @@ def select_execution_price(
     treats it as a hard stop rather than a soft fallback.
     """
     ticker = quote.ticker
+    numeric_fields = (quote.bid, quote.ask, quote.last, quote.age_seconds, quote.spread_bps)
+    if any(value is not None and not isfinite(value) for value in numeric_fields):
+        return None, [f"non-finite execution quote for {ticker}; block execution"]
+    if quote.age_seconds is not None and quote.age_seconds < 0:
+        return None, [f"invalid quote age for {ticker}; block execution"]
+    if ((quote.bid is not None and quote.ask is not None and quote.bid > quote.ask)
+            or (quote.spread_bps is not None and quote.spread_bps < 0)):
+        return None, [f"crossed execution quote for {ticker}; block execution"]
     if quote.is_delayed and not settings.allow_delayed_execution_quotes:
         return None, [
             f"delayed execution quote for {ticker} but ALLOW_DELAYED_EXECUTION_QUOTES=false; "
@@ -145,13 +154,17 @@ def apply_execution_quotes(
                     "below the tradable minimum for this instrument; skipping trade"
                 )
                 continue
+        limit_price = build_limit_price(trade.side, price, settings.limit_offset_bps)
+        if limit_price <= 0 or quantity * max(price, limit_price) > settings.max_order_notional_usd:
+            warnings.append(f"{trade.ticker}: repriced order exceeds price/notional safety limits; block execution")
+            continue
         repriced.append(
             replace(
                 trade,
                 quantity=quantity,
                 notional=quantity * price,
                 reference_price=price,
-                limit_price=build_limit_price(trade.side, price, settings.limit_offset_bps),
+                limit_price=limit_price,
                 reference_price_source=settings.execution_price_source.value,
                 reference_price_basis=settings.execution_price_basis.value,
                 reference_price_as_of_utc=quote.selected_price_as_of_utc,

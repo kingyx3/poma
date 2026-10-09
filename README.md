@@ -14,6 +14,7 @@ POMA is a low-cost Python scaffold for a personal long-only US equities portfoli
 | GCP free-tier deployment | [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md) |
 | IB Gateway operations | [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md) |
 | Day-to-day operations and troubleshooting | [`docs/operations-runbook.md`](docs/operations-runbook.md) |
+| Repository audit and open production gates | [`docs/repository-audit.md`](docs/repository-audit.md) |
 | Paper/live readiness gates | [`docs/production-readiness.md`](docs/production-readiness.md) |
 
 ## Portfolio model

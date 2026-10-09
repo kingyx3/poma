@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from poma.persistence import atomic_write_text
+
 SNAPSHOT_COLUMNS = [
     "ticker",
     "name",
@@ -40,7 +42,7 @@ class CapSnapshotHistory:
         frame["as_of"] = as_of.isoformat()
         columns = [column for column in SNAPSHOT_COLUMNS if column in frame.columns]
         path = self.dir / f"{as_of.isoformat()}.csv"
-        frame[columns].sort_values("market_cap_rank").to_csv(path, index=False)
+        atomic_write_text(path, frame[columns].sort_values("market_cap_rank").to_csv(index=False))
         return path
 
     def save_many(self, snapshots: dict[date, pd.DataFrame]) -> list[Path]:
@@ -59,4 +61,5 @@ class CapSnapshotHistory:
         for directory in [self.legacy_dir, self.dir]:
             if directory.exists():
                 paths.extend(p for p in directory.glob("*.csv") if p.stem <= cutoff)
-        return sorted(paths)
+        # Compare snapshot dates, not parent directory names. Prefer the current layout on ties.
+        return sorted(paths, key=lambda path: (path.stem, path.parent == self.dir))

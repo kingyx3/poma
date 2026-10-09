@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from poma.persistence import atomic_write_text
+
 RETRY_WAIT_STATUS = "retry_wait"
 TERMINAL_STATUSES = {
     "completed",
@@ -29,7 +31,7 @@ class LocalState:
 
     def _write(self, payload: dict[str, Any]) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        atomic_write_text(self.path, json.dumps(payload, indent=2, sort_keys=True))
 
     def session_status(self, session_date: str) -> str | None:
         payload = self._read()

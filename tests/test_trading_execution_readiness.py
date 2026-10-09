@@ -377,12 +377,12 @@ def test_ibkr_broker_does_not_emit_created_when_connection_drops_before_acceptan
     )
 
     assert instances[0].place_order_calls == 1
-    assert [result.status for result in results] == [BROKER_UNAVAILABLE_STATUS] * 2
-    assert [result.status for result in captured] == [BROKER_UNAVAILABLE_STATUS] * 2
+    assert [result.status for result in results] == ["SubmissionUnconfirmed", BROKER_UNAVAILABLE_STATUS]
+    assert [result.status for result in captured] == ["SubmissionUnconfirmed", BROKER_UNAVAILABLE_STATUS]
     assert all(result.order_id is None for result in results)
     assert all(result.filled == 0 for result in results)
     assert "Created" not in [result.status for result in captured]
-    assert "no further orders submitted" in str(results[0].message)
+    assert "submission outcome uncertain" in str(results[0].message)
 
 
 def test_engine_marks_all_cancelled_orders_as_no_orders_accepted() -> None:

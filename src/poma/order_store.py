@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterable
 from pathlib import Path
 
 from poma.order_lifecycle import OrderLedgerEntry
+from poma.persistence import atomic_write_text
 
 
 class OrderStore:
@@ -12,7 +14,7 @@ class OrderStore:
 
     ``open_orders.jsonl`` is a rewritten snapshot of every order not yet in a terminal state
     (one line per order, keyed by ``ledger_key``) so a fresh process can answer "what is still
-    open" without replaying history. ``order_events.jsonl`` is a pure append log of every
+    open"; the event log is authoritative for crash recovery. ``order_events.jsonl`` is a pure append log of every
     lifecycle transition ever recorded, kept for audit/debugging even after an order leaves
     the open snapshot.
     """
@@ -21,15 +23,34 @@ class OrderStore:
         self.orders_dir = state_dir / "orders"
         self.open_orders_path = self.orders_dir / "open_orders.jsonl"
         self.events_path = self.orders_dir / "order_events.jsonl"
+        self._cache: dict[str, OrderLedgerEntry] | None = None
+        self._cache_signature: tuple | None = None
+
+    def _signature(self) -> tuple:
+        return tuple(
+            (path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns) if path.exists() else None
+            for path in (self.open_orders_path, self.events_path)
+        )
 
     def load_open_orders(self) -> list[OrderLedgerEntry]:
-        if not self.open_orders_path.exists():
-            return []
-        entries = []
-        for line in self.open_orders_path.read_text().splitlines():
-            line = line.strip()
-            if line:
-                entries.append(OrderLedgerEntry.from_json(json.loads(line)))
+        return [entry for entry in self._latest_entries().values() if not entry.is_terminal]
+
+    def _latest_entries(self) -> dict[str, OrderLedgerEntry]:
+        # The fsynced event log is authoritative after a crash between append and snapshot.
+        # Read legacy snapshots too, so existing installations need no migration.
+        signature = self._signature()
+        if self._cache is not None and signature == self._cache_signature:
+            return self._cache.copy()
+        entries: dict[str, OrderLedgerEntry] = {}
+        for path in (self.open_orders_path, self.events_path):
+            if not path.exists():
+                continue
+            for line in path.read_text().splitlines():
+                if line.strip():
+                    entry = OrderLedgerEntry.from_json(json.loads(line))
+                    entries[entry.ledger_key] = entry
+        self._cache = entries.copy()
+        self._cache_signature = signature
         return entries
 
     def get(self, ledger_key: str) -> OrderLedgerEntry | None:
@@ -49,22 +70,7 @@ class OrderStore:
         keys = set(ledger_keys)
         if not keys:
             return {}
-        found: dict[str, OrderLedgerEntry] = {
-            entry.ledger_key: entry for entry in self.load_open_orders() if entry.ledger_key in keys
-        }
-        event_keys = keys - found.keys()
-        if event_keys and self.events_path.exists():
-            for line in self.events_path.read_text().splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                payload = json.loads(line)
-                ledger_key = payload.get("ledger_key")
-                if ledger_key in event_keys:
-                    # The event log is append-only; keep overwriting as we scan so the value left
-                    # at the end is the latest transition, not the initial planned entry.
-                    found[ledger_key] = OrderLedgerEntry.from_json(payload)
-        return found
+        return {key: entry for key, entry in self._latest_entries().items() if key in keys}
 
     def get_latest_run_trades(self, run_id: str) -> dict[tuple[str, str], OrderLedgerEntry]:
         """Return the latest entry for each ticker/side previously planned in one run.
@@ -74,39 +80,29 @@ class OrderStore:
         number of the remaining trades. Reusing the original ledger key by ``(ticker, side)``
         keeps orderRef idempotency stable even when those sequence offsets change.
         """
-        found: dict[tuple[str, str], OrderLedgerEntry] = {}
-        for entry in self.load_open_orders():
-            if entry.run_id == run_id:
-                found[(entry.ticker, entry.side.value)] = entry
-        if self.events_path.exists():
-            for line in self.events_path.read_text().splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                payload = json.loads(line)
-                if payload.get("run_id") != run_id:
-                    continue
-                entry = OrderLedgerEntry.from_json(payload)
-                found[(entry.ticker, entry.side.value)] = entry
-        return found
+        return {
+            (entry.ticker, entry.side.value): entry
+            for entry in self._latest_entries().values() if entry.run_id == run_id
+        }
 
     def upsert(self, entry: OrderLedgerEntry) -> None:
         """Record a lifecycle transition; drop the order from the open snapshot once terminal."""
-        entries = {existing.ledger_key: existing for existing in self.load_open_orders()}
-        if entry.is_terminal:
-            entries.pop(entry.ledger_key, None)
-        else:
-            entries[entry.ledger_key] = entry
-        self._save_open_orders(list(entries.values()))
+        entries = self._latest_entries()
+        entries[entry.ledger_key] = entry
         self._append_event(entry)
+        self._save_open_orders([value for value in entries.values() if not value.is_terminal])
+        self._cache = entries
+        self._cache_signature = self._signature()
 
     def _save_open_orders(self, entries: list[OrderLedgerEntry]) -> None:
         self.orders_dir.mkdir(parents=True, exist_ok=True)
         lines = [json.dumps(entry.to_json(), sort_keys=True) for entry in sorted(entries, key=lambda e: e.ledger_key)]
         content = "\n".join(lines)
-        self.open_orders_path.write_text(f"{content}\n" if content else "")
+        atomic_write_text(self.open_orders_path, f"{content}\n" if content else "")
 
     def _append_event(self, entry: OrderLedgerEntry) -> None:
         self.orders_dir.mkdir(parents=True, exist_ok=True)
         with self.events_path.open("a") as handle:
             handle.write(json.dumps(entry.to_json(), sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())

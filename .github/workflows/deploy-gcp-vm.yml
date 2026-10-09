@@ -702,7 +702,11 @@ jobs:
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + optional smoke + cron).
             remote_timed "Docker pull and optional smoke" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} RUN_DOCKER_PULL_DIAGNOSTICS=${{ inputs.deploy_smoke }} RUN_DOCKER_PRUNE=${{ inputs.deploy_smoke }} POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh
-            remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
+            if [ "${{ inputs.trading_mode }}" = "live" ]; then
+              echo "Live schedule remains paused until configure-live passes authenticated API checks."
+            else
+              remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
+            fi
             remote_timed "Restart cron scheduler" sudo systemctl restart cron
             echo "REMOTE TIMING total: $(( $(date +%s) - remote_started ))s"
           '
