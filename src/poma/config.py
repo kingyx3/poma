@@ -10,6 +10,8 @@ from poma.execution_policy import build_execution_rules
 from poma.models import InstrumentExecutionRule
 from poma.portfolio import CASH_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, parse_strategy_allocations
 from poma.strategies import default_registry
+from poma.strategies.core_etf import NAME as CORE_ETF_STRATEGY_NAME
+from poma.strategies.core_etf import parse_core_etf_weights
 
 
 class TradingMode(StrEnum):
@@ -81,6 +83,12 @@ class Settings(BaseSettings):
         default=DEFAULT_STRATEGY_ALLOCATIONS,
         alias="STRATEGY_ALLOCATIONS",
     )
+    # core_etf strategy: sleeve weights per ETF, plus an optional monthly trend filter that moves
+    # an ETF's weight to CORE_ETF_SAFE_ASSET (or cash when empty) while it is below its average.
+    core_etf_weights: str = Field(default="VTI=1.0", alias="CORE_ETF_WEIGHTS")
+    core_etf_trend_filter: bool = Field(default=False, alias="CORE_ETF_TREND_FILTER")
+    core_etf_trend_sma_months: PositiveInt = Field(default=10, alias="CORE_ETF_TREND_SMA_MONTHS")
+    core_etf_safe_asset: str = Field(default="cash", alias="CORE_ETF_SAFE_ASSET")
 
     dry_run_portfolio_value_usd: PositiveFloat = Field(
         default=10_000.0,
@@ -108,7 +116,9 @@ class Settings(BaseSettings):
     allow_market_orders: bool = Field(default=False, alias="ALLOW_MARKET_ORDERS")
     limit_offset_bps: float = Field(default=10.0, alias="LIMIT_OFFSET_BPS")
     max_order_notional_usd: PositiveFloat = Field(
-        default=2_000.0,
+        # Sized for the default core_etf strategy, which buys its whole sleeve in one ETF order
+        # (about $9.8k on a $10k account). Raise it alongside account size; it still fails closed.
+        default=25_000.0,
         alias="MAX_ORDER_NOTIONAL_USD",
     )
     max_daily_trades: PositiveInt = Field(default=100, alias="MAX_DAILY_TRADES")
@@ -255,6 +265,8 @@ class Settings(BaseSettings):
                 f"STRATEGY_ALLOCATIONS references unregistered strategies {unknown}; "
                 f"available strategies: {available}"
             )
+        if CORE_ETF_STRATEGY_NAME in allocations:
+            parse_core_etf_weights(self.core_etf_weights)
         if (
             self.managed_cap_mode == ManagedCapMode.MIN_OF_BROKER_TOTAL_AND_CAP
             and self.managed_cap_usd <= 0

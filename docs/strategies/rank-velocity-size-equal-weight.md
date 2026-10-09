@@ -1,5 +1,10 @@
 # Rank velocity + size equal-weight strategy
 
+> No longer the default. A cost audit found that rebalancing this 50-stock basket daily turns the
+> portfolio over about 48 times a year, which at a ~$10k account costs more in commissions and
+> spreads than the strategy earns. `core_etf` replaced it as the default; this strategy is still
+> registered. See [`core-etf.md`](core-etf.md) for the audit and how to switch back.
+
 This page documents the current built-in strategy-specific behavior. General app structure, portfolio sizing, cash sleeves, portfolio-level target combining, and execution controls are documented in [`docs/architecture.md`](../architecture.md) and [`docs/portfolio-management.md`](../portfolio-management.md).
 
 ## Strategy id
@@ -10,13 +15,14 @@ rank_velocity_size_equal_weight
 
 Use this id in `STRATEGY_ALLOCATIONS` to allocate capital to the strategy sleeve.
 
-Current default allocation:
+To select it (it was the default before `core_etf`):
 
 ```text
 STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.98,cash=0.02
+MAX_ORDER_NOTIONAL_USD=2000
 ```
 
-That default gives this strategy 98% of the resolved managed portfolio value and leaves 2% in passive cash. The allocation model itself is not strategy-specific; see [`docs/portfolio-management.md`](../portfolio-management.md).
+That allocation gives this strategy 98% of the resolved managed portfolio value and leaves 2% in passive cash. The allocation model itself is not strategy-specific; see [`docs/portfolio-management.md`](../portfolio-management.md).
 
 ## Objective
 

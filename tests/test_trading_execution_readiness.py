@@ -65,7 +65,7 @@ def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
 
 
 def test_default_turnover_allows_initial_full_paper_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch)
+    settings = _settings(monkeypatch, STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.98,cash=0.02")
     capital_plan = build_strategy_capital_plan(
         settings.dry_run_portfolio_value_usd,
         settings.strategy_allocations,

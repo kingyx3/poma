@@ -9,7 +9,8 @@ POMA is a low-cost Python scaffold for a personal long-only US equities portfoli
 | App architecture and runtime flow | [`docs/architecture.md`](docs/architecture.md) |
 | Portfolio sizing, allocations, cash sleeves, and portfolio-level targets | [`docs/portfolio-management.md`](docs/portfolio-management.md) |
 | Strategy extension contract | [`docs/strategy-contract.md`](docs/strategy-contract.md) |
-| Current built-in strategy behavior | [`docs/strategies/rank-velocity-size-equal-weight.md`](docs/strategies/rank-velocity-size-equal-weight.md) |
+| Default strategy and the audit behind it | [`docs/strategies/core-etf.md`](docs/strategies/core-etf.md) |
+| Previous stock-picking strategy (still selectable) | [`docs/strategies/rank-velocity-size-equal-weight.md`](docs/strategies/rank-velocity-size-equal-weight.md) |
 | Runtime configuration and GitHub secret shapes | [`docs/configuration.md`](docs/configuration.md) |
 | GCP free-tier deployment | [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md) |
 | IB Gateway operations | [`docs/ibkr-gateway-operations.md`](docs/ibkr-gateway-operations.md) |
@@ -31,7 +32,7 @@ paper/live broker AccountSnapshot
 
 Capital is allocated through `STRATEGY_ALLOCATIONS`. Before each paper/live rebalance, POMA reads the configured IBKR account's USD cash, USD-denominated positions, and USD net liquidation in one `AccountSnapshot`, then resolves the managed portfolio value through `MANAGED_CAP_MODE`. A passive `cash` sleeve reserves cash explicitly; cash is not modeled as a hidden buffer inside any active strategy. See [`docs/portfolio-management.md`](docs/portfolio-management.md) for the strategy-neutral capital model.
 
-Every allocated non-`cash` sleeve is executed through the strategy registry. When multiple sleeves target the same ticker, POMA combines their targets into one portfolio-level order. See [`docs/strategy-contract.md`](docs/strategy-contract.md) for the extension contract and [`docs/strategies/rank-velocity-size-equal-weight.md`](docs/strategies/rank-velocity-size-equal-weight.md) for the current built-in strategy.
+Every allocated non-`cash` sleeve is executed through the strategy registry. When multiple sleeves target the same ticker, POMA combines their targets into one portfolio-level order. See [`docs/strategy-contract.md`](docs/strategy-contract.md) for the extension contract and [`docs/strategies/core-etf.md`](docs/strategies/core-etf.md) for the default built-in strategy.
 
 ## Architecture
 

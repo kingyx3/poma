@@ -18,6 +18,10 @@ For each allocated non-cash sleeve, the engine:
 4. receives a `StrategyTargetBook` from the strategy;
 5. combines all `StrategyTargetBook` objects into portfolio-level targets with `src/poma/portfolio_constructor.py`.
 
+A strategy may also define `data_requirements(settings) -> StrategyDataRequirements` to tell the engine what market data it needs. By default the engine loads the provider's market-cap universe snapshot (`uses_universe=True`). A strategy that trades instruments outside that universe, such as ETFs, sets `uses_universe=False` and lists `price_history_tickers` and `price_history_days`; the engine loads daily closes for them into `StrategyContext.price_history`, uses the latest close for planning, and blocks execution if any requested ticker has no prices. The universe is only fetched when at least one allocated sleeve asks for it.
+
+A target book may list `diversified_fund_tickers`. Those tickers are exempt from `MAX_POSITION_PCT`, which is a single-company concentration cap; every other risk guard still applies.
+
 A strategy should decide which tickers it wants and at what target weights/notional inside its sleeve. It should not independently submit orders, reserve hidden cash, or bypass portfolio-level risk controls.
 
 ## Adding a strategy
@@ -36,4 +40,5 @@ No engine changes should be required for a normal new strategy sleeve.
 
 | Strategy id | Documentation |
 |---|---|
+| `core_etf` (default) | [`docs/strategies/core-etf.md`](strategies/core-etf.md) |
 | `rank_velocity_size_equal_weight` | [`docs/strategies/rank-velocity-size-equal-weight.md`](strategies/rank-velocity-size-equal-weight.md) |

@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from poma.config import Settings
-from poma.portfolio import CASH_STRATEGY_NAME, CURRENT_STRATEGY_NAME
+from poma.portfolio import CASH_STRATEGY_NAME, CURRENT_STRATEGY_NAME, DEFAULT_STRATEGY_NAME
 
 
 def test_telegram_config_is_required() -> None:
@@ -19,18 +19,23 @@ def test_settings_accepts_telegram_config() -> None:
     assert settings.telegram_chat_id == "chat"
 
 
-def test_default_strategy_is_us_top_market_cap_top_50() -> None:
+def test_default_strategy_is_core_etf_with_rank_strategy_settings_kept() -> None:
     settings = Settings(
         TELEGRAM_BOT_TOKEN="token",
         TELEGRAM_CHAT_ID="chat",
     )
+    assert settings.strategy_allocation_map() == {
+        DEFAULT_STRATEGY_NAME: 0.98,
+        CASH_STRATEGY_NAME: 0.02,
+    }
+    assert settings.core_etf_weights == "VTI=1.0"
+    assert settings.core_etf_trend_filter is False
+    assert settings.max_order_notional_usd == 25_000
+    # The previous strategy stays selectable with its original knobs.
+    assert CURRENT_STRATEGY_NAME == "rank_velocity_size_equal_weight"
     assert settings.universe == "us_top_market_cap"
     assert settings.rank_lookback_days == 90
     assert settings.max_holdings == 50
-    assert settings.strategy_allocation_map() == {
-        CURRENT_STRATEGY_NAME: 0.98,
-        CASH_STRATEGY_NAME: 0.02,
-    }
     assert settings.max_daily_trades == 100
     assert settings.min_weight_delta_pct == 0.0025
 

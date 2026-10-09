@@ -9,7 +9,7 @@ POMA is a multi-strategy, strategy-allocated portfolio runner. In `paper` and `l
 Default production allocation:
 
 ```text
-STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.98,cash=0.02
+STRATEGY_ALLOCATIONS=core_etf=0.98,cash=0.02
 MANAGED_CAP_MODE=broker_total
 ```
 

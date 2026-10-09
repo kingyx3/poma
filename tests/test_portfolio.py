@@ -6,15 +6,16 @@ from poma.portfolio import (
     CASH_STRATEGY_NAME,
     CURRENT_STRATEGY_NAME,
     DEFAULT_STRATEGY_ALLOCATIONS,
+    DEFAULT_STRATEGY_NAME,
     build_strategy_capital_plan,
     parse_strategy_allocations,
 )
 
 
-def test_default_strategy_allocation_splits_rank_and_cash_sleeves() -> None:
+def test_default_strategy_allocation_splits_core_etf_and_cash_sleeves() -> None:
     allocations = parse_strategy_allocations(DEFAULT_STRATEGY_ALLOCATIONS)
 
-    assert allocations == {CURRENT_STRATEGY_NAME: 0.98, CASH_STRATEGY_NAME: 0.02}
+    assert allocations == {DEFAULT_STRATEGY_NAME: 0.98, CASH_STRATEGY_NAME: 0.02}
 
 
 def test_percentage_style_allocations_are_supported() -> None:
