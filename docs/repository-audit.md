@@ -33,6 +33,16 @@ cron, GitHub workflows, Terraform and operational documentation.
   actions and malformed/incomplete plans fail closed. Fresh creation and in-place
   updates remain supported. Explicit undeploy remains a destructive operator action.
 
+## Authentication recovery follow-up
+
+The nightly restart value `23:45` did not match IBC's `hh:mm AM/PM` parser. Configuration
+and every engine launch now set `11:45 PM`, repairing existing configurations. Gateway
+Ops installs a host timer that probes account authentication, serializes with trading,
+and requires repeated failures before a persisted, rate-limited restart. Mobile approval
+remains a user action. Probe-only verification is included in configure readiness; auth
+checks place no orders and do not confuse market-data entitlement failures with logout.
+Gateway logs remain available across recovery restarts.
+
 ## Validation
 
 Baseline: 408 tests passed; Ruff passed. Added behavioral regression tests for the

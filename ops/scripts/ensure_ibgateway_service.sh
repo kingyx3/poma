@@ -95,14 +95,6 @@ log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"${WRAPPER_LOG}"
 }
 
-reset_logs() {
-  local directory
-  for directory in "${LOG_DIR}" "${HOME}/ibc/logs" /tmp/poma-ibgateway; do
-    mkdir -p "${directory}"
-    find "${directory}" -type f -exec truncate -s 0 {} + 2>/dev/null || true
-  done
-}
-
 set_ini() {
   local key="$1"
   local value="$2"
@@ -120,6 +112,7 @@ set_ini() {
 
 ensure_runtime_config() {
   set_ini LoginDialogDisplayTimeout "${LOGIN_DIALOG_DISPLAY_TIMEOUT}"
+  set_ini AutoRestartTime "11:45 PM"
   log "Pinned IBC LoginDialogDisplayTimeout=${LOGIN_DIALOG_DISPLAY_TIMEOUT} before Gateway launch."
 }
 
@@ -131,7 +124,7 @@ gateway_alive() {
   pgrep -u "$(id -u)" -f 'ibcalpha\.ibc\.IbcGateway|/ibgateway($|[[:space:]])' >/dev/null 2>&1
 }
 
-reset_logs
+# Preserve login diagnostics across automatic recovery restarts.
 if [ ! -s "${CONFIG}" ]; then
   log "IBC config missing at ${CONFIG}; refusing raw Gateway fallback."
   exit 127

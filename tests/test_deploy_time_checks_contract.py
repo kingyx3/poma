@@ -19,7 +19,7 @@ def test_gateway_configure_actions_restart_then_gate_by_mode() -> None:
 
     restart = runner.index("Restart ibgateway after IBC configuration")
     paper_branch = runner.index('if mode == "paper"')
-    paper_ready = runner.index("return api_ready(mode, required=True)", paper_branch)
+    paper_ready = runner.index("readiness = api_ready(mode, required=True)", paper_branch)
     live_wait = runner.index("Fresh live 2FA challenge wait")
     live_ready = runner.index("readiness = api_ready(mode, required=True)", live_wait)
 

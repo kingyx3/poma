@@ -112,7 +112,7 @@ def test_install_helper_sets_expected_ibc_values() -> None:
         "set_ini ReloginAfterSecondFactorAuthenticationTimeout yes",
         "set_ini AcceptNonBrokerageAccountWarning yes",
         "set_ini ExistingSessionDetectedAction primaryoverride",
-        "set_ini AutoRestartTime 23:45",
+        'set_ini AutoRestartTime "11:45 PM"',
         "set_ini OverrideTwsApiPort 7497",
         "set_ini AcceptIncomingConnectionAction accept",
         "set_ini AllowBlindTrading yes",

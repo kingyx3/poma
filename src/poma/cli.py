@@ -20,6 +20,7 @@ from poma.config import Settings, TradingMode, get_settings
 from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
 from poma.execution_manager import ExecutionManager
+from poma.gateway_auth import RECOVERY_MESSAGES, AuthStatus, RecoveryEvent, probe_authentication
 from poma.health import check_ibkr, run_checks
 from poma.history import CapSnapshotHistory
 from poma.journal import ExecutionJournal
@@ -614,6 +615,27 @@ def reconcile_orders() -> None:
     for update in summary.updates:
         if update.action is not None or update.entry.is_terminal:
             send_alert(settings, lifecycle_status_alert(update.entry, update.action))
+
+
+@app.command(name="gateway-auth-check")
+def gateway_auth_check() -> None:
+    """Read-only account authentication check for the host watchdog (JSON, no orders)."""
+    try:
+        settings = get_settings()
+        state = settings.state_dir.stat()
+        status = probe_authentication(settings)
+        payload = {"status": status.value, "state_inode": state.st_ino, "state_device": state.st_dev}
+    except Exception:  # noqa: BLE001 - do not expose settings/credentials in watchdog output
+        status = AuthStatus.CONFIGURATION_ERROR
+        payload = {"status": status.value}
+    print(json.dumps(payload))
+    raise typer.Exit(code={AuthStatus.UNAVAILABLE: 10, AuthStatus.CONFIGURATION_ERROR: 20}.get(status, 0))
+
+
+@app.command(name="gateway-watchdog-notify")
+def gateway_watchdog_notify(event: RecoveryEvent) -> None:
+    """Emit a fixed recovery notification using the deployed Telegram configuration."""
+    send_alert(get_settings(), RECOVERY_MESSAGES[event])
 
 
 @app.command()
