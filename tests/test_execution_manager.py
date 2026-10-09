@@ -599,11 +599,12 @@ def test_submit_plan_blocks_buys_when_refreshed_cash_is_insufficient_after_sells
     assert all(order.ticker != "AAPL" for order in open_orders)
 
 
-def test_submit_plan_blocks_repriced_buy_when_limit_cash_exceeds_refreshed_cash(
+def test_submit_plan_trims_repriced_buy_to_fit_small_cash_shortfall(
     tmp_path: Path,
 ) -> None:
     broker = RecordingBroker()
-    # 5 shares at the inside-spread limit of $100.02 need $500.10.
+    # 5 shares at the inside-spread limit of $100.02 need $500.10: a 0.01% shortfall is
+    # absorbed by buying 4 shares now instead of blocking the whole buy.
     broker.cash_usd = 500.05
     broker.quotes_override = {"AAPL": _quote("AAPL", bid=99.95, ask=100.05)}
     store = OrderStore(tmp_path)
@@ -611,10 +612,25 @@ def test_submit_plan_blocks_repriced_buy_when_limit_cash_exceeds_refreshed_cash(
 
     results = manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
 
+    assert results[0].status == "Submitted"
+    assert [trade.quantity for trade in broker.submitted_batches[0]] == [4.0]
+    assert broker.account_snapshot_calls == 1
+
+
+def test_submit_plan_blocks_buy_when_trimming_would_leave_nothing(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    # One share at $100.02 cannot be trimmed without dropping the order entirely.
+    broker.cash_usd = 99.0
+    broker.quotes_override = {"AAPL": _quote("AAPL", bid=99.95, ask=100.05)}
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    trade = dc_replace(_trade("AAPL", OrderSide.BUY), quantity=1.0, notional=100.0)
+
+    results = manager.submit_plan(_plan([trade]))
+
     assert results[0].status == "BuyingPowerBlocked"
     assert "limit cash requirement" in results[0].message
     assert broker.submitted_batches == []
-    assert broker.account_snapshot_calls == 1
     assert store.load_open_orders() == []
 
 

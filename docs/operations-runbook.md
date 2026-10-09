@@ -64,7 +64,7 @@ The next scheduled rebalance also checks the order ledger for anything still ope
 
 A same-run retry only happens one way: if `poma monitor` finds today's session still marked `running` in local state with no terminal status ever recorded, the previous attempt was killed outright (process crash, OOM, VM restart) before it could finish. The next cron tick resumes that session with the *same* `run_id` instead of minting a new one. Any orderRef already recorded in the ledger for that run — open or terminal — is not resubmitted; `submit_plan` returns an `IdempotentReplay` result for it instead. A manual `poma rebalance` invocation always mints a fresh `run_id`, so it is never part of this replay path; if you need to manually recover a killed session outside of cron, use **Reconcile Orders** to resolve any leftover open orders first.
 
-Buys are never sized against unconfirmed sell proceeds: after the sell phase is submitted, `ExecutionManager` reprices buys from fresh execution quotes, then refreshes broker cash before submitting them. If the refreshed cash does not cover the buy limit cash requirement, the buys are blocked as `BuyingPowerBlocked` instead of being submitted.
+Buys are never sized against unconfirmed sell proceeds: after the sell phase is submitted, `ExecutionManager` reprices buys from fresh execution quotes, then refreshes broker cash before submitting them. If the refreshed cash falls short of the buy limit cash requirement by at most 5%, buys are trimmed a whole share at a time (largest first) to fit, and the next session tops them up. A larger shortfall blocks the buys as `BuyingPowerBlocked` instead of submitting them, and `monitor` retries once sell proceeds land.
 
 ## Execution pricing and quote safety
 

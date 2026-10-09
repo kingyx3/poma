@@ -86,7 +86,7 @@ Paper/live execution blocks the affected order (with a `block execution` warning
 Buying-power checks use the cash the submitted limit order can actually consume, not just the
 reference-price notional. For paper/live buys, `ExecutionManager` reprices against the fresh
 execution quote first, then refreshes broker cash after the sell phase and blocks buys as
-`BuyingPowerBlocked` if that cash cannot cover the buy limit cash requirement.
+`BuyingPowerBlocked` if that cash cannot cover the buy limit cash requirement (a shortfall of at most 5% trims the buys by whole shares instead).
 
 `IbkrBroker` explicitly requests live market data (`reqMarketDataType(1)`) on every connection
 rather than relying on Gateway remembering a data type from a prior session or client id, since a

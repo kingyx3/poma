@@ -15,6 +15,7 @@ from poma.broker import (
     OrderStatusCallback,
 )
 from poma.config import ExecutionPriceSource, Settings, StaleOrderPolicy
+from poma.execution_policy import resolve_execution_rule
 from poma.execution_pricing import apply_execution_quotes, compute_spread_bps, price_from_quote
 from poma.ibkr_order_history import fetch_completed_order_snapshots as fetch_ibkr_completed_order_snapshots
 from poma.models import OpenOrderSnapshot, OrderResult, OrderSide, ProposedTrade, RebalancePlan
@@ -36,6 +37,9 @@ from poma.order_store import OrderStore
 # few seconds of a thin book. Only the final attempt may fall back to wide-spread midpoint pricing.
 EXECUTION_QUOTE_RETRY_DELAYS_SECONDS = (5.0, 10.0, 20.0)
 EXECUTION_QUOTE_ATTEMPTS = len(EXECUTION_QUOTE_RETRY_DELAYS_SECONDS) + 1
+# Largest buy-cash shortfall, as a fraction of the buy cash requirement, that is absorbed by
+# trimming buys instead of blocking them until sell proceeds land.
+MAX_BUY_TRIM_FRACTION = 0.05
 _RETRYABLE_PRE_ACCEPTANCE_STATUSES = frozenset(
     {
         EXECUTION_QUOTE_BLOCKED_STATUS,
@@ -119,7 +123,7 @@ class ExecutionManager:
             for trade, result in blocked_results:
                 results_by_ticker[trade.ticker] = result
 
-            block_reason = self._block_buys_for_insufficient_cash(repriced_buys)
+            repriced_buys, block_reason = self._fit_buys_to_refreshed_cash(repriced_buys)
             if block_reason is not None:
                 for trade in repriced_buys:
                     result = self._blocked_result(trade, BUYING_POWER_BLOCKED_STATUS, block_reason)
@@ -193,28 +197,41 @@ class ExecutionManager:
             perm_id=entry.perm_id,
         )
 
-    def _block_buys_for_insufficient_cash(self, buys: list[ProposedTrade]) -> str | None:
-        """Refresh broker cash after the sell phase and block buys it cannot cover.
+    def _fit_buys_to_refreshed_cash(
+        self, buys: list[ProposedTrade]
+    ) -> tuple[list[ProposedTrade], str | None]:
+        """Refresh broker cash after the sell phase and fit buys to it, or block them.
 
         Unfilled (or partially filled) limit sells are not assumed to provide buying power;
-        only cash the broker actually reports after the sell phase counts.
+        only cash the broker actually reports after the sell phase counts. A shortfall of at
+        most ``MAX_BUY_TRIM_FRACTION`` of the buy cash requirement (a sell still working,
+        repricing above the planning price, a whole-share round-up) is absorbed by trimming
+        buys a share at a time, so a nearly funded buy goes out now and the next session tops
+        it up. A larger shortfall blocks the buys so a later retry can use the sell proceeds.
         """
         buy_cash_required = sum(trade.buy_cash_required_usd for trade in buys)
         if buy_cash_required <= 1e-9:
-            return None
+            return buys, None
         try:
             refreshed = self.broker.account_snapshot()
         except Exception as exc:  # noqa: BLE001 - fail closed on an unreadable post-sell cash read
-            return f"unable to refresh broker cash before submitting buys; block buys: {exc}"
-        if not math.isfinite(refreshed.cash_usd):
-            return "broker returned non-finite cash; block buys"
-        if refreshed.cash_usd + 1e-6 < buy_cash_required:
-            return (
-                f"refreshed broker cash (${refreshed.cash_usd:,.2f}) does not cover planned buy "
-                f"limit cash requirement (${buy_cash_required:,.2f}) after execution repricing; "
-                "unfilled sells are not assumed to provide buying power"
-            )
-        return None
+            return buys, f"unable to refresh broker cash before submitting buys; block buys: {exc}"
+        cash = refreshed.cash_usd
+        if not math.isfinite(cash):
+            return buys, "broker returned non-finite cash; block buys"
+        if cash + 1e-6 >= buy_cash_required:
+            return buys, None
+        block_reason = (
+            f"refreshed broker cash (${cash:,.2f}) does not cover planned buy "
+            f"limit cash requirement (${buy_cash_required:,.2f}) after execution repricing; "
+            "unfilled sells are not assumed to provide buying power"
+        )
+        if buy_cash_required - cash > MAX_BUY_TRIM_FRACTION * buy_cash_required:
+            return buys, block_reason
+        trimmed = _trim_buys_to_cash(buys, cash, self.settings)
+        if not trimmed:
+            return buys, block_reason
+        return trimmed, None
 
     @staticmethod
     def _blocked_result(trade: ProposedTrade, status: str, message: str) -> OrderResult:
@@ -826,3 +843,34 @@ def _match_snapshot(
         if entry.order_id is not None and snapshot.order_id == entry.order_id:
             return snapshot, False
     return None, False
+
+
+def _trim_buys_to_cash(
+    buys: list[ProposedTrade],
+    cash_usd: float,
+    settings: Settings,
+) -> list[ProposedTrade]:
+    """Shrink buys, largest first, by tradable increments until their limit cash fits ``cash_usd``.
+
+    Returns an empty list when that would take any buy below its tradable minimum, so the
+    caller blocks instead of silently dropping an order.
+    """
+    rules = settings.execution_rules()
+    trimmed = list(buys)
+    shortfall = sum(trade.buy_cash_required_usd for trade in trimmed) - cash_usd
+    order = sorted(range(len(trimmed)), key=lambda i: trimmed[i].buy_cash_required_usd, reverse=True)
+    for index in order:
+        if shortfall <= 1e-6:
+            break
+        trade = trimmed[index]
+        unit_cash = trade.buy_cash_required_usd / trade.quantity
+        rule = resolve_execution_rule(trade.ticker, rules)
+        cut = min(shortfall / unit_cash, trade.quantity)
+        if rule.quantity_increment > 0:
+            cut = math.ceil(cut / rule.quantity_increment - 1e-9) * rule.quantity_increment
+        quantity = trade.quantity - cut
+        if quantity <= 1e-9 or quantity < rule.min_quantity:
+            return []
+        shortfall -= cut * unit_cash
+        trimmed[index] = replace(trade, quantity=quantity, notional=quantity * trade.reference_price)
+    return trimmed if shortfall <= 1e-6 else []
