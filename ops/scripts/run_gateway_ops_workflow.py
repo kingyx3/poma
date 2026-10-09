@@ -116,6 +116,24 @@ def timed(label: str, func) -> int:
     return status
 
 
+def verify_recovery_watchdog(remote) -> int:
+    """Wait briefly for active app commands without bypassing their recovery locks."""
+    attempts = 6
+    for attempt in range(attempts):
+        status = remote("sudo poma-gateway-auth-watchdog --check-only", timeout=210)
+        if status != 75:
+            return status
+        if attempt + 1 < attempts:
+            print("Recovery verification is waiting for an active app command to release its lock.", flush=True)
+            time.sleep(15)
+    _emit_github_error(
+        "Gateway recovery verification busy",
+        "An app command still holds the state lock. Authentication recovery was not verified; "
+        "inspect active app commands and rerun Gateway configure.",
+    )
+    return 75
+
+
 def helper_revision() -> str:
     digest = hashlib.sha256()
     for script in HELPER_SCRIPTS:
@@ -580,7 +598,7 @@ def main() -> int:
                 return readiness
             return timed(
                 "Verify authenticated recovery watchdog",
-                lambda: remote("sudo poma-gateway-auth-watchdog --check-only", timeout=210),
+                lambda: verify_recovery_watchdog(remote),
             )
 
         wait_command = (
@@ -600,7 +618,7 @@ def main() -> int:
             return readiness
         if timed(
             "Verify authenticated recovery watchdog",
-            lambda: remote("sudo poma-gateway-auth-watchdog --check-only", timeout=210),
+            lambda: verify_recovery_watchdog(remote),
         ) != 0:
             return 1
         # Deploy removed the app crontab. Arm it only after live authentication and only

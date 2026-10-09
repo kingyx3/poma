@@ -399,3 +399,25 @@ def test_volume_replacement_during_probe_cannot_restart_gateway(installed_watchd
     assert watchdog.main() == 0
     assert ['systemctl', 'restart', 'ibgateway'] not in commands
     assert watchdog.load_state(watchdog.STATE_PATH).restarts == []
+
+
+def test_configure_verification_waits_for_lock_then_checks_authentication(monkeypatch):
+    outcomes = iter([75, 75, 0])
+    waits = []
+    monkeypatch.setattr(ops.time, 'sleep', waits.append)
+    assert ops.verify_recovery_watchdog(lambda *a, **k: next(outcomes)) == 0
+    assert waits == [15, 15]
+
+
+@pytest.mark.parametrize('status', [0, 1, 20, 124])
+def test_configure_verification_does_not_retry_auth_or_wrapper_verdict(monkeypatch, status):
+    monkeypatch.setattr(ops.time, 'sleep', lambda _: pytest.fail('retried a non-busy verdict'))
+    assert ops.verify_recovery_watchdog(lambda *a, **k: status) == status
+
+
+def test_configure_verification_persistent_lock_never_passes(monkeypatch, capsys):
+    waits = []
+    monkeypatch.setattr(ops.time, 'sleep', waits.append)
+    assert ops.verify_recovery_watchdog(lambda *a, **k: 75) == 75
+    assert len(waits) == 5
+    assert 'Authentication recovery was not verified' in capsys.readouterr().err
