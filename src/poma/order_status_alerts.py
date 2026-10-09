@@ -23,7 +23,7 @@ def _quote_line(
     return "Quote: " + ", ".join(bits)
 
 
-def lifecycle_status_alert(entry: OrderLedgerEntry, action: str | None) -> str:
+def lifecycle_status_alert(entry: OrderLedgerEntry, action: str | None, detail: str | None = None) -> str:
     """Render a Telegram message for an order lifecycle change found during reconciliation."""
     lines = [
         "🔁 Order lifecycle update",
@@ -40,6 +40,10 @@ def lifecycle_status_alert(entry: OrderLedgerEntry, action: str | None) -> str:
         lines.append("Action: cancelled after exceeding the unfilled-order timeout")
     elif action == "closed":
         lines.append("Action: marked terminal because IBKR no longer reports it as open")
+    elif action == "replace_deferred":
+        lines.append("Action: replace waiting on IBKR cancel confirmation; replacement follows on the next reconcile")
+    elif action == "error":
+        lines.append(f"Action: reconcile failed for this order and will retry: {detail or 'unknown error'}")
     if entry.order_id is not None:
         lines.append(f"Order ID: {entry.order_id}")
     quote_line = _quote_line(

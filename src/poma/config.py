@@ -147,6 +147,11 @@ class Settings(BaseSettings):
         alias="EXECUTION_QUOTE_MAX_AGE_SECONDS",
     )
     execution_max_spread_bps: PositiveFloat = Field(default=50.0, alias="EXECUTION_MAX_SPREAD_BPS")
+    # Hard spread ceiling. A quote wider than EXECUTION_MAX_SPREAD_BPS but within this ceiling
+    # is not blocked once the quote retries are exhausted: the order is priced passively off the
+    # midpoint and never beyond the far side of the quote. Set equal to EXECUTION_MAX_SPREAD_BPS
+    # to restore strict blocking.
+    execution_wide_spread_max_bps: PositiveFloat = Field(default=150.0, alias="EXECUTION_WIDE_SPREAD_MAX_BPS")
     # Whether a delayed broker quote may price an order. Defaults by trading mode when unset:
     # true for dry_run/paper (accounts commonly lack the separate IBKR "API market data"
     # real-time opt-in even when delayed data is available), false for live (deploy validation
@@ -255,6 +260,8 @@ class Settings(BaseSettings):
                 "MANAGED_CAP_USD must be greater than 0 when "
                 "MANAGED_CAP_MODE=min_of_broker_total_and_cap"
             )
+        if self.execution_wide_spread_max_bps < self.execution_max_spread_bps:
+            raise ValueError("EXECUTION_WIDE_SPREAD_MAX_BPS must be at least EXECUTION_MAX_SPREAD_BPS")
         if self.cancel_after_seconds <= self.replace_after_seconds:
             raise ValueError("CANCEL_AFTER_SECONDS must be greater than REPLACE_AFTER_SECONDS")
         if (

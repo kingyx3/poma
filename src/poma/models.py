@@ -158,6 +158,9 @@ class ExecutionQuote:
     is_delayed: bool = False
     raw_market_data_type: str | None = None
     broker_error: str | None = None
+    # True when IBKR could not resolve the symbol to a US stock contract at all (error 200 "No
+    # security definition"), e.g. after a ticker change or delisting. Re-quoting cannot fix it.
+    contract_unresolved: bool = False
 
 
 @dataclass(frozen=True)
