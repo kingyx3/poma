@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from typing import Annotated
 
@@ -32,6 +33,7 @@ from poma.order_lifecycle import (
 )
 from poma.order_status_alerts import lifecycle_status_alert, order_status_alert
 from poma.order_store import OrderStore
+from poma.runtime_lock import RuntimeBusy, runtime_lock
 from poma.state import RETRY_WAIT_STATUS, TERMINAL_STATUSES, LocalState
 
 app = typer.Typer(no_args_is_help=True, help="POMA market-cap rebalancer.")
@@ -55,6 +57,22 @@ _RETRYABLE_BLOCK_WARNING_MARKERS = (
     "unable to read broker cash and portfolio balances before rebalancing",
     "unable to refresh local open orders against IBKR before planning",
 )
+
+
+def _serialized_command(*, skip_if_busy: bool = False):
+    """Hold the state lock across decisions, broker calls and durable updates."""
+    def decorate(command):
+        @wraps(command)
+        def wrapped(*args, **kwargs):
+            try:
+                with runtime_lock(get_settings().state_dir):
+                    return command(*args, **kwargs)
+            except RuntimeBusy as exc:
+                console.print(f"Skipping: {exc}")
+                if not skip_if_busy:
+                    raise typer.Exit(code=75) from exc
+        return wrapped
+    return decorate
 
 
 def _portfolio_status_label(status: str, executed: bool) -> str:
@@ -392,6 +410,7 @@ def refresh_market_data(
 
 
 @app.command()
+@_serialized_command()
 def rebalance(
     session_date: Annotated[
         str,
@@ -415,6 +434,7 @@ def rebalance(
 
 
 @app.command()
+@_serialized_command(skip_if_busy=True)
 def monitor(
     dry_run: Annotated[
         bool,
@@ -557,6 +577,7 @@ def ibkr_check() -> None:
 
 
 @app.command(name="reconcile-orders")
+@_serialized_command(skip_if_busy=True)
 def reconcile_orders() -> None:
     """Poll IBKR for open POMA orders and apply the replace-once/cancel timeout policy.
 

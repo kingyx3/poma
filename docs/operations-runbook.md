@@ -127,3 +127,17 @@ sudo -u poma tail -n 200 logs/poma.log
 ```
 
 Treat any live-mode anomaly as a manual stop: disable or remove the cron entry first, then investigate reports, Telegram alerts, and IBKR activity before enabling scheduled runs again.
+
+## Concurrent commands
+
+`poma rebalance`, `poma monitor`, `poma reconcile-orders` and the guarded order resolver
+hold `STATE_DIR/poma-runtime.lock` while reading state, making decisions, calling IBKR
+and persisting results. Manual rebalance exits 75 if another command holds it; monitor
+and reconciliation report a skip so the next scheduled invocation can retry. Process exit
+or a crash releases the lock automatically. Never delete the lock file to clear contention.
+
+Keep all containers on the same state volume. The host cron wrapper continues to use its
+separate `poma-command.lock` so it can skip unnecessary container starts. Custom Python
+maintenance that changes the ledger or session state must also use
+`poma.runtime_lock.runtime_lock(settings.state_dir)`; direct persistence APIs do not acquire
+it automatically.

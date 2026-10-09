@@ -163,3 +163,23 @@ Live mode additionally requires `trading_mode=live`, `IBKR_ACCOUNT`, `allow_live
 - Keep Terraform state in one small US-region GCS bucket per GCP project.
 - Keep a manual Cloud Billing budget alert enabled for each GCP project.
 - Watch external IPv4 and outbound network charges after deployment.
+
+## Durable state protection during deploy
+
+Before apply, `deployment_action=deploy` checks `terraform show -json tfplan` with
+`ops/scripts/validate_deployment_plan.py`. The same saved plan is then applied. Plans
+that delete, replace or forget an existing compute VM/disk are rejected, including
+create-before-destroy replacement. Fresh creation and in-place updates are allowed.
+This avoids silently losing the order ledger, session state and history on the boot disk
+when a startup-script change forces replacement.
+
+A rejected replacement requires a reviewed migration: pause scheduled trading, wait for
+running commands to finish, preserve the complete state/data and configuration outside the
+VM, and verify restoration before replacing it. Restore the ledger and session state before
+re-enabling commands, reconcile unresolved orders against IBKR, and rerun Gateway/account
+checks. Do not delete the ledger to get a deployment through. `deployment_action=undeploy`
+remains explicitly destructive and must only be used after preserving needed runtime data;
+it is not a safe shortcut for a blocked deploy.
+
+The validator consumes Terraform JSON without logging resource values. Its format follows
+[Terraform's JSON plan specification](https://developer.hashicorp.com/terraform/internals/json-format).

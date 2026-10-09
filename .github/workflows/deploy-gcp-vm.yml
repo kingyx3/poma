@@ -378,6 +378,13 @@ jobs:
             exit 1
           }
 
+      - name: Protect durable runtime state
+        if: ${{ inputs.deployment_action == 'deploy' }}
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/gcp-free-tier show -json tfplan \
+            | python3 ops/scripts/validate_deployment_plan.py
+
       - name: Terraform apply selected plan
         if: ${{ inputs.terraform_action == 'apply' }}
         run: |
