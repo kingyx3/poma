@@ -29,6 +29,7 @@ from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.notifications import send_alert
 from poma.order_lifecycle import (
     BUYING_POWER_BLOCKED_STATUS,
+    CONTRACT_UNRESOLVED_STATUS,
     EXECUTION_QUOTE_BLOCKED_STATUS,
     IDEMPOTENT_REPLAY_STATUS,
 )
@@ -243,7 +244,9 @@ def _retryable_outcome_reason(outcome: RebalanceOutcome) -> str | None:
 
     retryable: list[OrderResult] = []
     for result in outcome.plan.execution_results:
-        if result.status == IDEMPOTENT_REPLAY_STATUS:
+        if result.status in (IDEMPOTENT_REPLAY_STATUS, CONTRACT_UNRESOLVED_STATUS):
+            # A symbol IBKR cannot resolve is final for this run; it must not stop the other
+            # pre-acceptance blocks from being retried.
             continue
         if result.status in _ACCEPTED_ORDER_STATUSES and not result.message:
             continue
@@ -614,7 +617,7 @@ def reconcile_orders() -> None:
 
     for update in summary.updates:
         if update.action is not None or update.entry.is_terminal:
-            send_alert(settings, lifecycle_status_alert(update.entry, update.action))
+            send_alert(settings, lifecycle_status_alert(update.entry, update.action, update.detail))
 
 
 @app.command(name="gateway-auth-check")

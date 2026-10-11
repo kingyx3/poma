@@ -77,3 +77,12 @@ class FakeBroker:
             )
             for ticker in tickers
         }
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_execution_quote_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quote retries back off for tens of seconds in production; tests never need to wait."""
+    monkeypatch.setattr("poma.execution_manager.time.sleep", lambda _seconds: None)

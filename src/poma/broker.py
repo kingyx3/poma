@@ -53,6 +53,10 @@ EXECUTION_QUOTE_WAIT_SECONDS = 5.0
 DELAYED_PROBE_WAIT_MULTIPLIER = 2
 
 DONE_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
+CANCELLED_STATUSES = {"Cancelled", "ApiCancelled"}
+# A paper/live cancel commonly sits in PendingCancel for several seconds before IBKR confirms it.
+CANCEL_CONFIRM_TIMEOUT_SECONDS = 15.0
+CANCEL_CONFIRM_POLL_SECONDS = 0.5
 ACCEPTED_STATUSES = {"PreSubmitted", "Submitted", "Filled"}
 SUCCESS_STATUSES = ACCEPTED_STATUSES
 BROKER_UNAVAILABLE_STATUS = "BrokerUnavailable"
@@ -64,6 +68,7 @@ USD_CASH_TAGS = ("TotalCashValue", "TotalCashBalance", "CashBalance", "SettledCa
 NET_LIQUIDATION_TAGS = ("NetLiquidation", "NetLiquidationByCurrency")
 GROSS_POSITION_VALUE_TAGS = ("GrossPositionValue",)
 USD_CURRENCY = "USD"
+NO_SECURITY_DEFINITION_ERROR = 200
 
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
@@ -74,6 +79,10 @@ OrderStatusCallback = Callable[[ProposedTrade, OrderResult], None]
 
 class BrokerUnavailable(RuntimeError):
     """Raised when the IBKR API is not ready enough to safely submit orders."""
+
+
+class CancelNotConfirmed(RuntimeError):
+    """A replace's cancel is still in flight; no replacement order was placed."""
 
 
 @dataclass(frozen=True)
@@ -172,7 +181,20 @@ def _connect_ib(settings: Settings, *, client_id: int, timeout: float | None = N
     ) from last_error
 
 
-def _stock_contract(ticker: str, exchange: str) -> Stock:
+def _stock_contract(ticker: str, exchange: str, resolved: Stock | None = None) -> Stock:
+    """A quote contract for one venue, pinned to the resolved conId when one is known.
+
+    Pinning the conId (and primary exchange) makes a direct-venue request unambiguous even when
+    the bare symbol alone does not resolve on that venue.
+    """
+    if resolved is not None and getattr(resolved, "conId", 0):
+        return Stock(
+            symbol=ticker,
+            exchange=exchange,
+            currency="USD",
+            conId=resolved.conId,
+            primaryExchange=getattr(resolved, "primaryExchange", "") or "",
+        )
     return Stock(ticker, exchange, "USD")
 
 
@@ -185,6 +207,32 @@ def _cancel_market_data(ib: IB, market_data_by_ticker: dict[str, object]) -> Non
         ib.cancelMktData(getattr(market_data, "contract"))  # noqa: B009
 
 
+@dataclass(frozen=True)
+class _SampledMarketData:
+    """A market-data ticker plus the moment it was read, so quote age is measured per sample."""
+
+    market_data: object
+    sampled_at: datetime
+
+
+def _sample_spread_bps(market_data: object) -> float | None:
+    return compute_spread_bps(
+        _valid_price(getattr(market_data, "bid", None)),
+        _valid_price(getattr(market_data, "ask", None)),
+    )
+
+
+def _is_better_sample(candidate: object, current: object | None) -> bool:
+    """Prefer a two-sided quote, then the narrower spread, across venues."""
+    if current is None:
+        return True
+    candidate_spread = _sample_spread_bps(candidate)
+    current_spread = _sample_spread_bps(current)
+    if candidate_spread is None:
+        return False
+    return current_spread is None or candidate_spread < current_spread
+
+
 def _request_execution_quotes_for_type(
     ib: IB,
     tickers: set[str],
@@ -192,27 +240,48 @@ def _request_execution_quotes_for_type(
     *,
     market_data_type: int,
     wait_seconds: float,
-) -> tuple[dict[str, object], dict[str, object]]:
-    """Try a market-data type across exchanges, returning ticks and last missing attempts."""
+    max_spread_bps: float | None = None,
+    resolved: dict[str, Stock] | None = None,
+) -> tuple[dict[str, _SampledMarketData], dict[str, _SampledMarketData]]:
+    """Try a market-data type across exchanges, returning the best ticks and last missing attempts.
+
+    A ticker is settled on the first venue that gives a two-sided quote within
+    ``max_spread_bps``. A tick that is one-sided or wider than that keeps the ticker on the
+    candidate list for the next venue: a single venue's book (IEX in particular) can be far
+    wider than the consolidated market, so the narrowest two-sided quote seen wins.
+    """
     remaining = set(tickers)
-    ticked: dict[str, object] = {}
-    last_missing: dict[str, object] = {}
+    ticked: dict[str, _SampledMarketData] = {}
+    last_missing: dict[str, _SampledMarketData] = {}
     if not remaining:
         return ticked, last_missing
+    resolved = resolved or {}
     ib.reqMarketDataType(market_data_type)
     for exchange in exchanges:
-        batch = {ticker: ib.reqMktData(_stock_contract(ticker, exchange), "", False, False) for ticker in remaining}
+        batch = {
+            ticker: ib.reqMktData(_stock_contract(ticker, exchange, resolved.get(ticker)), "", False, False)
+            for ticker in remaining
+        }
         ib.sleep(wait_seconds)
+        sampled_at = datetime.now(UTC)
+        settled: set[str] = set()
         for ticker, market_data in batch.items():
-            if _has_tick_time(market_data):
-                ticked[ticker] = market_data
-            else:
-                last_missing[ticker] = market_data
+            sample = _SampledMarketData(market_data, sampled_at)
+            if not _has_tick_time(market_data):
+                if ticker not in ticked:
+                    last_missing[ticker] = sample
+                continue
+            current = ticked.get(ticker)
+            if _is_better_sample(market_data, current.market_data if current else None):
+                ticked[ticker] = sample
+            spread = _sample_spread_bps(market_data)
+            if spread is not None and (max_spread_bps is None or spread <= max_spread_bps):
+                settled.add(ticker)
         _cancel_market_data(ib, batch)
-        remaining -= set(ticked)
+        remaining -= settled
         if not remaining:
             break
-    return ticked, last_missing
+    return ticked, {ticker: sample for ticker, sample in last_missing.items() if ticker not in ticked}
 
 
 def _request_execution_quote_market_data(
@@ -221,15 +290,19 @@ def _request_execution_quote_market_data(
     exchanges: Sequence[str],
     *,
     allow_delayed: bool,
-) -> dict[str, object]:
+    max_spread_bps: float | None = None,
+    resolved: dict[str, Stock] | None = None,
+) -> dict[str, _SampledMarketData]:
     remaining = set(tickers)
-    market_data_by_ticker: dict[str, object] = {}
+    market_data_by_ticker: dict[str, _SampledMarketData] = {}
     live_ticks, last_missing = _request_execution_quotes_for_type(
         ib,
         remaining,
         exchanges,
         market_data_type=LIVE_MARKET_DATA_TYPE,
         wait_seconds=EXECUTION_QUOTE_WAIT_SECONDS,
+        max_spread_bps=max_spread_bps,
+        resolved=resolved,
     )
     market_data_by_ticker.update(live_ticks)
     remaining -= set(live_ticks)
@@ -242,6 +315,8 @@ def _request_execution_quote_market_data(
             exchanges,
             market_data_type=DELAYED_MARKET_DATA_TYPE,
             wait_seconds=EXECUTION_QUOTE_WAIT_SECONDS * DELAYED_PROBE_WAIT_MULTIPLIER,
+            max_spread_bps=max_spread_bps,
+            resolved=resolved,
         )
         market_data_by_ticker.update(delayed_ticks)
         remaining -= set(delayed_ticks)
@@ -251,6 +326,23 @@ def _request_execution_quote_market_data(
             )
     ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
     return market_data_by_ticker
+
+
+def _resolve_stock_contracts(ib: IB, tickers: Sequence[str]) -> dict[str, Stock] | None:
+    """Resolve each symbol to one US stock contract through SMART.
+
+    Returns ``None`` when resolution itself could not run (the caller then quotes by symbol, as
+    before). Otherwise a ticker missing from the result has no IBKR US stock definition at all.
+    """
+    qualify = getattr(ib, "qualifyContracts", None)
+    if qualify is None:
+        return None
+    contracts = {ticker: Stock(ticker, "SMART", "USD") for ticker in tickers}
+    try:
+        qualify(*contracts.values())
+    except Exception:  # noqa: BLE001 - fall back to symbol quoting rather than blocking on lookup
+        return None
+    return {ticker: contract for ticker, contract in contracts.items() if getattr(contract, "conId", 0)}
 
 
 @dataclass(frozen=True)
@@ -463,6 +555,18 @@ class Broker(Protocol):
         """Cancel the given order and place a fresh replacement, returning its new snapshot."""
         ...
 
+    def submit_replacement(
+        self,
+        *,
+        ticker: str,
+        side: OrderSide,
+        quantity: float,
+        new_limit_price: float,
+        order_ref: str,
+    ) -> OpenOrderSnapshot:
+        """Place a replacement for an order already confirmed cancelled (idempotent on order_ref)."""
+        ...
+
 
 class DryRunBroker:
     def __init__(self, fallback_portfolio_value_usd: float = 0.0) -> None:
@@ -515,6 +619,17 @@ class DryRunBroker:
         self,
         *,
         order_id: int,
+        ticker: str,
+        side: OrderSide,
+        quantity: float,
+        new_limit_price: float,
+        order_ref: str,
+    ) -> OpenOrderSnapshot:
+        raise NotImplementedError("dry_run mode never places broker orders to replace")
+
+    def submit_replacement(
+        self,
+        *,
         ticker: str,
         side: OrderSide,
         quantity: float,
@@ -932,8 +1047,10 @@ class IbkrBroker:
     def execution_quotes(self, tickers: list[str]) -> dict[str, ExecutionQuote]:
         """Snapshot bid/ask/last for every ticker in one IBKR session, right before submission.
 
-        Every subscription is requested up front and cancelled together after a single wait,
-        rather than one connect per ticker, so freshness is comparable across the whole batch.
+        Symbols are first resolved to one US stock contract each, so a symbol IBKR does not know
+        is reported as unresolvable instead of as an endlessly retried missing tick. Quotes are
+        then requested per venue in batches; each quote's age is measured when its own batch was
+        sampled, not after every venue and delayed fallback has finished.
         """
         unique_tickers = sorted({ticker.upper() for ticker in tickers})
         if not unique_tickers:
@@ -942,36 +1059,84 @@ class IbkrBroker:
         try:
             self._assert_connected(ib)
             with _collect_market_data_errors(ib) as errors:
+                resolved = _resolve_stock_contracts(ib, unique_tickers)
+                # Only IBKR's explicit "no security definition" (error 200) proves a symbol is
+                # unknown; a lookup that merely came back empty (e.g. a timeout) is quoted by
+                # symbol as before rather than condemned.
+                unresolved = [
+                    ticker
+                    for ticker in unique_tickers
+                    if resolved is not None
+                    and ticker not in resolved
+                    and any(message.startswith(f"{NO_SECURITY_DEFINITION_ERROR}:")
+                            for message in errors.per_symbol.get(ticker, []))
+                ]
+                quotable = [ticker for ticker in unique_tickers if ticker not in unresolved]
                 market_data_by_ticker = _request_execution_quote_market_data(
                     ib,
-                    unique_tickers,
+                    quotable,
                     self.settings.ibkr_market_data_exchange_list(),
                     allow_delayed=self.settings.allow_delayed_execution_quotes,
+                    max_spread_bps=self.settings.execution_max_spread_bps,
+                    resolved=resolved,
                 )
-                retrieved_at = datetime.now(UTC)
                 quotes = {
                     ticker: _execution_quote_from_market_data(
-                        ticker, market_data, retrieved_at, errors.per_symbol.get(ticker), errors.general
+                        ticker,
+                        sample.market_data,
+                        sample.sampled_at,
+                        errors.per_symbol.get(ticker),
+                        errors.general,
                     )
-                    for ticker, market_data in market_data_by_ticker.items()
+                    for ticker, sample in market_data_by_ticker.items()
                 }
+                now = datetime.now(UTC)
+                for ticker in unresolved:
+                    detail = _dedupe_messages(errors.per_symbol.get(ticker) or [])
+                    quotes[ticker] = ExecutionQuote(
+                        ticker=ticker,
+                        source="ibkr",
+                        retrieved_at_utc=now.isoformat(),
+                        broker_error="; ".join(detail) if detail else "symbol did not resolve via SMART/USD",
+                        contract_unresolved=True,
+                    )
             return quotes
         finally:
             ib.disconnect()
 
+    def _find_open_poma_trade(
+        self,
+        ib: IB,
+        order_id: int,
+        *,
+        ticker: str | None = None,
+        side: OrderSide | None = None,
+    ) -> Trade | None:
+        ib.reqAllOpenOrders()
+        ib.sleep(1.0)
+        account = self.settings.ibkr_account
+        for trade in ib.openTrades():
+            order = trade.order
+            if order.orderId != order_id or not str(order.orderRef or "").startswith(f"{ORDER_REF_PREFIX}:"):
+                continue
+            if account and (getattr(order, "account", "") or "") not in ("", account):
+                continue
+            if ticker is not None and trade.contract.symbol.upper() != ticker.upper():
+                continue
+            if side is not None and order.action != side.value:
+                continue
+            return trade
+        return None
+
     def cancel_order(self, order_id: int) -> bool:
+        """Request cancellation; the caller confirms the terminal state on a later reconcile."""
         ib = self._connect()
         try:
             self._assert_connected(ib)
-            ib.reqAllOpenOrders()
-            ib.sleep(1.0)
-            target = next((trade.order for trade in ib.openTrades()
-                           if trade.order.orderId == order_id
-                           and trade.order.account == self.settings.ibkr_account
-                           and str(trade.order.orderRef).startswith("poma:")), None)
+            target = self._find_open_poma_trade(ib, order_id)
             if target is None:
                 return False
-            ib.cancelOrder(target)
+            ib.cancelOrder(target.order)
             ib.sleep(1.0)
             return True
         finally:
@@ -992,53 +1157,121 @@ class IbkrBroker:
         This is a cancel-and-resubmit, not an in-place IBKR order modification, so the new
         order gets its own ``order_ref``/``orderId``; the caller is responsible for updating
         the ledger entry's identity to track the replacement.
+
+        The replacement is placed only once IBKR confirms the original is cancelled, so the two
+        can never both be working. ``PendingCancel`` is polled for up to
+        ``CANCEL_CONFIRM_TIMEOUT_SECONDS``; if it is still unconfirmed, ``CancelNotConfirmed`` is
+        raised with the cancel left in flight and nothing placed. If the original fills while
+        the cancel is in flight, its own terminal snapshot (with its original orderRef) is
+        returned instead of placing a replacement.
+        """
+        ib = self._connect()
+        try:
+            self._assert_connected(ib)
+            target_trade = self._find_open_poma_trade(ib, order_id, ticker=ticker, side=side)
+            if target_trade is None:
+                raise RuntimeError(f"cannot replace order {order_id}: original order is no longer open")
+            ib.cancelOrder(target_trade.order)
+            cancelled_status = _await_terminal_status(ib, target_trade)
+            original = _snapshot_from_trade(target_trade, ticker=ticker, side=side)
+            if cancelled_status == "Filled" or (original.filled > 0 and original.remaining <= 1e-9):
+                return original
+            if cancelled_status not in CANCELLED_STATUSES:
+                raise CancelNotConfirmed(
+                    f"cannot replace order {order_id}: cancel not confirmed after "
+                    f"{CANCEL_CONFIRM_TIMEOUT_SECONDS:g}s (status={cancelled_status or 'unknown'}); "
+                    "cancel still in flight, replacement not placed"
+                )
+            remaining_qty = float(getattr(target_trade.orderStatus, "remaining", 0.0) or 0.0)
+            replacement_qty = min(abs(quantity), remaining_qty)
+            if replacement_qty <= 0:
+                raise RuntimeError(f"cannot replace order {order_id}: no remaining quantity after cancel")
+            return self._place_limit_order(ib, ticker, side, replacement_qty, new_limit_price, order_ref)
+        finally:
+            ib.disconnect()
+
+    def submit_replacement(
+        self,
+        *,
+        ticker: str,
+        side: OrderSide,
+        quantity: float,
+        new_limit_price: float,
+        order_ref: str,
+    ) -> OpenOrderSnapshot:
+        """Place a replacement whose original is already confirmed cancelled.
+
+        Used to finish a replace whose cancel confirmed only after ``replace_order`` gave up.
+        Idempotent on ``order_ref``: an open order already carrying it is returned, not doubled.
         """
         ib = self._connect()
         try:
             self._assert_connected(ib)
             ib.reqAllOpenOrders()
             ib.sleep(1.0)
-            target_trade = next((trade for trade in ib.openTrades()
-                                 if trade.order.orderId == order_id
-                                 and trade.order.account == self.settings.ibkr_account
-                                 and str(trade.order.orderRef).startswith("poma:")
-                                 and trade.contract.symbol == ticker
-                                 and trade.order.action == side.value), None)
-            if target_trade is None:
-                raise RuntimeError(f"cannot replace order {order_id}: original order is no longer open")
-            ib.cancelOrder(target_trade.order)
-            ib.sleep(1.0)
-            cancelled_status = str(getattr(target_trade.orderStatus, "status", "") or "")
-            if cancelled_status not in {"Cancelled", "ApiCancelled"}:
-                raise RuntimeError(
-                    f"cannot replace order {order_id}: cancel not confirmed (status={cancelled_status or 'unknown'})"
-                )
-            remaining_qty = float(getattr(target_trade.orderStatus, "remaining", 0.0) or 0.0)
-            replacement_qty = min(abs(quantity), remaining_qty)
-            if replacement_qty <= 0:
-                raise RuntimeError(f"cannot replace order {order_id}: no remaining quantity after cancel")
-            contract = Stock(ticker, "SMART", "USD")
-            order = LimitOrder(side.value, replacement_qty, new_limit_price)
-            order.tif = self.settings.order_time_in_force
-            order.orderRef = order_ref
-            if self.settings.ibkr_account:
-                order.account = self.settings.ibkr_account
-            trade = ib.placeOrder(contract, order)
-            ib.sleep(1.0)
-            status = trade.orderStatus
-            return OpenOrderSnapshot(
-                order_ref=order_ref,
-                order_id=getattr(trade.order, "orderId", None),
-                perm_id=getattr(trade.order, "permId", None),
-                ticker=ticker,
-                side=side,
-                raw_status=status.status or "Submitted",
-                filled=float(status.filled or 0.0),
-                remaining=float(status.remaining or abs(quantity)),
-                avg_fill_price=_none_if_zero(status.avgFillPrice),
-            )
+            for trade in ib.openTrades():
+                if str(getattr(trade.order, "orderRef", "") or "") == order_ref:
+                    return _snapshot_from_trade(trade, ticker=ticker, side=side)
+            return self._place_limit_order(ib, ticker, side, abs(quantity), new_limit_price, order_ref)
         finally:
             ib.disconnect()
+
+    def _place_limit_order(
+        self,
+        ib: IB,
+        ticker: str,
+        side: OrderSide,
+        quantity: float,
+        limit_price: float,
+        order_ref: str,
+    ) -> OpenOrderSnapshot:
+        contract = Stock(ticker, "SMART", "USD")
+        order = LimitOrder(side.value, quantity, limit_price)
+        order.tif = self.settings.order_time_in_force
+        order.orderRef = order_ref
+        if self.settings.ibkr_account:
+            order.account = self.settings.ibkr_account
+        trade = ib.placeOrder(contract, order)
+        ib.sleep(1.0)
+        status = trade.orderStatus
+        return OpenOrderSnapshot(
+            order_ref=order_ref,
+            order_id=getattr(trade.order, "orderId", None),
+            perm_id=getattr(trade.order, "permId", None),
+            ticker=ticker,
+            side=side,
+            raw_status=status.status or "Submitted",
+            filled=float(status.filled or 0.0),
+            remaining=float(status.remaining or quantity),
+            avg_fill_price=_none_if_zero(status.avgFillPrice),
+        )
+
+
+def _await_terminal_status(ib: IB, trade: Trade) -> str:
+    """Poll a trade's status after a cancel request until it is terminal or the wait runs out."""
+    polls = max(1, math.ceil(CANCEL_CONFIRM_TIMEOUT_SECONDS / CANCEL_CONFIRM_POLL_SECONDS))
+    status = ""
+    for _ in range(polls):
+        ib.sleep(CANCEL_CONFIRM_POLL_SECONDS)
+        status = str(getattr(trade.orderStatus, "status", "") or "")
+        if status in DONE_STATUSES:
+            break
+    return status
+
+
+def _snapshot_from_trade(trade: Trade, *, ticker: str, side: OrderSide) -> OpenOrderSnapshot:
+    status = trade.orderStatus
+    return OpenOrderSnapshot(
+        order_ref=str(getattr(trade.order, "orderRef", "") or "") or None,
+        order_id=getattr(trade.order, "orderId", None),
+        perm_id=getattr(trade.order, "permId", None),
+        ticker=ticker,
+        side=side,
+        raw_status=str(getattr(status, "status", "") or ""),
+        filled=float(getattr(status, "filled", 0.0) or 0.0),
+        remaining=float(getattr(status, "remaining", 0.0) or 0.0),
+        avg_fill_price=_none_if_zero(getattr(status, "avgFillPrice", None)),
+    )
 
 
 def _request_account_values(ib: IB, account: str | None) -> Iterable[object]:

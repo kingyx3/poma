@@ -9,6 +9,9 @@ from poma.models import OpenOrderSnapshot, OrderResult, OrderSide
 ORDER_REF_PREFIX = "poma"
 EXECUTION_QUOTE_BLOCKED_STATUS = "QuoteBlocked"
 BUYING_POWER_BLOCKED_STATUS = "BuyingPowerBlocked"
+# IBKR has no US stock contract for the symbol. Terminal for this run: re-quoting cannot fix it,
+# and it must not hold back same-run retries of other, transiently blocked orders.
+CONTRACT_UNRESOLVED_STATUS = "ContractUnresolved"
 # Deliberately NOT in _RAW_SUBMISSION_FAILURE / classify_lifecycle: an IdempotentReplay result
 # reports on an order an earlier attempt already got to the broker (or resolved). Routing it
 # through with_order_result() would reclassify that order's ledger entry via this constant's raw
@@ -61,6 +64,7 @@ _RAW_SUBMISSION_FAILURE = {
     "OrderNotAccepted",
     EXECUTION_QUOTE_BLOCKED_STATUS,
     BUYING_POWER_BLOCKED_STATUS,
+    CONTRACT_UNRESOLVED_STATUS,
 }
 
 
@@ -142,6 +146,10 @@ class OrderLedgerEntry:
     last_status_at: str | None = None
     terminal_reason: str | None = None
     replace_count: int = 0
+    # orderRef reserved for a cancel-and-resubmit replacement that is not yet confirmed live.
+    # ``order_ref`` keeps pointing at the original order until the replacement is confirmed, so
+    # reconciliation can always find (and never lose track of) whichever order really exists.
+    replacement_order_ref: str | None = None
 
     @property
     def is_terminal(self) -> bool:

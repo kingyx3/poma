@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -9,15 +10,18 @@ from poma.broker import (
     BROKER_UNAVAILABLE_STATUS,
     ORDER_NOT_ACCEPTED_STATUS,
     Broker,
+    CancelNotConfirmed,
     IbkrBroker,
     OrderStatusCallback,
 )
 from poma.config import ExecutionPriceSource, Settings, StaleOrderPolicy
-from poma.execution_pricing import apply_execution_quotes, build_limit_price, compute_spread_bps, select_execution_price
+from poma.execution_policy import resolve_execution_rule
+from poma.execution_pricing import apply_execution_quotes, compute_spread_bps, price_from_quote
 from poma.ibkr_order_history import fetch_completed_order_snapshots as fetch_ibkr_completed_order_snapshots
-from poma.models import OrderResult, OrderSide, ProposedTrade, RebalancePlan
+from poma.models import OpenOrderSnapshot, OrderResult, OrderSide, ProposedTrade, RebalancePlan
 from poma.order_lifecycle import (
     BUYING_POWER_BLOCKED_STATUS,
+    CONTRACT_UNRESOLVED_STATUS,
     EXECUTION_QUOTE_BLOCKED_STATUS,
     IDEMPOTENT_REPLAY_STATUS,
     WORKING_LIFECYCLE_STATES,
@@ -29,8 +33,13 @@ from poma.order_lifecycle import (
 )
 from poma.order_store import OrderStore
 
-EXECUTION_QUOTE_ATTEMPTS = 3
-EXECUTION_QUOTE_RETRY_DELAY_SECONDS = 5.0
+# Spreads are widest right after the open, so retries back off rather than re-sampling the same
+# few seconds of a thin book. Only the final attempt may fall back to wide-spread midpoint pricing.
+EXECUTION_QUOTE_RETRY_DELAYS_SECONDS = (5.0, 10.0, 20.0)
+EXECUTION_QUOTE_ATTEMPTS = len(EXECUTION_QUOTE_RETRY_DELAYS_SECONDS) + 1
+# Largest buy-cash shortfall, as a fraction of the buy cash requirement, that is absorbed by
+# trimming buys instead of blocking them until sell proceeds land.
+MAX_BUY_TRIM_FRACTION = 0.05
 _RETRYABLE_PRE_ACCEPTANCE_STATUSES = frozenset(
     {
         EXECUTION_QUOTE_BLOCKED_STATUS,
@@ -44,8 +53,9 @@ _RETRYABLE_PRE_ACCEPTANCE_STATUSES = frozenset(
 @dataclass(frozen=True)
 class ReconcileUpdate:
     entry: OrderLedgerEntry
-    action: str | None  # "replace", "cancel", "closed", "unverified", or None
+    action: str | None  # "replace", "replace_deferred", "cancel", "closed", "unverified", "error", or None
     matched: bool
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,7 +123,7 @@ class ExecutionManager:
             for trade, result in blocked_results:
                 results_by_ticker[trade.ticker] = result
 
-            block_reason = self._block_buys_for_insufficient_cash(repriced_buys)
+            repriced_buys, block_reason = self._fit_buys_to_refreshed_cash(repriced_buys)
             if block_reason is not None:
                 for trade in repriced_buys:
                     result = self._blocked_result(trade, BUYING_POWER_BLOCKED_STATUS, block_reason)
@@ -187,28 +197,41 @@ class ExecutionManager:
             perm_id=entry.perm_id,
         )
 
-    def _block_buys_for_insufficient_cash(self, buys: list[ProposedTrade]) -> str | None:
-        """Refresh broker cash after the sell phase and block buys it cannot cover.
+    def _fit_buys_to_refreshed_cash(
+        self, buys: list[ProposedTrade]
+    ) -> tuple[list[ProposedTrade], str | None]:
+        """Refresh broker cash after the sell phase and fit buys to it, or block them.
 
         Unfilled (or partially filled) limit sells are not assumed to provide buying power;
-        only cash the broker actually reports after the sell phase counts.
+        only cash the broker actually reports after the sell phase counts. A shortfall of at
+        most ``MAX_BUY_TRIM_FRACTION`` of the buy cash requirement (a sell still working,
+        repricing above the planning price, a whole-share round-up) is absorbed by trimming
+        buys a share at a time, so a nearly funded buy goes out now and the next session tops
+        it up. A larger shortfall blocks the buys so a later retry can use the sell proceeds.
         """
         buy_cash_required = sum(trade.buy_cash_required_usd for trade in buys)
         if buy_cash_required <= 1e-9:
-            return None
+            return buys, None
         try:
             refreshed = self.broker.account_snapshot()
         except Exception as exc:  # noqa: BLE001 - fail closed on an unreadable post-sell cash read
-            return f"unable to refresh broker cash before submitting buys; block buys: {exc}"
-        if not math.isfinite(refreshed.cash_usd):
-            return "broker returned non-finite cash; block buys"
-        if refreshed.cash_usd + 1e-6 < buy_cash_required:
-            return (
-                f"refreshed broker cash (${refreshed.cash_usd:,.2f}) does not cover planned buy "
-                f"limit cash requirement (${buy_cash_required:,.2f}) after execution repricing; "
-                "unfilled sells are not assumed to provide buying power"
-            )
-        return None
+            return buys, f"unable to refresh broker cash before submitting buys; block buys: {exc}"
+        cash = refreshed.cash_usd
+        if not math.isfinite(cash):
+            return buys, "broker returned non-finite cash; block buys"
+        if cash + 1e-6 >= buy_cash_required:
+            return buys, None
+        block_reason = (
+            f"refreshed broker cash (${cash:,.2f}) does not cover planned buy "
+            f"limit cash requirement (${buy_cash_required:,.2f}) after execution repricing; "
+            "unfilled sells are not assumed to provide buying power"
+        )
+        if buy_cash_required - cash > MAX_BUY_TRIM_FRACTION * buy_cash_required:
+            return buys, block_reason
+        trimmed = _trim_buys_to_cash(buys, cash, self.settings)
+        if not trimmed:
+            return buys, block_reason
+        return trimmed, None
 
     @staticmethod
     def _blocked_result(trade: ProposedTrade, status: str, message: str) -> OrderResult:
@@ -266,9 +289,13 @@ class ExecutionManager:
         """Reprice a batch off fresh broker quotes, retrying transient quote-quality failures.
 
         A single wide/stale/missing snapshot should not consume the whole day's rebalance. Failed
-        tickers are sampled again while already-valid tickers are kept. Only after the bounded
-        quote-attempt budget is exhausted is a trade recorded ``QuoteBlocked``; monitor can then
-        retry that local pre-acceptance block on a later tick using the same run/orderRef.
+        tickers are sampled again with backoff while already-valid tickers are kept; the final
+        attempt may price a moderately wide spread passively off the midpoint. A symbol IBKR
+        cannot resolve at all is not retried. If any retry happened, the already-valid trades are
+        re-quoted once more right before submission, so no order goes out on a quote that sat
+        waiting for the others. Only after the budget is exhausted is a trade recorded
+        ``QuoteBlocked``; monitor can then retry that local pre-acceptance block on a later tick
+        using the same run/orderRef.
         """
         if self.settings.execution_price_source != ExecutionPriceSource.IBKR or not trades:
             return trades, []
@@ -276,23 +303,43 @@ class ExecutionManager:
         pending = list(trades)
         repriced_by_ticker: dict[str, ProposedTrade] = {}
         warning_by_ticker: dict[str, str] = {}
+        unresolved_tickers: set[str] = set()
         rules = self.settings.execution_rules()
+        quoted_on_attempt: dict[str, int] = {}
+        attempt = 0
         for attempt in range(1, EXECUTION_QUOTE_ATTEMPTS + 1):
+            final_attempt = attempt >= EXECUTION_QUOTE_ATTEMPTS
             quotes = self.broker.execution_quotes([trade.ticker for trade in pending])
-            repriced, warnings = apply_execution_quotes(pending, quotes, self.settings, rules)
+            unresolved_tickers |= {ticker for ticker, quote in quotes.items() if quote.contract_unresolved}
+            repriced, warnings = apply_execution_quotes(
+                pending, quotes, self.settings, rules, allow_wide_spread=final_attempt
+            )
             for updated in repriced:
                 repriced_by_ticker[updated.ticker] = updated
-            unresolved = [trade for trade in pending if trade.ticker not in repriced_by_ticker]
-            for trade in unresolved:
-                reason = next(
-                    (warning for warning in warnings if trade.ticker in warning),
-                    "execution quote check failed; block execution",
-                )
-                warning_by_ticker[trade.ticker] = reason
-            pending = unresolved
-            if not pending or attempt >= EXECUTION_QUOTE_ATTEMPTS:
+                quoted_on_attempt[updated.ticker] = attempt
+            self._note_quote_warnings(pending, repriced_by_ticker, warnings, warning_by_ticker)
+            pending = [
+                trade for trade in pending
+                if trade.ticker not in repriced_by_ticker and trade.ticker not in unresolved_tickers
+            ]
+            if not pending or final_attempt:
                 break
-            time.sleep(EXECUTION_QUOTE_RETRY_DELAY_SECONDS)
+            time.sleep(EXECUTION_QUOTE_RETRY_DELAYS_SECONDS[attempt - 1])
+
+        # Valid quotes from earlier attempts are now as old as the retry backoff; refresh them.
+        originals = [trade for trade in trades if quoted_on_attempt.get(trade.ticker, attempt) < attempt]
+        if originals:
+            quotes = self.broker.execution_quotes([trade.ticker for trade in originals])
+            refreshed, warnings = apply_execution_quotes(
+                originals, quotes, self.settings, rules, allow_wide_spread=True
+            )
+            refreshed_by_ticker = {trade.ticker: trade for trade in refreshed}
+            for trade in originals:
+                if trade.ticker in refreshed_by_ticker:
+                    repriced_by_ticker[trade.ticker] = refreshed_by_ticker[trade.ticker]
+                else:
+                    del repriced_by_ticker[trade.ticker]
+            self._note_quote_warnings(originals, refreshed_by_ticker, warnings, warning_by_ticker, suffix=" on pre-submit refresh")
 
         submittable: list[ProposedTrade] = []
         blocked: list[tuple[ProposedTrade, OrderResult]] = []
@@ -306,13 +353,38 @@ class ExecutionManager:
                 trade.ticker,
                 "execution quote check failed; block execution",
             )
-            reason = f"{reason} after {EXECUTION_QUOTE_ATTEMPTS} quote attempts"
-            result = self._blocked_result(trade, EXECUTION_QUOTE_BLOCKED_STATUS, reason)
+            if trade.ticker in unresolved_tickers:
+                status = CONTRACT_UNRESOLVED_STATUS
+            else:
+                status = EXECUTION_QUOTE_BLOCKED_STATUS
+                reason = f"{reason} after {EXECUTION_QUOTE_ATTEMPTS} quote attempts"
+            result = self._blocked_result(trade, status, reason)
             self._record_result(plan, trade, result)
             if status_callback is not None:
                 status_callback(trade, result)
             blocked.append((trade, result))
         return submittable, blocked
+
+    @staticmethod
+    def _note_quote_warnings(
+        trades: list[ProposedTrade],
+        accepted: dict[str, ProposedTrade],
+        warnings: list[str],
+        warning_by_ticker: dict[str, str],
+        *,
+        suffix: str = "",
+    ) -> None:
+        for trade in trades:
+            if trade.ticker in accepted:
+                continue
+            # Whole-symbol match: a one-letter ticker such as ``E`` must not claim another
+            # ticker's warning just because the letter appears somewhere in it.
+            pattern = re.compile(rf"(?<![A-Za-z0-9.]){re.escape(trade.ticker)}(?![A-Za-z0-9])")
+            reason = next(
+                (warning for warning in warnings if pattern.search(warning)),
+                "execution quote check failed; block execution",
+            )
+            warning_by_ticker[trade.ticker] = f"{reason}{suffix}"
 
     def _tag(self, run_id: str, trades: list[ProposedTrade], *, offset: int) -> list[ProposedTrade]:
         """Attach stable orderRefs, reusing the first ref for a ticker/side on same-run retries.
@@ -472,62 +544,145 @@ class ExecutionManager:
     # --- Reconciliation after the rebalance process exits --------------------------------
 
     def reconcile(self) -> ReconcileSummary:
-        """Reconcile open orders, then use completed broker history before declaring UNKNOWN."""
+        """Reconcile open orders, then use completed broker history before declaring UNKNOWN.
+
+        Each ledger entry is matched to broker orders by its current orderRef, by a reserved
+        replacement orderRef, and by permId/orderId within its own orderRef family, so an entry
+        whose replace was interrupted still finds whichever order really exists. A failure while
+        acting on one entry (e.g. a broker error during a replace) is reported on that entry and
+        does not abort reconciliation of the others.
+        """
         open_entries = self._open_ledger_entries()
         if not open_entries:
             return ReconcileSummary(checked=0, updates=())
 
-        snapshots = {
-            snapshot.order_ref: snapshot for snapshot in self.broker.fetch_open_order_snapshots() if snapshot.order_ref
-        }
-        missing_refs = {entry.order_ref for entry in open_entries if entry.order_ref not in snapshots}
-        completed_snapshots = {}
-        if missing_refs:
+        open_snapshots = [snapshot for snapshot in self.broker.fetch_open_order_snapshots() if snapshot.order_ref]
+        unmatched = [entry for entry in open_entries if _match_snapshot(entry, open_snapshots)[0] is None]
+        completed_snapshots: list[OpenOrderSnapshot] = []
+        if unmatched:
+            wanted_refs = {ref for entry in unmatched for ref in _entry_refs(entry)}
             fetch_completed = getattr(self.broker, "fetch_completed_order_snapshots", None)
             try:
                 if callable(fetch_completed):
-                    completed_snapshots = {
-                        snapshot.order_ref: snapshot
-                        for snapshot in fetch_completed()
-                        if snapshot.order_ref and snapshot.order_ref in missing_refs
-                    }
+                    completed = fetch_completed()
                 elif isinstance(self.broker, IbkrBroker):
-                    completed_snapshots = {
-                        snapshot.order_ref: snapshot
-                        for snapshot in fetch_ibkr_completed_order_snapshots(self.settings, missing_refs)
-                        if snapshot.order_ref
-                    }
+                    completed = fetch_ibkr_completed_order_snapshots(self.settings)
+                else:
+                    completed = []
+                completed_snapshots = [
+                    snapshot for snapshot in completed
+                    if snapshot.order_ref and any(snapshot.order_ref.startswith(ref) for ref in wanted_refs)
+                ]
             except Exception:  # noqa: BLE001 - history recovery can fail while UNKNOWN remains fail-closed
-                completed_snapshots = {}
+                completed_snapshots = []
 
         now = datetime.now(UTC)
         updates: list[ReconcileUpdate] = []
         for entry in open_entries:
-            snapshot = snapshots.get(entry.order_ref)
-            if snapshot is None:
-                completed_snapshot = completed_snapshots.get(entry.order_ref)
-                if completed_snapshot is not None:
-                    completed_entry = entry.with_snapshot(completed_snapshot)
-                    if completed_entry.is_terminal:
-                        self.store.upsert(completed_entry)
-                        updates.append(ReconcileUpdate(entry=completed_entry, action="closed", matched=True))
-                        continue
-                if entry.lifecycle_state == OrderLifecycleState.UNKNOWN and entry.raw_status == "NotOpenUnverified":
-                    updates.append(ReconcileUpdate(entry=entry, action=None, matched=False))
-                    continue
-                updated = self._close_unreported_open_entry(entry, now)
-                self.store.upsert(updated)
-                action = "closed" if updated.is_terminal else "unverified"
-                updates.append(ReconcileUpdate(entry=updated, action=action, matched=False))
-                continue
+            try:
+                updates.append(self._reconcile_entry(entry, open_snapshots, completed_snapshots, now))
+            except Exception as exc:  # noqa: BLE001 - one order's failure must not hide the others
+                current = self.store.get(entry.ledger_key) or entry
+                updates.append(ReconcileUpdate(entry=current, action="error", matched=False, detail=str(exc)))
+        return ReconcileSummary(checked=len(open_entries), updates=tuple(updates))
+
+    def _reconcile_entry(
+        self,
+        entry: OrderLedgerEntry,
+        open_snapshots: list[OpenOrderSnapshot],
+        completed_snapshots: list[OpenOrderSnapshot],
+        now: datetime,
+    ) -> ReconcileUpdate:
+        snapshot, is_replacement = _match_snapshot(entry, open_snapshots)
+        if snapshot is not None:
+            if is_replacement:
+                # The replacement reached the broker even though its confirmation was lost.
+                adopted = self._adopt_replacement(entry, snapshot)
+                self.store.upsert(adopted)
+                return ReconcileUpdate(entry=adopted, action="replace", matched=True)
             updated = entry.with_snapshot(snapshot)
-            action_taken = self._apply_timeout_policy(updated, now)
+            if entry.replacement_order_ref and updated.lifecycle_state == OrderLifecycleState.CANCELLED:
+                resumed = self._resume_replacement(updated, entry.replacement_order_ref, now)
+                if resumed is not None:
+                    self.store.upsert(resumed)
+                    return ReconcileUpdate(entry=resumed, action="replace", matched=True)
+                updated = replace(updated, replacement_order_ref=None)
+            if entry.replacement_order_ref and updated.lifecycle_state in WORKING_LIFECYCLE_STATES:
+                # The original is working again (cancel rejected); drop the unplaced replacement.
+                updated = replace(updated, replacement_order_ref=None)
             action_name: str | None = None
+            action_taken = self._apply_timeout_policy(updated, now)
             if action_taken is not None:
                 updated, action_name = action_taken
             self.store.upsert(updated)
-            updates.append(ReconcileUpdate(entry=updated, action=action_name, matched=True))
-        return ReconcileSummary(checked=len(open_entries), updates=tuple(updates))
+            return ReconcileUpdate(entry=updated, action=action_name, matched=True)
+
+        completed, is_replacement = _match_snapshot(entry, completed_snapshots)
+        if completed is not None and is_replacement:
+            adopted = self._adopt_replacement(entry, completed)
+            self.store.upsert(adopted)
+            return ReconcileUpdate(entry=adopted, action="closed" if adopted.is_terminal else "replace", matched=True)
+        if completed is not None:
+            completed_entry = entry.with_snapshot(completed)
+            if completed_entry.is_terminal:
+                if entry.replacement_order_ref and completed_entry.lifecycle_state == OrderLifecycleState.CANCELLED:
+                    resumed = self._resume_replacement(completed_entry, entry.replacement_order_ref, now)
+                    if resumed is not None:
+                        self.store.upsert(resumed)
+                        return ReconcileUpdate(entry=resumed, action="replace", matched=True)
+                completed_entry = replace(completed_entry, replacement_order_ref=None)
+                self.store.upsert(completed_entry)
+                return ReconcileUpdate(entry=completed_entry, action="closed", matched=True)
+
+        if entry.lifecycle_state == OrderLifecycleState.UNKNOWN and entry.raw_status == "NotOpenUnverified":
+            return ReconcileUpdate(entry=entry, action=None, matched=False)
+        updated = self._close_unreported_open_entry(entry, now)
+        self.store.upsert(updated)
+        action = "closed" if updated.is_terminal else "unverified"
+        return ReconcileUpdate(entry=updated, action=action, matched=False)
+
+    @staticmethod
+    def _adopt_replacement(entry: OrderLedgerEntry, snapshot: OpenOrderSnapshot) -> OrderLedgerEntry:
+        assert entry.replacement_order_ref is not None
+        return replace(entry, order_ref=entry.replacement_order_ref, replacement_order_ref=None).with_snapshot(snapshot)
+
+    def _resume_replacement(
+        self,
+        cancelled: OrderLedgerEntry,
+        replacement_ref: str,
+        now: datetime,
+    ) -> OrderLedgerEntry | None:
+        """Finish a replace whose cancel was confirmed only after ``replace_order`` gave up.
+
+        Safe against duplicates: the original is broker-confirmed cancelled, the reserved
+        replacement orderRef was found neither open nor in completed history, and the broker
+        re-checks that orderRef before placing. Skipped (the entry simply closes as cancelled)
+        once the order is past ``CANCEL_AFTER_SECONDS`` or nothing remains to buy/sell.
+        """
+        submit = getattr(self.broker, "submit_replacement", None)
+        elapsed = seconds_since(cancelled.submitted_at, now)
+        remaining = cancelled.remaining_qty or max(cancelled.quantity - cancelled.filled_qty, 0.0)
+        if not callable(submit) or remaining <= 1e-9:
+            return None
+        if elapsed is None or elapsed >= self.settings.cancel_after_seconds:
+            return None
+        new_limit, quote_metadata = self._fresh_replace_limit_price(cancelled)
+        if new_limit is None:
+            return None
+        snapshot = submit(
+            ticker=cancelled.ticker,
+            side=cancelled.side,
+            quantity=remaining,
+            new_limit_price=new_limit,
+            order_ref=replacement_ref,
+        )
+        resumed = replace(cancelled, order_ref=replacement_ref, replacement_order_ref=None, terminal_reason=None)
+        return replace(
+            resumed.with_snapshot(snapshot),
+            limit_price=new_limit,
+            submitted_at=now.isoformat(),
+            **quote_metadata,
+        )
 
     def _open_ledger_entries(self) -> list[OrderLedgerEntry]:
         return [entry for entry in self.store.load_open_orders() if not entry.is_terminal]
@@ -577,26 +732,39 @@ class ExecutionManager:
             if new_limit is None:
                 return None
             new_ref = f"{entry.ledger_key}:r{entry.replace_count + 1}"
-            # Track the replacement identity before cancel-and-submit crosses the network.
-            # If the process dies, unresolved replacement intent blocks blind resubmission.
-            self.store.upsert(replace(
-                entry, order_ref=new_ref, lifecycle_state=OrderLifecycleState.REPLACE_PENDING,
+            # Reserve the replacement identity before cancel-and-submit crosses the network, but
+            # keep ``order_ref`` on the original until the replacement is confirmed: if the
+            # process dies or the cancel lags, reconciliation can still find either order.
+            intent = replace(
+                entry, lifecycle_state=OrderLifecycleState.REPLACE_PENDING,
                 raw_status="ReplacementUnconfirmed", replace_count=entry.replace_count + 1,
-            ))
-            snapshot = self.broker.replace_order(
-                order_id=entry.order_id,
-                ticker=entry.ticker,
-                side=entry.side,
-                quantity=entry.remaining_qty or entry.quantity,
-                new_limit_price=new_limit,
-                order_ref=new_ref,
+                replacement_order_ref=new_ref,
             )
-            replaced = entry.with_snapshot(snapshot)
+            self.store.upsert(intent)
+            try:
+                snapshot = self.broker.replace_order(
+                    order_id=entry.order_id,
+                    ticker=entry.ticker,
+                    side=entry.side,
+                    quantity=entry.remaining_qty or entry.quantity,
+                    new_limit_price=new_limit,
+                    order_ref=new_ref,
+                )
+            except CancelNotConfirmed as exc:
+                # The cancel is still in flight and nothing new was placed. The next reconcile
+                # sees the original as cancelled (then places the replacement) or filled.
+                deferred = replace(
+                    intent, lifecycle_state=OrderLifecycleState.CANCEL_PENDING,
+                    raw_status="PendingCancel", terminal_reason=str(exc),
+                )
+                return deferred, "replace_deferred"
+            if snapshot.order_ref != new_ref:
+                # The original filled while the cancel was in flight; no replacement was placed.
+                return replace(entry.with_snapshot(snapshot), replace_count=intent.replace_count), "closed"
+            replaced = replace(intent, order_ref=new_ref, replacement_order_ref=None).with_snapshot(snapshot)
             replaced = replace(
                 replaced,
-                order_ref=new_ref,
                 limit_price=new_limit,
-                replace_count=entry.replace_count + 1,
                 submitted_at=now.isoformat(),
                 **quote_metadata,
             )
@@ -623,17 +791,86 @@ class ExecutionManager:
         quote = quotes.get(entry.ticker)
         if quote is None:
             return None, {}
-        price, _warnings = select_execution_price(quote, entry.side, settings)
-        if price is None:
+        pricing = price_from_quote(
+            quote, entry.side, settings, settings.replace_price_improvement_bps, allow_wide_spread=True
+        )
+        price, new_limit = pricing.reference_price, pricing.limit_price
+        if price is None or new_limit is None:
             return None, {}
-        new_limit = build_limit_price(entry.side, price, settings.replace_price_improvement_bps)
         spread_bps = quote.spread_bps if quote.spread_bps is not None else compute_spread_bps(quote.bid, quote.ask)
         metadata: dict[str, object] = {
             "reference_price": price,
             "reference_price_source": settings.execution_price_source.value,
-            "reference_price_basis": settings.execution_price_basis.value,
+            "reference_price_basis": pricing.basis,
             "reference_price_as_of_utc": quote.selected_price_as_of_utc,
             "quote_age_seconds": quote.age_seconds,
             "quote_spread_bps": spread_bps,
         }
         return new_limit, metadata
+
+
+def _entry_refs(entry: OrderLedgerEntry) -> tuple[str, ...]:
+    refs = [entry.order_ref, entry.ledger_key]
+    if entry.replacement_order_ref:
+        refs.append(entry.replacement_order_ref)
+    return tuple(dict.fromkeys(refs))
+
+
+def _match_snapshot(
+    entry: OrderLedgerEntry,
+    snapshots: list[OpenOrderSnapshot],
+) -> tuple[OpenOrderSnapshot | None, bool]:
+    """Find the broker order behind a ledger entry; the flag says it is the reserved replacement.
+
+    Exact orderRef wins. Otherwise a snapshot from the same orderRef family (the ledger key and
+    its ``:rN`` replacements) matches on permId or on the entry's orderId, which recovers entries
+    whose ``order_ref`` was switched to a replacement that was never actually placed.
+    """
+    for snapshot in snapshots:
+        if snapshot.order_ref == entry.order_ref:
+            return snapshot, False
+    if entry.replacement_order_ref:
+        for snapshot in snapshots:
+            if snapshot.order_ref == entry.replacement_order_ref:
+                return snapshot, True
+    for snapshot in snapshots:
+        if not (snapshot.order_ref or "").startswith(entry.ledger_key):
+            continue
+        if snapshot.ticker != entry.ticker or snapshot.side != entry.side:
+            continue
+        if entry.perm_id and snapshot.perm_id == entry.perm_id:
+            return snapshot, False
+        if entry.order_id is not None and snapshot.order_id == entry.order_id:
+            return snapshot, False
+    return None, False
+
+
+def _trim_buys_to_cash(
+    buys: list[ProposedTrade],
+    cash_usd: float,
+    settings: Settings,
+) -> list[ProposedTrade]:
+    """Shrink buys, largest first, by tradable increments until their limit cash fits ``cash_usd``.
+
+    Returns an empty list when that would take any buy below its tradable minimum, so the
+    caller blocks instead of silently dropping an order.
+    """
+    rules = settings.execution_rules()
+    trimmed = list(buys)
+    shortfall = sum(trade.buy_cash_required_usd for trade in trimmed) - cash_usd
+    order = sorted(range(len(trimmed)), key=lambda i: trimmed[i].buy_cash_required_usd, reverse=True)
+    for index in order:
+        if shortfall <= 1e-6:
+            break
+        trade = trimmed[index]
+        unit_cash = trade.buy_cash_required_usd / trade.quantity
+        rule = resolve_execution_rule(trade.ticker, rules)
+        cut = min(shortfall / unit_cash, trade.quantity)
+        if rule.quantity_increment > 0:
+            cut = math.ceil(cut / rule.quantity_increment - 1e-9) * rule.quantity_increment
+        quantity = trade.quantity - cut
+        if quantity <= 1e-9 or quantity < rule.min_quantity:
+            return []
+        shortfall -= cut * unit_cash
+        trimmed[index] = replace(trade, quantity=quantity, notional=quantity * trade.reference_price)
+    return trimmed if shortfall <= 1e-6 else []

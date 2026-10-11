@@ -168,7 +168,8 @@ def test_apply_execution_quotes_recomputes_quantity_from_final_price() -> None:
     updated = repriced[0]
     assert updated.reference_price == 200.10
     assert updated.quantity == 1000.0 / 200.10
-    assert updated.limit_price == build_limit_price(OrderSide.BUY, 200.10, settings.limit_offset_bps)
+    # The first order rests halfway between the midpoint (200.00) and the ask (200.10).
+    assert updated.limit_price == 200.05
     assert updated.reference_price_source == "ibkr"
     assert updated.reference_price_basis == "side_of_market"
     assert updated.quote_age_seconds == 1.0
