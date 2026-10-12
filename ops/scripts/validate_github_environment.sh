@@ -13,7 +13,7 @@ missing=()
 require_var() {
   local name="$1"
   if [ -z "${!name:-}" ]; then
-    missing+=("GitHub Environment Variable ${name}")
+    missing+=("GitHub Environment Variable/Secret ${name}")
   fi
 }
 require_secret() {
@@ -27,7 +27,7 @@ require_secret TELEGRAM_BOT_TOKEN
 require_secret TELEGRAM_CHAT_ID
 
 # Paper and live trades must carry an explicit, reviewed investment mandate.
-# A missing var must not silently deploy a different investment allocation.
+# Missing GitHub variables AND secrets must never fall back to an unintended mandate.
 if [ "${mode}" != "dry_run" ]; then
   require_var INVESTMENT_STRATEGY_WEIGHTS
   require_var CASH_TARGET_PCT
