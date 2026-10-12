@@ -35,8 +35,8 @@ if [ "${mode}" != "dry_run" ]; then
   require_var MARKET_CALENDAR
   require_var REBALANCE_AFTER_OPEN_MINUTES
 fi
-if [ -n "${STRATEGY_ALLOCATIONS:-}" ] && [ -n "${INVESTMENT_STRATEGY_WEIGHTS:-}" ]; then
-  echo "::error::Set INVESTMENT_STRATEGY_WEIGHTS or legacy STRATEGY_ALLOCATIONS, not both" >&2
+if [ -n "${LEGACY_STRATEGY_ALLOCATIONS:-}" ]; then
+  echo "::error::Legacy STRATEGY_ALLOCATIONS GitHub var is not supported by the new deploy flow; migrate it to INVESTMENT_STRATEGY_WEIGHTS + CASH_TARGET_PCT" >&2
   exit 1
 fi
 
