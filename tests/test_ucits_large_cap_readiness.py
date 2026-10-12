@@ -106,7 +106,6 @@ def test_lse_usd_positions_are_retained_in_broker_account(monkeypatch: pytest.Mo
     assert warnings == []
 
 
-
 @pytest.mark.parametrize("ticker", ["SP1", "USMC"])
 def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: pytest.MonkeyPatch, ticker: str) -> None:
     """Simulate the actual broker placement helper without sending a real order."""
