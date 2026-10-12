@@ -128,11 +128,9 @@ def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: py
     assert snapshot.raw_status == "Submitted"
 
 
-@pytest.mark.parametrize("ticker", ["SP1", "USMC"])
-def test_london_etf_is_permitted_as_live_strategy_with_lse_calendar(ticker: str) -> None:
+def test_core_etf_uses_usmc_in_live_mode_with_lse_calendar() -> None:
     settings = make_settings(
         TRADING_MODE="live",
-        CORE_ETF_WEIGHTS=f"{ticker}=1.0",
         IBKR_ACCOUNT="U1234567",
         ALLOW_DELAYED_EXECUTION_QUOTES=False,
     )
@@ -141,26 +139,27 @@ def test_london_etf_is_permitted_as_live_strategy_with_lse_calendar(ticker: str)
 
 
 @pytest.mark.parametrize("mode", ["paper", "live"])
-def test_london_etf_rejects_wrong_calendar_or_early_market_window(mode: str) -> None:
+def test_core_etf_rejects_wrong_calendar_or_early_market_window(mode: str) -> None:
     with pytest.raises(ValueError, match="MARKET_CALENDAR=LSE"):
-        make_settings(TRADING_MODE=mode, CORE_ETF_WEIGHTS="USMC=1.0", MARKET_CALENDAR="NASDAQ")
+        make_settings(TRADING_MODE=mode, MARKET_CALENDAR="NASDAQ")
     with pytest.raises(ValueError, match="REBALANCE_AFTER_OPEN_MINUTES>=390"):
         make_settings(TRADING_MODE=mode, REBALANCE_AFTER_OPEN_MINUTES=10)
 
 
-def test_us_etf_existing_live_configuration_remains_valid() -> None:
+def test_us_equity_only_strategy_can_use_us_calendar() -> None:
     settings = make_settings(
         TRADING_MODE="live",
-        CORE_ETF_WEIGHTS="VTI=1.0",
+        INVESTMENT_STRATEGY_WEIGHTS="rank_velocity_size_equal_weight=1.0",
         IBKR_ACCOUNT="U1234567",
+        MARKET_CALENDAR="NASDAQ",
+        REBALANCE_AFTER_OPEN_MINUTES=10,
         ALLOW_DELAYED_EXECUTION_QUOTES=False,
     )
-    assert settings.core_etf_weights == "VTI=1.0"
+    assert settings.market_calendar == "NASDAQ"
 
 
-def test_usmc_is_default_for_paper_dry_run_and_live() -> None:
-    assert make_settings().core_etf_weights == "USMC=1.0"
-    assert make_settings(TRADING_MODE="paper").core_etf_weights == "USMC=1.0"
-    assert make_settings(
-        TRADING_MODE="live", ALLOW_DELAYED_EXECUTION_QUOTES=False
-    ).core_etf_weights == "USMC=1.0"
+def test_core_etf_is_default_for_paper_dry_run_and_live() -> None:
+    for mode in ("dry_run", "paper", "live"):
+        settings = make_settings(TRADING_MODE=mode)
+        assert settings.strategy_allocation_map() == pytest.approx({"core_etf": 0.98, "cash": 0.02})
+        assert settings.market_calendar == "LSE"
