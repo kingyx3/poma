@@ -209,7 +209,7 @@ jobs:
           set_default UNIVERSE "us_top_market_cap"
           set_default RANK_LOOKBACK_DAYS "90"
           set_default MAX_HOLDINGS "50"
-          set_default INVESTMENT_STRATEGY_WEIGHTS "core_etf=1.0"
+          set_default INVESTMENT_STRATEGY_WEIGHTS "USMC=1.0"
           set_default CASH_TARGET_PCT "0.02"
           # Investment strategies are weighted once; core_etf always holds USMC.
           set_default CORE_ETF_TREND_FILTER "false"
