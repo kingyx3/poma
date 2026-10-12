@@ -148,5 +148,9 @@ def test_us_etf_existing_live_configuration_remains_valid() -> None:
     assert settings.core_etf_weights == "VTI=1.0"
 
 
-def test_london_ucits_trading_is_opt_in_not_default() -> None:
-    assert make_settings().core_etf_weights == "VTI=1.0"
+def test_usmc_is_default_for_paper_and_dry_run_not_implicit_live() -> None:
+    assert make_settings().core_etf_weights == "USMC=1.0"
+    assert make_settings(TRADING_MODE="paper").core_etf_weights == "USMC=1.0"
+    assert make_settings(
+        TRADING_MODE="live", ALLOW_DELAYED_EXECUTION_QUOTES=False
+    ).core_etf_weights == "VTI=1.0"
