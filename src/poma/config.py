@@ -266,7 +266,7 @@ class Settings(BaseSettings):
             weights = (
                 self.investment_strategy_weights
                 if self.investment_strategy_weights is not None
-                else "core_etf=1.0"
+                else "USMC=1.0"
             )
             allocations = investment_weights_to_portfolio_allocations(weights, self.cash_target_pct)
             # Existing orchestration and report paths consume whole-portfolio allocations.
@@ -288,7 +288,14 @@ class Settings(BaseSettings):
                 f"available strategies: {available}"
             )
         core_etf_active = allocations.get(CORE_ETF_STRATEGY_NAME, 0) > 0
-        target_tickers = {CORE_ETF_TICKER} if core_etf_active else set()
+        # Active direct ETF sleeves carry their own exchange calendar. An LSE fund
+        # must never inherit NASDAQ hours merely because the old core alias is absent.
+        target_tickers = {
+            name for name, weight in allocations.items()
+            if weight > 0 and ucits_listing(name) is not None
+        }
+        if core_etf_active:
+            target_tickers.add(CORE_ETF_TICKER)
         safe_ticker = (self.core_etf_safe_asset or "").strip().upper()
         if core_etf_active and self.core_etf_trend_filter and safe_ticker not in {"", "CASH", "NONE"}:
             target_tickers.add(safe_ticker)
