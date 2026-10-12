@@ -176,8 +176,8 @@ jobs:
           fi
           set_env TRADING_MODE "${INPUT_TRADING_MODE}"
           set_env ALLOW_LIVE_TRADING "${INPUT_ALLOW_LIVE_TRADING}"
-          set_default MARKET_CALENDAR "NASDAQ"
-          set_default REBALANCE_AFTER_OPEN_MINUTES "10"
+          set_default MARKET_CALENDAR "LSE"
+          set_default REBALANCE_AFTER_OPEN_MINUTES "390"
           case "${INPUT_DATA_PROVIDER}" in
             fixture|yahoo)
               set_env DATA_PROVIDER "${INPUT_DATA_PROVIDER}"
@@ -191,12 +191,8 @@ jobs:
           set_default RANK_LOOKBACK_DAYS "90"
           set_default MAX_HOLDINGS "50"
           set_default STRATEGY_ALLOCATIONS "core_etf=0.98,cash=0.02"
-          # Select USMC for paper/dry-run, not for the unverified live route.
-          if [ "${INPUT_TRADING_MODE}" = "live" ]; then
-            set_default CORE_ETF_WEIGHTS "VTI=1.0"
-          else
-            set_default CORE_ETF_WEIGHTS "USMC=1.0"
-          fi
+          # Investment strategy is identical for all GitHub environments.
+          set_default CORE_ETF_WEIGHTS "USMC=1.0"
           set_default CORE_ETF_TREND_FILTER "false"
           set_default CORE_ETF_TREND_SMA_MONTHS "10"
           set_default CORE_ETF_SAFE_ASSET "cash"
