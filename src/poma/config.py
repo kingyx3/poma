@@ -290,6 +290,15 @@ class Settings(BaseSettings):
             # an orderly VTI-to-USMC migration and more liquid USMC execution.
             self.rebalance_after_open_minutes = 390 if london_target else 10
         if (
+            london_target
+            and self.trading_mode in {TradingMode.PAPER, TradingMode.LIVE}
+            and self.rebalance_after_open_minutes < 390
+        ):
+            raise ValueError(
+                "USMC paper/live trading requires REBALANCE_AFTER_OPEN_MINUTES>=390 "
+                "to overlap the US and London regular sessions"
+            )
+        if (
             self.managed_cap_mode == ManagedCapMode.MIN_OF_BROKER_TOTAL_AND_CAP
             and self.managed_cap_usd <= 0
         ):
