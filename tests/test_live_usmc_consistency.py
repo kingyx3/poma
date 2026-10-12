@@ -24,7 +24,7 @@ class QualifyingIB(FakeIB):
 
 def _live():
     return make_settings(
-        TRADING_MODE="live", IBKR_ACCOUNT="U1234567",
+        TRADING_MODE="live", IBKR_ACCOUNT="U1234567", ALLOW_LIVE_TRADING=True,
         ALLOW_DELAYED_EXECUTION_QUOTES=False,
     )
 
