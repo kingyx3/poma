@@ -14,7 +14,6 @@ CHECK = ROOT / "ops/scripts/validate_github_environment.sh"
 PAPER = {
     "INVESTMENT_STRATEGY_WEIGHTS": "core_etf=1.0",
     "CASH_TARGET_PCT": "0.02",
-    "CORE_ETF_WEIGHTS": "USMC=1.0",
     "MARKET_CALENDAR": "LSE",
     "REBALANCE_AFTER_OPEN_MINUTES": "390",
     "TELEGRAM_BOT_TOKEN": "secret-token-never-log",
@@ -54,7 +53,6 @@ def test_complete_environment_passes_without_leaking_secrets(mode: str, settings
     [
         "INVESTMENT_STRATEGY_WEIGHTS",
         "CASH_TARGET_PCT",
-        "CORE_ETF_WEIGHTS",
         "MARKET_CALENDAR",
         "REBALANCE_AFTER_OPEN_MINUTES",
         "TELEGRAM_BOT_TOKEN",
@@ -84,15 +82,10 @@ def test_missing_live_broker_secret_fails(key: str) -> None:
 
 
 
-def test_core_etf_ticker_is_optional_when_no_core_etf_sleeve() -> None:
-    values = {
-        **PAPER,
-        "INVESTMENT_STRATEGY_WEIGHTS": "strategy_a=60%,strategy_b=20%,strategy_c=20%",
-    }
-    values.pop("CORE_ETF_WEIGHTS")
-    result = run_check("paper", values)
-    assert result.returncode == 0, result.stderr
-
+def test_core_etf_requires_no_instrument_weight_configuration() -> None:
+    # Selection of USMC belongs to the registered core_etf strategy itself.
+    assert run_check("paper", PAPER).returncode == 0
+    assert run_check("paper", {**PAPER, "CORE_ETF_WEIGHTS": "VTI=1.0"}).returncode == 0
 
 
 def test_missing_many_settings_reports_all_names_without_values() -> None:
@@ -124,9 +117,7 @@ def test_investment_mandate_requires_github_environment_vars_not_secrets() -> No
             assert "secrets." + name not in workflow
             assert "vars." + name + " ||" not in workflow
 
-        # The UCITS ticker selection may continue to use the existing dev secret.
-        assert "${{ vars.CORE_ETF_WEIGHTS || secrets.CORE_ETF_WEIGHTS }}" in workflow
-        assert "${{ vars.STRATEGY_ALLOCATIONS || secrets.STRATEGY_ALLOCATIONS }}" in workflow
+        assert "CORE_ETF_WEIGHTS" not in workflow
         assert "bash ops/scripts/validate_github_environment.sh" in workflow
 
 
