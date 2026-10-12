@@ -4,7 +4,7 @@ This page documents the extension contract for strategy sleeves. It intentionall
 
 ## Registration
 
-Every strategy sleeve named in `STRATEGY_ALLOCATIONS`, other than `cash`, must be registered in `src/poma/strategies/registry.py`. An unregistered name fails config validation at startup.
+Every strategy sleeve named in `INVESTMENT_STRATEGY_WEIGHTS` (or legacy `STRATEGY_ALLOCATIONS`), other than `cash`, must be registered in `src/poma/strategies/registry.py`. An unregistered name fails config validation at startup.
 
 The passive `cash` sleeve is reserved by the portfolio allocation layer and is never executed as an active strategy.
 
