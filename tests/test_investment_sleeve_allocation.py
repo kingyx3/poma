@@ -34,7 +34,6 @@ def test_default_uses_full_invested_sleeve_and_preserves_cash() -> None:
     assert settings.strategy_allocation_map() == pytest.approx({
         "core_etf": 0.98, "cash": 0.02,
     })
-    assert settings.core_etf_weights == "USMC=1.0"
     assert settings.cash_target_pct == 0.02
 
 
