@@ -6,6 +6,8 @@ This page documents the extension contract for strategy sleeves. It intentionall
 
 Every strategy sleeve named in `INVESTMENT_STRATEGY_WEIGHTS` (or legacy `STRATEGY_ALLOCATIONS`), other than `cash`, must be registered in `src/poma/strategies/registry.py`. An unregistered name fails config validation at startup.
 
+Direct USD London fund symbols `USMC` and `SP1` are valid registered strategy names, so `INVESTMENT_STRATEGY_WEIGHTS=USMC=0.8,SP1=0.2` works. They each hold only the named instrument. Ticker keys are case-insensitive and normalized to uppercase; unsupported tickers fail validation rather than guessing the IBKR contract. Algorithmic strategy IDs remain supported alongside direct tickers.
+
 The passive `cash` sleeve is reserved by the portfolio allocation layer and is never executed as an active strategy.
 
 ## Runtime contract
@@ -32,7 +34,7 @@ To add a strategy:
 2. Register the strategy id in `src/poma/strategies/registry.py`.
 3. Add strategy-specific documentation under `docs/strategies/`.
 4. Add focused tests for selection, weighting, edge cases, and registry validation.
-5. Add the strategy id to `STRATEGY_ALLOCATIONS` when ready to allocate capital to it.
+5. Add the strategy ID to `INVESTMENT_STRATEGY_WEIGHTS` when ready to allocate capital to it.
 
 No engine changes should be required for a normal new strategy sleeve.
 
@@ -40,5 +42,7 @@ No engine changes should be required for a normal new strategy sleeve.
 
 | Strategy id | Documentation |
 |---|---|
-| `core_etf` (default) | [`docs/strategies/core-etf.md`](strategies/core-etf.md) |
+| `USMC` (default direct holding) | [`docs/strategies/us-megacap-ucits.md`](strategies/us-megacap-ucits.md) |
+| `SP1` (direct holding) | [`docs/strategies/us-megacap-ucits.md`](strategies/us-megacap-ucits.md) |
+| `core_etf` (legacy configurable trend strategy) | [`docs/strategies/core-etf.md`](strategies/core-etf.md) |
 | `rank_velocity_size_equal_weight` | [`docs/strategies/rank-velocity-size-equal-weight.md`](strategies/rank-velocity-size-equal-weight.md) |
