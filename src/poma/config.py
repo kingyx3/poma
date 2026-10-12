@@ -12,6 +12,7 @@ from poma.portfolio import CASH_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, par
 from poma.strategies import default_registry
 from poma.strategies.core_etf import NAME as CORE_ETF_STRATEGY_NAME
 from poma.strategies.core_etf import parse_core_etf_weights
+from poma.ucits_instruments import ucits_listing
 
 
 class TradingMode(StrEnum):
@@ -266,7 +267,15 @@ class Settings(BaseSettings):
                 f"available strategies: {available}"
             )
         if CORE_ETF_STRATEGY_NAME in allocations:
-            parse_core_etf_weights(self.core_etf_weights)
+            etf_weights = parse_core_etf_weights(self.core_etf_weights)
+            # The LSE broker contract mapping is new and needs paper-account proof first.
+            # Fail closed for live until the UCITS trading, market-hours and tick-size
+            # assumptions are verified with real IBKR contract details.
+            safe_ticker = (self.core_etf_safe_asset or "").strip().upper()
+            if self.trading_mode == TradingMode.LIVE and any(
+                ucits_listing(ticker) is not None for ticker in (*etf_weights, safe_ticker)
+            ):
+                raise ValueError("LIVE trading of London UCITS ETFs is disabled pending IBKR paper verification")
         if (
             self.managed_cap_mode == ManagedCapMode.MIN_OF_BROKER_TOTAL_AND_CAP
             and self.managed_cap_usd <= 0
