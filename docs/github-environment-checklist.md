@@ -6,32 +6,34 @@ paper/live Deploy GCP VM or IB Gateway Ops `configure-paper`/`configure-live`.
 These workflows now fail **before provisioning/remote access** if mandatory inputs
 are missing. They list missing **names**, never secret values.
 
-## Required GitHub Environment configuration (variables or secrets)
+## Required GitHub Environment variables (not secrets)
 
-The strategy settings below may be stored under either **Environment variables**
-or **Environment secrets**. The workflows resolve `vars.NAME || secrets.NAME`, with
-the variable taking priority when both exist. If you configured the five strategy
-settings as **secrets** in `dev`, you do not need to duplicate them as variables.
-Missing values in both locations still fail before deployment. To avoid accidental
-precedence, maintain each value in only one location per environment.
+Set these four fields under **Settings → Environments → dev → Environment variables**
+(and separately under `prd` when enabling production). They are deliberately
+read from GitHub Actions `vars.*` **only**. A secret with the same name is not a
+substitute; an absent Environment variable fails the deploy/Gateway preflight.
 
-## Strategy settings (non-sensitive; variables preferred)
-
-| Variable | Example | Meaning |
+| GitHub Environment variable | Example | Meaning |
 |---|---|---|
-| `INVESTMENT_STRATEGY_WEIGHTS` | `core_etf=1.0` | Registered strategy weights, summing to 100% of the **invested** sleeve |
-| `CASH_TARGET_PCT` | `0.02` | 2% of **total** portfolio remains cash |
-| `CORE_ETF_WEIGHTS` | `USMC=1.0` | Mandatory if `core_etf` is in the investment mix; otherwise optional |
-| `MARKET_CALENDAR` | `LSE` | USMC is traded in London |
-| `REBALANCE_AFTER_OPEN_MINUTES` | `390` | LSE rebalance after 14:30 London time, overlapping the US session |
+| `INVESTMENT_STRATEGY_WEIGHTS` | `core_etf=1.0` | Strategy weights sum to 100% of the invested sleeve |
+| `CASH_TARGET_PCT` | `0.02` | 2% of total equity held as cash |
+| `MARKET_CALENDAR` | `LSE` | London Stock Exchange calendar for USMC |
+| `REBALANCE_AFTER_OPEN_MINUTES` | `390` | London rebalance from 14:30 local time |
 
-The four general settings must be nonempty for paper/live. `CORE_ETF_WEIGHTS` must also be nonempty if the strategy mix includes `core_etf`. Invalid percentages, unregistered strategies,
-conflicting calendars, missing required live permissions and quote settings are rejected by
-the runtime-config validation step. The legacy GH variable
-`STRATEGY_ALLOCATIONS` must be **unset**; its semantics were total-portfolio weights
-and it is intentionally rejected by the new deploy workflow to prevent mixing models.
-The Python app continues to accept legacy `STRATEGY_ALLOCATIONS` when configured
-directly and the new investment-weight variable is unset.
+## Core ETF weights (variable or secret)
+
+If your investment mix includes `core_etf`, also set
+`CORE_ETF_WEIGHTS=USMC=1.0`. POMA accepts this setting as either an Environment
+variable or an Environment secret; the variable wins if both exist. To prevent
+confusing precedence, set it in only one place. Its selected allocation is still
+subject to the normal strategy and instrument checks.
+
+Invalid percentages, unregistered strategies, conflicting calendars, missing
+required permissions and quote settings are rejected by runtime validation.
+The legacy GitHub `STRATEGY_ALLOCATIONS` variable/secret must be unset; its
+percentages were relative to total equity, whereas the new weights describe
+only the invested portion. The application itself still supports legacy
+`STRATEGY_ALLOCATIONS` when running outside this GitHub deployment flow.
 
 ## Required GitHub Environment secrets
 
@@ -80,7 +82,7 @@ strategies may need different market calendars/trading schedules if combined.
 Do not enable a mixed-exchange live allocation until per-instrument market-hours
 and scheduling are reviewed.
 
-The workflow accepts these five strategy settings as GitHub Environment variables or secrets, and checks each environment independently: identical strategy variables
-are **not automatically synchronized** between dev and prd. To keep paper and live
-aligned, set the same five non-secret values in both GitHub Environments and keep
-broker credentials, account identifiers and release approvals separate.
+The workflow checks each environment independently: values are **not synchronized**
+between `dev` and `prd`. Set the four required Environment variables for each
+environment, plus `CORE_ETF_WEIGHTS` where applicable. Keep broker credentials,
+account identifiers and release approvals separate.
