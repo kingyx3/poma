@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 from conftest import make_settings
-from test_broker_order_lifecycle import FakeIB, FakeMarketData, FakeContract
+from test_broker_order_lifecycle import FakeContract, FakeIB, FakeMarketData
 
 from poma.broker import BrokerUnavailable, IbkrBroker, _live_order_contract
 from poma.market_calendar import is_market_open, should_rebalance_now
