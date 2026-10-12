@@ -19,8 +19,10 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. Strategy docs define how each strategy interprets this provider universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rank-rising-velocity lookback window for `rank_velocity_size_equal_weight`; see `docs/strategies/rank-velocity-size-equal-weight.md`. |
 | `MAX_HOLDINGS` | yes | `50` | Selection count for strategies that use a capped holdings list. For the current built-in strategy, this selects the top 50 company stocks when enough valid tickers exist. |
-| `STRATEGY_ALLOCATIONS` | yes | `core_etf=0.98,cash=0.02` | Named portfolio sleeves. Use `rank_velocity_size_equal_weight=0.98,cash=0.02` to restore the previous daily stock strategy. Every non-`cash` name must be registered (see `docs/strategy-contract.md`); the engine executes every positive sleeve. Total must be `<= 1.0`. |
-| `CORE_ETF_WEIGHTS` | yes | `USMC=1.0` in paper/dry_run; `VTI=1.0` for implicit live | `core_etf` sleeve weights as `TICKER=weight` entries summing to at most `1.0`; any remainder stays in cash. See `docs/strategies/core-etf.md`. |
+| `INVESTMENT_STRATEGY_WEIGHTS` | yes for paper/live deploy | `core_etf=1.0` | Strategy weights relative to the invested part of the portfolio, NOT total account equity. Must total 100%. Example `core_etf=60%,rank_velocity_size_equal_weight=40%`. New strategy names must first be registered in code. |
+| `CASH_TARGET_PCT` | yes for paper/live deploy | `0.02` | Fraction of total managed portfolio kept as cash; defaults to 2%. The remaining 98% is split by `INVESTMENT_STRATEGY_WEIGHTS`. |
+| `STRATEGY_ALLOCATIONS` | legacy only | unset | Backward-compatible full-portfolio percentages (`core_etf=0.98,cash=0.02`). Cannot be combined with `INVESTMENT_STRATEGY_WEIGHTS`. GitHub deploy workflow rejects legacy environment var and requires migration to the new fields. |
+| `CORE_ETF_WEIGHTS` | yes for paper/live deploy | `USMC=1.0` in all modes | `core_etf` sleeve weights as `TICKER=weight` entries summing to at most `1.0`; any remainder stays in cash. See `docs/strategies/core-etf.md`. |
 | `CORE_ETF_TREND_FILTER` | yes | `false` | When `true`, `core_etf` holds each ETF only while its last completed month-end close is above its `CORE_ETF_TREND_SMA_MONTHS` average. |
 | `CORE_ETF_TREND_SMA_MONTHS` | yes | `10` | Month-end moving-average length for the optional trend filter. |
 | `CORE_ETF_SAFE_ASSET` | yes | `cash` | Where the trend filter moves a risk-off ETF's weight: an ETF ticker (for example `SGOV`) or `cash`. |
@@ -72,7 +74,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 
-`CASH_BUFFER_PCT` is intentionally not part of the current runtime contract. Cash is represented as a `cash` allocation sleeve in `STRATEGY_ALLOCATIONS`, not as a hidden buffer inside an active strategy.
+`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
 
 ## Strategy pricing vs. execution pricing
 
@@ -108,10 +110,11 @@ Paper/live rebalances size from the configured IBKR account's actual USD cash pl
 
 Transaction costs are operator estimates, not broker guarantees. Set `ESTIMATED_TRANSACTION_COST_BPS` and/or `ESTIMATED_TRANSACTION_COST_FIXED_USD` to account for commissions, spreads, platform fees, FX costs, taxes, or other known trade friction. After normal trade generation, POMA skips any trade whose notional minus estimated cost falls below `MIN_TRADE_NOTIONAL_USD`. The execution-time spread guard (`EXECUTION_MAX_SPREAD_BPS`) remains separate and can still block an otherwise cost-acceptable order if the live quote is too wide.
 
-`STRATEGY_ALLOCATIONS` splits whichever value is resolved above across named sleeves, and the total allocation must be `<= 100%`. Every allocated non-`cash` sleeve is executed by the engine, not just one:
+`INVESTMENT_STRATEGY_WEIGHTS` splits 100% of the **invested 98%** across registered strategies; the 2% cash sleeve is appended automatically. Every allocated non-cash strategy is executed by the engine:
 
 ```text
-STRATEGY_ALLOCATIONS=core_etf=0.60,rank_velocity_size_equal_weight=0.20,cash=0.20
+INVESTMENT_STRATEGY_WEIGHTS=core_etf=60%,rank_velocity_size_equal_weight=40%
+CASH_TARGET_PCT=0.02
 ```
 
 That runs `core_etf` on 60% of the resolved portfolio value, runs `rank_velocity_size_equal_weight` on 20%, and leaves 20% in passive cash. No sleeve separately subtracts a hidden cash buffer. If two sleeves both target the same ticker, POMA combines their targets into a single portfolio-level order rather than trading them independently. See [`docs/portfolio-management.md`](portfolio-management.md) for the strategy-neutral model.
@@ -179,7 +182,7 @@ Bootstrap apply writes generated, non-secret GCP deployment identifiers to `ops/
 - `ORDER_TYPE=market` in live mode is blocked unless `ALLOW_MARKET_ORDERS=true`.
 - `TRADING_MODE=live` with `EXECUTION_PRICE_SOURCE=snapshot` is blocked unless `ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE=true`.
 - Paper/live orders block (not silently reprice from a stale/fallback source) on a missing, stale, too-wide, or delayed execution quote. See "Strategy pricing vs. execution pricing" above.
-- `MAX_POSITION_PCT`, `MAX_TURNOVER_PCT`, `STRATEGY_ALLOCATIONS`, and min-trade thresholds are validated at startup.
+- `MAX_POSITION_PCT`, `MAX_TURNOVER_PCT`, `INVESTMENT_STRATEGY_WEIGHTS`, `CASH_TARGET_PCT`, and min-trade thresholds are validated at startup.
 - The deploy workflow renders paper runtime `IBKR_ACCOUNT` from `IBKR_ACCOUNT_PAPER`. Live mode uses `IBKR_ACCOUNT`.
 - Paper Gateway login secrets are separate from the paper account id: `IBKR_LOGIN_ID_PAPER` / `IBKR_LOGIN_SECRET_PAPER` authenticate Gateway, while `IBKR_ACCOUNT_PAPER` selects the account the app may trade.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are required so every deployed run has alerting configured.
