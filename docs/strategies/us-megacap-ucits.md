@@ -22,7 +22,9 @@ of the portfolio. That also concentrates valuation, sector and single-name risks
 
 ## Safety / configuration
 
-USMC is now the default for dry-run and paper configurations. The implicit live default remains `VTI=1.0` and explicit London UCITS live allocations remain rejected. To select SP1 instead for a paper experiment:
+USMC is the default for **dry-run, paper and live**; account credentials, limits,
+market data and approval gates are selected separately through GitHub environments.
+To select SP1 instead in an experiment:
 
 ```env
 TRADING_MODE=paper
@@ -39,7 +41,9 @@ Only SMART is used for LSE quotes; IEX, a US venue, is skipped. These contract
 details and Yahoo quote *currency* must be confirmed on the actual paper Gateway.
 Do not trade solely on assumed ISIN or web-sourced data.
 
-Live configurations that target either UCITS ETF are rejected by the settings validator.
+Live configurations with USMC are supported by a runtime fail-closed conId, USD-currency,
+LSEETF primary-exchange and open-market validation. Live market data remains real-time
+only; an IBKR Gateway authenticated socket is not sufficient proof of subscriptions.
 An IBKR readiness probe for AAPL does **not** establish LSE ETF order permission or
 market-data subscription. Broker paper contract qualification, USD currency consistency,
 minimum tick, spread, fills, partial fills, cancel/replace and closed-market behavior
@@ -47,11 +51,11 @@ remain explicit live-promotion gates.
 
 ## Trading calendar caveat
 
-POMA still schedules rebalances on the US market calendar. LSE trading hours and
-holidays can differ; US and London markets overlap for part of the US morning only.
-The current mapping is for paper testing, not a production international multi-calendar
-implementation. Do not remove the live guard until LSE market-hours and holiday handling
-are implemented and validated.
+POMA schedules USMC against the LSE trading calendar, using London-local trading dates.
+The default rebalance window starts at 14:30 London local time (390 minutes after LSE
+open), which overlaps the US regular session, including DST transition weeks; half-day
+LSE sessions end before that and are automatically skipped. When migrating existing
+US-listed holdings, live order placement separately checks NASDAQ hours.
 
 ## Suggested tests
 
