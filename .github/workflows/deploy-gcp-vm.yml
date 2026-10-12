@@ -127,10 +127,30 @@ jobs:
       INPUT_DATA_PROVIDER: ${{ inputs.data_provider }}
       INPUT_ALLOW_LIVE_TRADING: ${{ inputs.allow_live_trading }}
       INPUT_IMAGE: ${{ inputs.image }}
+      # Vars are scoped to the selected GitHub Environment, not to main or a shared VM.
+      INVESTMENT_STRATEGY_WEIGHTS: ${{ vars.INVESTMENT_STRATEGY_WEIGHTS }}
+      CASH_TARGET_PCT: ${{ vars.CASH_TARGET_PCT }}
+      CORE_ETF_WEIGHTS: ${{ vars.CORE_ETF_WEIGHTS }}
+      MARKET_CALENDAR: ${{ vars.MARKET_CALENDAR }}
+      REBALANCE_AFTER_OPEN_MINUTES: ${{ vars.REBALANCE_AFTER_OPEN_MINUTES }}
+      STRATEGY_ALLOCATIONS: ${{ vars.STRATEGY_ALLOCATIONS }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Validate mandatory GitHub Environment variables and secrets
+        if: ${{ inputs.deployment_action == 'deploy' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
+          IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}
+          IBKR_LOGIN_ID: ${{ secrets.IBKR_LOGIN_ID }}
+          IBKR_LOGIN_SECRET: ${{ secrets.IBKR_LOGIN_SECRET }}
+          IBKR_LOGIN_ID_PAPER: ${{ secrets.IBKR_LOGIN_ID_PAPER }}
+          IBKR_LOGIN_SECRET_PAPER: ${{ secrets.IBKR_LOGIN_SECRET_PAPER }}
+        run: bash ops/scripts/validate_github_environment.sh "${INPUT_TRADING_MODE}"
 
       - name: Resolve generated deployment config and selected action
         run: |
@@ -190,7 +210,8 @@ jobs:
           set_default UNIVERSE "us_top_market_cap"
           set_default RANK_LOOKBACK_DAYS "90"
           set_default MAX_HOLDINGS "50"
-          set_default STRATEGY_ALLOCATIONS "core_etf=0.98,cash=0.02"
+          set_default INVESTMENT_STRATEGY_WEIGHTS "core_etf=1.0"
+          set_default CASH_TARGET_PCT "0.02"
           # Investment strategy is identical for all GitHub environments.
           set_default CORE_ETF_WEIGHTS "USMC=1.0"
           set_default CORE_ETF_TREND_FILTER "false"
