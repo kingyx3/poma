@@ -161,5 +161,5 @@ def test_us_equity_only_strategy_can_use_us_calendar() -> None:
 def test_core_etf_is_default_for_paper_dry_run_and_live() -> None:
     for mode in ("dry_run", "paper", "live"):
         settings = make_settings(TRADING_MODE=mode)
-        assert settings.strategy_allocation_map() == pytest.approx({"core_etf": 0.98, "cash": 0.02})
+        assert settings.strategy_allocation_map() == pytest.approx({"USMC": 0.98, "cash": 0.02})
         assert settings.market_calendar == "LSE"
