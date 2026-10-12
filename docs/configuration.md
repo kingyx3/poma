@@ -22,7 +22,6 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `INVESTMENT_STRATEGY_WEIGHTS` | yes for paper/live deploy | `core_etf=1.0` | Strategy weights relative to the invested part of the portfolio, NOT total account equity. Must total 100%. Example `core_etf=60%,rank_velocity_size_equal_weight=40%`. New strategy names must first be registered in code. |
 | `CASH_TARGET_PCT` | yes for paper/live deploy | `0.02` | Fraction of total managed portfolio kept as cash; defaults to 2%. The remaining 98% is split by `INVESTMENT_STRATEGY_WEIGHTS`. |
 | `STRATEGY_ALLOCATIONS` | legacy only | unset | Backward-compatible full-portfolio percentages (`core_etf=0.98,cash=0.02`). Cannot be combined with `INVESTMENT_STRATEGY_WEIGHTS`. GitHub deploy workflow rejects legacy environment var and requires migration to the new fields. |
-| `CORE_ETF_WEIGHTS` | yes for paper/live deploy | `USMC=1.0` in all modes | `core_etf` sleeve weights as `TICKER=weight` entries summing to at most `1.0`; any remainder stays in cash. See `docs/strategies/core-etf.md`. |
 | `CORE_ETF_TREND_FILTER` | yes | `false` | When `true`, `core_etf` holds each ETF only while its last completed month-end close is above its `CORE_ETF_TREND_SMA_MONTHS` average. |
 | `CORE_ETF_TREND_SMA_MONTHS` | yes | `10` | Month-end moving-average length for the optional trend filter. |
 | `CORE_ETF_SAFE_ASSET` | yes | `cash` | Where the trend filter moves a risk-off ETF's weight: an ETF ticker (for example `SGOV`) or `cash`. |
@@ -74,7 +73,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 
-In GitHub Actions, `INVESTMENT_STRATEGY_WEIGHTS`, `CASH_TARGET_PCT`, `MARKET_CALENDAR` and `REBALANCE_AFTER_OPEN_MINUTES` must be GitHub **Environment variables** (not secrets). `CORE_ETF_WEIGHTS` may be an Environment variable or secret. All mandatory values are checked before deployment. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
+In GitHub Actions, `INVESTMENT_STRATEGY_WEIGHTS`, `CASH_TARGET_PCT`, `MARKET_CALENDAR` and `REBALANCE_AFTER_OPEN_MINUTES` must be GitHub **Environment variables** (not secrets). The `core_etf` strategy always holds USMC and requires no separate fund weights. All mandatory values are checked before deployment. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
 
 ## Strategy pricing vs. execution pricing
 
