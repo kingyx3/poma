@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     )
     # core_etf strategy: sleeve weights per ETF, plus an optional monthly trend filter that moves
     # an ETF's weight to CORE_ETF_SAFE_ASSET (or cash when empty) while it is below its average.
-    core_etf_weights: str = Field(default="VTI=1.0", alias="CORE_ETF_WEIGHTS")
+    core_etf_weights: str | None = Field(default=None, alias="CORE_ETF_WEIGHTS")
     core_etf_trend_filter: bool = Field(default=False, alias="CORE_ETF_TREND_FILTER")
     core_etf_trend_sma_months: PositiveInt = Field(default=10, alias="CORE_ETF_TREND_SMA_MONTHS")
     core_etf_safe_asset: str = Field(default="cash", alias="CORE_ETF_SAFE_ASSET")
@@ -252,6 +252,11 @@ class Settings(BaseSettings):
             raise ValueError("LIVE trading requires ALLOW_DELAYED_EXECUTION_QUOTES=false")
         if not self.ibkr_market_data_exchanges:
             self.ibkr_market_data_exchanges = "SMART" if self.trading_mode == TradingMode.LIVE else "IEX,SMART"
+
+        # London ETF paper/dry-run default; keep the verified US ETF for implicit live
+        # configurations until IBKR London execution and calendars are validated.
+        if self.core_etf_weights is None:
+            self.core_etf_weights = "VTI=1.0" if self.trading_mode == TradingMode.LIVE else "USMC=1.0"
 
         allocations = parse_strategy_allocations(self.strategy_allocations)
         registry = default_registry()

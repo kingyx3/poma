@@ -10,15 +10,17 @@ Default allocation:
 
 ```text
 STRATEGY_ALLOCATIONS=core_etf=0.98,cash=0.02
-CORE_ETF_WEIGHTS=VTI=1.0
+CORE_ETF_WEIGHTS=USMC=1.0
 CORE_ETF_TREND_FILTER=false
 ```
 
+**Live safety:** The implicit live default remains `VTI=1.0` until the USMC IBKR paper Gateway, order identity, exchange-hours and quote data are verified. An explicit live `USMC` allocation is rejected. USMC paper selection is subject to existing IBKR market-data and safety guards; see [US mega-cap UCITS readiness](us-megacap-ucits.md).
+
 ## What it does
 
-The sleeve holds a fixed basket of broad, liquid ETFs at the weights in `CORE_ETF_WEIGHTS` (default: 100% `VTI`, the whole US stock market at a 0.03% expense ratio). Each run it re-checks the target and only trades when the existing guards say the gap is worth trading (`MIN_TRADE_NOTIONAL_USD`, `MIN_WEIGHT_DELTA_PCT`, whole-share rounding). In practice that means one buy when the sleeve is first funded and a small buy a few times a year as dividends and deposits pile up as cash.
+The sleeve holds a fixed basket of broad, liquid ETFs at the weights in `CORE_ETF_WEIGHTS` (default in dry-run/paper: 100% `USMC`, Franklin US Mega Cap 100 UCITS ETF, an Ireland-domiciled accumulating fund at 0.09% TER). Each run it re-checks the target and only trades when the existing guards say the gap is worth trading (`MIN_TRADE_NOTIONAL_USD`, `MIN_WEIGHT_DELTA_PCT`, whole-share rounding). In practice that means one buy when the sleeve is first funded and a small buy a few times a year as dividends and deposits pile up as cash.
 
-The expected return is the market's return minus a few basis points. There is no claim of beating the market and no guarantee of profit: a broad equity index can lose half its value, as it did in 2008. What this strategy removes is the trading friction that made the previous strategy lose money.
+The selected US mega-cap index is much narrower than the total US stock market: large company winners may persist, but mega-cap and sector concentration can underperform the wider market. There is no claim of beating the market and no guarantee of profit: a broad equity index can lose half its value, as it did in 2008. What this strategy removes is the trading friction that made the previous strategy lose money.
 
 ### Optional trend filter
 
@@ -59,7 +61,7 @@ Reproduce with `python research/strategy_audit_backtest.py` (downloads public pr
 | `rank_velocity` daily (previous default) | -24.7% | 48.4x | 2,285 | 39.0% | -77.9% |
 | `rank_velocity` monthly | 12.4% | 9.1x | 479 | 4.5% | -13.7% |
 | `rank_velocity` monthly + 25-rank buffer | 13.9% | 5.6x | 313 | 2.8% | -15.6% |
-| `core_etf` (new default) | 11.9% | 0.15x | <1 | ~0.0% | -14.0% |
+| `core_etf` (VTI historical replay, not USMC) | 11.9% | 0.15x | <1 | ~0.0% | -14.0% |
 | `core_etf` + trend filter | 9.1% | 0.9x | 1 | ~0.0% | -16.9% |
 
 At $100k the previous strategy's cost drag falls to 7.4% a year (7.7% net CAGR) because commissions are a smaller share of each order; `core_etf` is unchanged at 11.8%. For reference, the S&P 500 price index returned 12.1% a year and an equal-weight basket of the same survivor stocks returned 15.4%.
@@ -68,7 +70,7 @@ At $100k the previous strategy's cost drag falls to 7.4% a year (7.7% net CAGR) 
 
 | Strategy | Net CAGR | Switches / yr | Max drawdown |
 |---|---:|---:|---:|
-| `core_etf` buy-and-hold | 7.8% | 0 | -56.0% |
+| `core_etf` buy-and-hold (S&P 500 proxy) | 7.8% | 0 | -56.0% |
 | `core_etf` + trend filter (risk-off earns 0%) | 7.4% | ~1.3 | -23.5% |
 
 On Shiller's monthly S&P total-return series from 1880 to 2023 (not part of the script), the 10-month filter returned about the same as buy-and-hold (9.4% vs 9.3% a year) with roughly half the worst drawdown (-46% vs -82%). On daily index data from 2010 to 2022 it trailed buy-and-hold by about 4.5 points a year. That is why it is opt-in.

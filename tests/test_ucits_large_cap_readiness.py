@@ -72,11 +72,12 @@ def test_yahoo_lse_usd_etf_symbol_maps_back_to_strategy_ticker(monkeypatch: pyte
     assert history.iloc[-1]["USMC"] == 33.0
 
 
-def test_lse_quote_does_not_request_us_only_iex_venue(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("ticker", ["SP1", "USMC"])
+def test_lse_quote_does_not_request_us_only_iex_venue(monkeypatch: pytest.MonkeyPatch, ticker: str) -> None:
     fake = FakeIB(
         market_data_by_symbol={
-            "SP1": FakeMarketData(
-                contract=FakeContract(symbol="SP1"),
+            ticker: FakeMarketData(
+                contract=FakeContract(symbol=ticker),
                 bid=11.50,
                 ask=11.53,
                 last=11.52,
@@ -85,8 +86,8 @@ def test_lse_quote_does_not_request_us_only_iex_venue(monkeypatch: pytest.Monkey
         }
     )
     monkeypatch.setattr("poma.broker.IB", lambda: fake)
-    quote = IbkrBroker(_settings(monkeypatch)).execution_quotes(["SP1"])["SP1"]
-    assert fake.requested_market_data_contracts == [("SP1", "SMART")]
+    quote = IbkrBroker(_settings(monkeypatch)).execution_quotes([ticker])[ticker]
+    assert fake.requested_market_data_contracts == [(ticker, "SMART")]
     assert quote.bid == 11.50
     assert quote.ask == 11.53
 
@@ -105,8 +106,8 @@ def test_lse_usd_positions_are_retained_in_broker_account(monkeypatch: pytest.Mo
     assert warnings == []
 
 
-
-def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("ticker", ["SP1", "USMC"])
+def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: pytest.MonkeyPatch, ticker: str) -> None:
     """Simulate the actual broker placement helper without sending a real order."""
     from poma.models import OrderSide
 
@@ -114,16 +115,16 @@ def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: py
     monkeypatch.setattr("poma.broker.IB", lambda: fake)
     broker = IbkrBroker(_settings(monkeypatch))
     snapshot = broker._place_limit_order(
-        fake, "SP1", OrderSide.BUY, 2.0, 11.53, "poma:paper:0:SP1:BUY:r1"
+        fake, ticker, OrderSide.BUY, 2.0, 11.53, f"poma:paper:0:{ticker}:BUY:r1"
     )
 
     contract, order = fake.placed_orders[0]
-    assert contract.symbol == "SP1"
+    assert contract.symbol == ticker
     assert contract.primaryExchange == "LSEETF"
     assert contract.currency == "USD"
     assert order.action == "BUY"
     assert order.lmtPrice == 11.53
-    assert snapshot.order_ref == "poma:paper:0:SP1:BUY:r1"
+    assert snapshot.order_ref == f"poma:paper:0:{ticker}:BUY:r1"
     assert snapshot.raw_status == "Submitted"
 
 
@@ -148,5 +149,9 @@ def test_us_etf_existing_live_configuration_remains_valid() -> None:
     assert settings.core_etf_weights == "VTI=1.0"
 
 
-def test_london_ucits_trading_is_opt_in_not_default() -> None:
-    assert make_settings().core_etf_weights == "VTI=1.0"
+def test_usmc_is_default_for_paper_and_dry_run_not_implicit_live() -> None:
+    assert make_settings().core_etf_weights == "USMC=1.0"
+    assert make_settings(TRADING_MODE="paper").core_etf_weights == "USMC=1.0"
+    assert make_settings(
+        TRADING_MODE="live", ALLOW_DELAYED_EXECUTION_QUOTES=False
+    ).core_etf_weights == "VTI=1.0"

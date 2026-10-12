@@ -60,19 +60,19 @@ def test_settings_validate_core_etf_weights_only_when_allocated() -> None:
     assert settings.core_etf_weights == "VTI=1.5"
 
 
-def test_default_holds_full_sleeve_in_vti_without_universe_data() -> None:
+def test_default_holds_full_sleeve_in_usmc_without_universe_data() -> None:
     strategy = CoreEtfStrategy()
     settings = make_settings()
     requirements = strategy.data_requirements(settings)
     assert requirements.uses_universe is False
-    assert requirements.price_history_tickers == ("VTI",)
+    assert requirements.price_history_tickers == ("USMC",)
     assert requirements.price_history_days == 10
 
     book = strategy.build_targets(_context(settings))
 
-    assert [(t.ticker, t.sleeve_weight, t.target_notional) for t in book.targets] == [("VTI", 1.0, 9_800.0)]
+    assert [(t.ticker, t.sleeve_weight, t.target_notional) for t in book.targets] == [("USMC", 1.0, 9_800.0)]
     assert book.targets[0].portfolio_weight == pytest.approx(0.98)
-    assert book.diversified_fund_tickers == ("VTI",)
+    assert book.diversified_fund_tickers == ("USMC",)
     assert book.warnings == ()
 
 
@@ -118,7 +118,7 @@ def test_trend_filter_moves_weight_to_safe_asset_or_cash() -> None:
 
 
 def test_trend_filter_holds_etf_with_warning_when_history_is_short() -> None:
-    settings = make_settings(CORE_ETF_TREND_FILTER="true")
+    settings = make_settings(CORE_ETF_WEIGHTS="VTI=1.0", CORE_ETF_TREND_FILTER="true")
     history = pd.DataFrame({"VTI": _monthly_history([100, 101, 102], last_day="2026-10-09")})
 
     book = CoreEtfStrategy().build_targets(_context(settings, history))
@@ -167,15 +167,15 @@ def test_default_plan_buys_one_etf_order_and_sells_legacy_stocks_without_screene
     plan = engine.build_plan("session", "rebalance-x")
 
     assert client.universe_calls == 0
-    assert client.history_calls == [(["VTI"], 10)]
+    assert client.history_calls == [(["USMC"], 10)]
     assert not engine.is_blocked(plan), plan.warnings
     by_ticker = {trade.ticker: trade for trade in plan.trades}
     assert by_ticker["AAPL"].side == OrderSide.SELL
-    vti = by_ticker["VTI"]
-    assert vti.side == OrderSide.BUY
-    assert vti.reference_price == 330.0
+    usmc = by_ticker["USMC"]
+    assert usmc.side == OrderSide.BUY
+    assert usmc.reference_price == 330.0
     # 98% of $10k at $330 rounds to 30 whole shares.
-    assert vti.quantity == 30
+    assert usmc.quantity == 30
 
 
 def test_plan_blocks_when_etf_prices_cannot_be_loaded() -> None:
@@ -184,7 +184,7 @@ def test_plan_blocks_when_etf_prices_cannot_be_loaded() -> None:
     plan = engine.build_plan("session", "rebalance-x")
 
     assert engine.is_blocked(plan)
-    assert any("unable to load price history for VTI" in w for w in plan.warnings)
+    assert any("unable to load price history for USMC" in w for w in plan.warnings)
     assert plan.trades == []
 
 
