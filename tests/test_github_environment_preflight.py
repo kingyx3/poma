@@ -83,6 +83,18 @@ def test_missing_live_broker_secret_fails(key: str) -> None:
     assert key in result.stderr
 
 
+
+def test_core_etf_ticker_is_optional_when_no_core_etf_sleeve() -> None:
+    values = {
+        **PAPER,
+        "INVESTMENT_STRATEGY_WEIGHTS": "strategy_a=60%,strategy_b=20%,strategy_c=20%",
+    }
+    values.pop("CORE_ETF_WEIGHTS")
+    result = run_check("paper", values)
+    assert result.returncode == 0, result.stderr
+
+
+
 def test_missing_many_settings_reports_all_names_without_values() -> None:
     result = run_check("live", {})
     assert result.returncode != 0
