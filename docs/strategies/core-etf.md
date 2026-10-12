@@ -14,7 +14,7 @@ CORE_ETF_WEIGHTS=USMC=1.0
 CORE_ETF_TREND_FILTER=false
 ```
 
-**Live safety:** The implicit live default remains `VTI=1.0` until the USMC IBKR paper Gateway, order identity, exchange-hours and quote data are verified. An explicit live `USMC` allocation is rejected. USMC paper selection is subject to existing IBKR market-data and safety guards; see [US mega-cap UCITS readiness](us-megacap-ucits.md).
+**Paper/live consistency:** Both modes select `USMC=1.0` by default. The London-local LSE calendar schedules USMC rebalancing from 14:30 London local time, overlapping the US regular session for orderly VTI-to-USMC migration. Live orders require the broker's unique USD/LSEETF conId, real-time quotes and market-hours and account safety gates. See [US mega-cap UCITS readiness](us-megacap-ucits.md).
 
 ## What it does
 
