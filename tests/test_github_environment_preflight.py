@@ -121,15 +121,17 @@ def test_investment_mandate_requires_github_environment_vars_not_secrets() -> No
         assert "bash ops/scripts/validate_github_environment.sh" in workflow
 
 
-def test_required_environment_var_errors_distinguish_core_etf_secret() -> None:
-    config = run_check("paper", {key: value for key, value in PAPER.items() if key != "CASH_TARGET_PCT"})
+def test_required_environment_variable_is_distinct_from_old_etf_weights() -> None:
+    config = run_check(
+        "paper", {key: value for key, value in PAPER.items() if key != "CASH_TARGET_PCT"}
+    )
     assert config.returncode != 0
     assert "GitHub Environment Variable CASH_TARGET_PCT" in config.stderr
-    assert "Variable/Secret CASH_TARGET_PCT" not in config.stderr
 
-    core = run_check("paper", {key: value for key, value in PAPER.items() if key != "CORE_ETF_WEIGHTS"})
-    assert core.returncode != 0
-    assert "GitHub Environment Variable or Secret CORE_ETF_WEIGHTS" in core.stderr
+    # Old ETF weights cannot substitute for investment allocation or cash.
+    legacy = run_check("paper", {"CORE_ETF_WEIGHTS": "USMC=1.0"})
+    assert legacy.returncode != 0
+    assert "INVESTMENT_STRATEGY_WEIGHTS" in legacy.stderr
 
 
 def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> None:
@@ -138,7 +140,6 @@ def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> Non
     for name in (
         "INVESTMENT_STRATEGY_WEIGHTS",
         "CASH_TARGET_PCT",
-        "CORE_ETF_WEIGHTS",
         "MARKET_CALENDAR",
         "REBALANCE_AFTER_OPEN_MINUTES",
     ):
