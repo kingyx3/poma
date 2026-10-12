@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK = ROOT / "ops/scripts/validate_github_environment.sh"
 
 PAPER = {
-    "INVESTMENT_STRATEGY_WEIGHTS": "core_etf=1.0",
+    "INVESTMENT_STRATEGY_WEIGHTS": "USMC=1.0",
     "CASH_TARGET_PCT": "0.02",
     "MARKET_CALENDAR": "LSE",
     "REBALANCE_AFTER_OPEN_MINUTES": "390",

@@ -19,7 +19,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `UNIVERSE` | yes | `us_top_market_cap` | Yahoo-backed US top market-cap universe. Strategy docs define how each strategy interprets this provider universe. |
 | `RANK_LOOKBACK_DAYS` | yes | `90` | Rank-rising-velocity lookback window for `rank_velocity_size_equal_weight`; see `docs/strategies/rank-velocity-size-equal-weight.md`. |
 | `MAX_HOLDINGS` | yes | `50` | Selection count for strategies that use a capped holdings list. For the current built-in strategy, this selects the top 50 company stocks when enough valid tickers exist. |
-| `INVESTMENT_STRATEGY_WEIGHTS` | yes for paper/live deploy | `core_etf=1.0` | Strategy weights relative to the invested part of the portfolio, NOT total account equity. Must total 100%. Example `core_etf=60%,rank_velocity_size_equal_weight=40%`. New strategy names must first be registered in code. |
+| `INVESTMENT_STRATEGY_WEIGHTS` | yes for paper/live deploy | `USMC=1.0` | Strategy weights relative to the invested part of the portfolio, NOT total account equity. Must total 100%. Example `USMC=80%,SP1=20%` or `USMC=80%,rank_velocity_size_equal_weight=20%`. Direct USD UCITS tickers `USMC` and `SP1` are registered, and unknown tickers are rejected until their instrument definitions are added. New strategy names must first be registered in code. |
 | `CASH_TARGET_PCT` | yes for paper/live deploy | `0.02` | Fraction of total managed portfolio kept as cash; defaults to 2%. The remaining 98% is split by `INVESTMENT_STRATEGY_WEIGHTS`. |
 | `STRATEGY_ALLOCATIONS` | legacy only | unset | Backward-compatible full-portfolio percentages (`core_etf=0.98,cash=0.02`). Cannot be combined with `INVESTMENT_STRATEGY_WEIGHTS`. GitHub deploy workflow rejects legacy environment var and requires migration to the new fields. |
 | `CORE_ETF_TREND_FILTER` | yes | `false` | When `true`, `core_etf` holds each ETF only while its last completed month-end close is above its `CORE_ETF_TREND_SMA_MONTHS` average. |
@@ -73,7 +73,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 
-In GitHub Actions, `INVESTMENT_STRATEGY_WEIGHTS`, `CASH_TARGET_PCT`, `MARKET_CALENDAR` and `REBALANCE_AFTER_OPEN_MINUTES` must be GitHub **Environment variables** (not secrets). The `core_etf` strategy always holds USMC and requires no separate fund weights. All mandatory values are checked before deployment. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
+In GitHub Actions, `INVESTMENT_STRATEGY_WEIGHTS`, `CASH_TARGET_PCT`, `MARKET_CALENDAR` and `REBALANCE_AFTER_OPEN_MINUTES` must be GitHub **Environment variables** (not secrets). The legacy `core_etf` strategy still holds USMC, but use `USMC=1.0` directly to avoid naming indirection. `SP1` also works as a direct strategy ID. All mandatory values are checked before deployment. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
 
 ## Strategy pricing vs. execution pricing
 
@@ -112,7 +112,7 @@ Transaction costs are operator estimates, not broker guarantees. Set `ESTIMATED_
 `INVESTMENT_STRATEGY_WEIGHTS` splits 100% of the **invested 98%** across registered strategies; the 2% cash sleeve is appended automatically. Every allocated non-cash strategy is executed by the engine:
 
 ```text
-INVESTMENT_STRATEGY_WEIGHTS=core_etf=60%,rank_velocity_size_equal_weight=40%
+INVESTMENT_STRATEGY_WEIGHTS=USMC=60%,rank_velocity_size_equal_weight=40%
 CASH_TARGET_PCT=0.02
 ```
 

@@ -9,16 +9,16 @@ core_etf
 Default allocation:
 
 ```text
-INVESTMENT_STRATEGY_WEIGHTS=core_etf=1.0
+INVESTMENT_STRATEGY_WEIGHTS=USMC=1.0
 CASH_TARGET_PCT=0.02
 CORE_ETF_TREND_FILTER=false
 ```
 
-**Paper/live consistency:** Both modes use the `core_etf` strategy, which holds USMC (the USD London line). The London-local LSE calendar schedules USMC rebalancing from 14:30 London local time, overlapping the US regular session for orderly VTI-to-USMC migration. Live orders require the broker's unique USD/LSEETF conId, real-time quotes and market-hours and account safety gates. See [US mega-cap UCITS readiness](us-megacap-ucits.md).
+**Paper/live consistency:** Both modes default to direct `USMC=1.0`. The retained `core_etf` algorithm is a separate, backward-compatible option for monthly trend-filter settings and also targets the USMC USD London line. The London-local LSE calendar schedules USMC rebalancing from 14:30 London local time, overlapping the US regular session for orderly VTI-to-USMC migration. Live orders require the broker's unique USD/LSEETF conId, real-time quotes and market-hours and account safety gates. See [US mega-cap UCITS readiness](us-megacap-ucits.md).
 
 ## What it does
 
-The sleeve holds 100% `USMC` (Franklin US Mega Cap 100 UCITS ETF, an Ireland-domiciled accumulating fund at 0.09% TER). There is no ETF-level weight setting; use `INVESTMENT_STRATEGY_WEIGHTS` to control this strategy’s share of the invested portfolio. Each run it re-checks the target and only trades when the existing guards say the gap is worth trading (`MIN_TRADE_NOTIONAL_USD`, `MIN_WEIGHT_DELTA_PCT`, whole-share rounding). In practice that means one buy when the sleeve is first funded and a small buy a few times a year as dividends and deposits pile up as cash.
+The named `core_etf` sleeve holds 100% `USMC` (Franklin US Mega Cap 100 UCITS ETF, an Ireland-domiciled accumulating fund at 0.09% TER). There is no ETF-level weight setting; use `INVESTMENT_STRATEGY_WEIGHTS` to control this strategy’s share of the invested portfolio. Each run it re-checks the target and only trades when the existing guards say the gap is worth trading (`MIN_TRADE_NOTIONAL_USD`, `MIN_WEIGHT_DELTA_PCT`, whole-share rounding). In practice that means one buy when the sleeve is first funded and a small buy a few times a year as dividends and deposits pile up as cash.
 
 The selected US mega-cap index is much narrower than the total US stock market: large company winners may persist, but mega-cap and sector concentration can underperform the wider market. There is no claim of beating the market and no guarantee of profit: a broad equity index can lose half its value, as it did in 2008. What this strategy removes is the trading friction that made the previous strategy lose money.
 

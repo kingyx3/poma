@@ -22,9 +22,16 @@ of the portfolio. That also concentrates valuation, sector and single-name risks
 
 ## Safety / configuration
 
-USMC is the default for **dry-run, paper and live**; account credentials, limits,
+Direct `USMC=1.0` is the default for **dry-run, paper and live**; account credentials, limits,
 market data and approval gates are selected separately through GitHub environments.
-The `core_etf` strategy holds USMC and has no instrument-level weight setting. To invest in SP1 instead, implement and register a distinct `sp1_etf` strategy, then allocate to it with `INVESTMENT_STRATEGY_WEIGHTS` on a paper environment first. The broker instrument plumbing for SP1 remains available for testing.
+To select SP1, use the direct ticker in the investment allocation, no ETF-within-strategy setting needed:
+
+```env
+INVESTMENT_STRATEGY_WEIGHTS=USMC=0.8,SP1=0.2
+CASH_TARGET_PCT=0.02
+```
+
+Both tickers are explicitly registered USD London ETF strategies. They must be validated against the actual paper IBKR Gateway before live use. Unknown symbols are rejected until a vetted instrument mapping and broker contract are added.
 
 The default USMC paper allocation should only be used on a paper account with the relevant LSE
 trading permissions and market-data entitlement. The order symbol is **SP1 / USMC**;

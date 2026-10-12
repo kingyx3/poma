@@ -30,7 +30,7 @@ Use `min_of_broker_total_and_cap` when the IBKR account holds more USD value tha
 
 ## Strategy sleeves
 
-`INVESTMENT_STRATEGY_WEIGHTS` splits 100% of the **invested** portion (default 98%) across the registered strategy sleeves, while `CASH_TARGET_PCT=0.02` explicitly reserves the other 2% of total portfolio equity. The legacy `STRATEGY_ALLOCATIONS` option instead accepts full-portfolio weights:
+`INVESTMENT_STRATEGY_WEIGHTS` (e.g. `USMC=0.8,SP1=0.2`) splits 100% of the **invested** portion (default 98%) across the registered strategy sleeves, while `CASH_TARGET_PCT=0.02` explicitly reserves the other 2% of total portfolio equity. The legacy `STRATEGY_ALLOCATIONS` option instead accepts full-portfolio weights:
 
 ```text
 STRATEGY_ALLOCATIONS=strategy_a=0.60,strategy_b=0.20,cash=0.20
