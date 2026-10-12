@@ -20,20 +20,18 @@ substitute; an absent Environment variable fails the deploy/Gateway preflight.
 | `MARKET_CALENDAR` | `LSE` | London Stock Exchange calendar for USMC |
 | `REBALANCE_AFTER_OPEN_MINUTES` | `390` | London rebalance from 14:30 local time |
 
-## Core ETF weights (variable or secret)
+## Instrument selection
 
-If your investment mix includes `core_etf`, also set
-`CORE_ETF_WEIGHTS=USMC=1.0`. POMA accepts this setting as either an Environment
-variable or an Environment secret; the variable wins if both exist. To prevent
-confusing precedence, set it in only one place. Its selected allocation is still
-subject to the normal strategy and instrument checks.
+The `core_etf` strategy always targets the USMC USD London listing. It has
+**no** `CORE_ETF_WEIGHTS` setting, and requires no corresponding GitHub
+Environment secret or variable. To change the investment mix, edit only
+`INVESTMENT_STRATEGY_WEIGHTS`, which must total exactly `1.0`; the cash weight
+is configured independently through `CASH_TARGET_PCT`.
 
-Invalid percentages, unregistered strategies, conflicting calendars, missing
-required permissions and quote settings are rejected by runtime validation.
-The legacy GitHub `STRATEGY_ALLOCATIONS` variable/secret must be unset; its
-percentages were relative to total equity, whereas the new weights describe
-only the invested portion. The application itself still supports legacy
-`STRATEGY_ALLOCATIONS` when running outside this GitHub deployment flow.
+Invalid percentages, unregistered strategies and conflicting market calendars
+fail before deployment. The legacy `STRATEGY_ALLOCATIONS` full-account allocation
+variable/secret is rejected in the GitHub workflow to avoid ambiguous allocation
+models.
 
 ## Required GitHub Environment secrets
 
@@ -74,7 +72,6 @@ A working *registered-strategies* split is:
 ```text
 INVESTMENT_STRATEGY_WEIGHTS=core_etf=60%,rank_velocity_size_equal_weight=40%
 CASH_TARGET_PCT=0.02
-CORE_ETF_WEIGHTS=USMC=1.0
 ```
 
 This deploys 58.8% to USMC, 39.2% to rank velocity, and 2% cash. The two
@@ -84,5 +81,5 @@ and scheduling are reviewed.
 
 The workflow checks each environment independently: values are **not synchronized**
 between `dev` and `prd`. Set the four required Environment variables for each
-environment, plus `CORE_ETF_WEIGHTS` where applicable. Keep broker credentials,
+environment. Keep broker credentials,
 account identifiers and release approvals separate.

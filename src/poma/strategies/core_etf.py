@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -17,35 +16,9 @@ NAME = "core_etf"
 _LATEST_PRICE_DAYS = 10
 
 
-def parse_core_etf_weights(raw: str) -> dict[str, float]:
-    """Parse ``CORE_ETF_WEIGHTS`` as ``VTI=0.6,VXUS=0.4`` into sleeve weights.
-
-    Weights are fractions of this strategy's sleeve and must sum to at most 1.0; any remainder
-    stays in cash inside the sleeve.
-    """
-    weights: dict[str, float] = {}
-    for entry in (raw or "").split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        if "=" not in entry:
-            raise ValueError(f"CORE_ETF_WEIGHTS entries must use TICKER=weight, got {entry!r}")
-        raw_ticker, raw_weight = entry.split("=", 1)
-        ticker = raw_ticker.strip().upper()
-        if not ticker:
-            raise ValueError("CORE_ETF_WEIGHTS tickers must not be empty")
-        if ticker in weights:
-            raise ValueError(f"duplicate CORE_ETF_WEIGHTS ticker {ticker!r}")
-        weight = float(raw_weight)
-        if not math.isfinite(weight) or not 0 < weight <= 1:
-            raise ValueError(f"CORE_ETF_WEIGHTS weight for {ticker!r} must be in (0, 1]")
-        weights[ticker] = weight
-    if not weights:
-        raise ValueError("CORE_ETF_WEIGHTS must name at least one ETF")
-    total = sum(weights.values())
-    if total > 1.000001:
-        raise ValueError(f"CORE_ETF_WEIGHTS sum to {total:.4f}; they must not exceed 1.0")
-    return weights
+# The core_etf strategy owns exactly one instrument. Select capital exposure via
+# INVESTMENT_STRATEGY_WEIGHTS; there is no second ETF-weight configuration layer.
+CORE_ETF_TICKER = "USMC"
 
 
 # CORE_ETF_SAFE_ASSET values that mean "hold the risk-off weight as cash".
@@ -85,7 +58,7 @@ def trend_is_up(history: pd.Series, sma_months: int) -> bool | None:
 
 
 class CoreEtfStrategy:
-    """Hold a fixed basket of broad, liquid ETFs; optionally step aside on a monthly trend signal.
+    """Hold the USD London USMC mega-cap fund; optionally apply a monthly trend filter.
 
     See docs/strategies/core-etf.md for the audit that motivated it and its backtests.
     """
@@ -93,7 +66,7 @@ class CoreEtfStrategy:
     name = NAME
 
     def data_requirements(self, settings: Settings) -> StrategyDataRequirements:
-        tickers = list(parse_core_etf_weights(settings.core_etf_weights))
+        tickers = [CORE_ETF_TICKER]
         safe = safe_asset(settings)
         if safe and safe not in tickers:
             tickers.append(safe)
@@ -109,7 +82,7 @@ class CoreEtfStrategy:
 
     def build_targets(self, context: StrategyContext) -> StrategyTargetBook:
         settings = context.settings
-        risk_weights = parse_core_etf_weights(settings.core_etf_weights)
+        risk_weights = {CORE_ETF_TICKER: 1.0}
         safe = safe_asset(settings)
         warnings: list[str] = []
         sleeve_weights: dict[str, float] = {}

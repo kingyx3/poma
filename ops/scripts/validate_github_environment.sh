@@ -16,12 +16,6 @@ require_var() {
     missing+=("GitHub Environment Variable ${name}")
   fi
 }
-require_setting() {
-  local name="$1"
-  if [ -z "${!name:-}" ]; then
-    missing+=("GitHub Environment Variable or Secret ${name}")
-  fi
-}
 require_secret() {
   local name="$1"
   if [ -z "${!name:-}" ]; then
@@ -37,10 +31,6 @@ require_secret TELEGRAM_CHAT_ID
 if [ "${mode}" != "dry_run" ]; then
   require_var INVESTMENT_STRATEGY_WEIGHTS
   require_var CASH_TARGET_PCT
-  # CORE_ETF_WEIGHTS is mandatory only when core_etf is in the investment mix.
-  if printf '%s' "${INVESTMENT_STRATEGY_WEIGHTS:-}" | grep -Eq '(^|,)[[:space:]]*core_etf[[:space:]]*[:=]'; then
-    require_setting CORE_ETF_WEIGHTS
-  fi
   require_var MARKET_CALENDAR
   require_var REBALANCE_AFTER_OPEN_MINUTES
 fi

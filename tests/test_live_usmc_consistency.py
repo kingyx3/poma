@@ -32,7 +32,7 @@ def _live():
 def test_same_default_etf_for_paper_and_live_with_separate_broker_modes() -> None:
     paper = make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567")
     live = _live()
-    assert paper.core_etf_weights == live.core_etf_weights == "USMC=1.0"
+    assert paper.strategy_allocation_map() == live.strategy_allocation_map() == {"core_etf": 0.98, "cash": 0.02}
     assert paper.market_calendar == live.market_calendar == "LSE"
     assert paper.rebalance_after_open_minutes == live.rebalance_after_open_minutes == 390
     assert paper.allow_delayed_execution_quotes is True

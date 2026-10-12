@@ -24,12 +24,7 @@ of the portfolio. That also concentrates valuation, sector and single-name risks
 
 USMC is the default for **dry-run, paper and live**; account credentials, limits,
 market data and approval gates are selected separately through GitHub environments.
-To select SP1 instead in an experiment:
-
-```env
-TRADING_MODE=paper
-CORE_ETF_WEIGHTS=SP1=1.0
-```
+The `core_etf` strategy holds USMC and has no instrument-level weight setting. To invest in SP1 instead, implement and register a distinct `sp1_etf` strategy, then allocate to it with `INVESTMENT_STRATEGY_WEIGHTS` on a paper environment first. The broker instrument plumbing for SP1 remains available for testing.
 
 The default USMC paper allocation should only be used on a paper account with the relevant LSE
 trading permissions and market-data entitlement. The order symbol is **SP1 / USMC**;

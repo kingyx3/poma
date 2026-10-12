@@ -28,7 +28,6 @@ def test_default_strategy_is_core_etf_with_rank_strategy_settings_kept() -> None
         DEFAULT_STRATEGY_NAME: 0.98,
         CASH_STRATEGY_NAME: 0.02,
     }
-    assert settings.core_etf_weights == "USMC=1.0"
     assert settings.core_etf_trend_filter is False
     assert settings.max_order_notional_usd == 25_000
     # The previous strategy stays selectable with its original knobs.
@@ -141,7 +140,6 @@ def test_delayed_execution_quotes_default_by_trading_mode() -> None:
         ALLOW_LIVE_TRADING=True,
     )
     assert live.allow_delayed_execution_quotes is False
-    assert live.core_etf_weights == "USMC=1.0"
     assert live.market_calendar == "LSE"
     assert live.rebalance_after_open_minutes == 390
 
