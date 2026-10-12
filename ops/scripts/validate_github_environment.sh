@@ -13,7 +13,13 @@ missing=()
 require_var() {
   local name="$1"
   if [ -z "${!name:-}" ]; then
-    missing+=("GitHub Environment Variable/Secret ${name}")
+    missing+=("GitHub Environment Variable ${name}")
+  fi
+}
+require_setting() {
+  local name="$1"
+  if [ -z "${!name:-}" ]; then
+    missing+=("GitHub Environment Variable or Secret ${name}")
   fi
 }
 require_secret() {
@@ -27,19 +33,19 @@ require_secret TELEGRAM_BOT_TOKEN
 require_secret TELEGRAM_CHAT_ID
 
 # Paper and live trades must carry an explicit, reviewed investment mandate.
-# Missing GitHub variables AND secrets must never fall back to an unintended mandate.
+# Four explicit GitHub Environment VARIABLES are required for paper/live.\n# CORE_ETF_WEIGHTS may come from a variable or secret if core_etf is selected.
 if [ "${mode}" != "dry_run" ]; then
   require_var INVESTMENT_STRATEGY_WEIGHTS
   require_var CASH_TARGET_PCT
   # CORE_ETF_WEIGHTS is mandatory only when core_etf is in the investment mix.
   if printf '%s' "${INVESTMENT_STRATEGY_WEIGHTS:-}" | grep -Eq '(^|,)[[:space:]]*core_etf[[:space:]]*[:=]'; then
-    require_var CORE_ETF_WEIGHTS
+    require_setting CORE_ETF_WEIGHTS
   fi
   require_var MARKET_CALENDAR
   require_var REBALANCE_AFTER_OPEN_MINUTES
 fi
 if [ -n "${LEGACY_STRATEGY_ALLOCATIONS:-}" ]; then
-  echo "::error::Legacy STRATEGY_ALLOCATIONS GitHub var is not supported by the new deploy flow; migrate it to INVESTMENT_STRATEGY_WEIGHTS + CASH_TARGET_PCT" >&2
+  echo "::error::Legacy STRATEGY_ALLOCATIONS GitHub variable/secret is not supported by the new deploy flow; migrate it to INVESTMENT_STRATEGY_WEIGHTS + CASH_TARGET_PCT" >&2
   exit 1
 fi
 
