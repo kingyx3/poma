@@ -22,6 +22,7 @@ from poma.models import (
     ProposedTrade,
 )
 from poma.order_lifecycle import IDEMPOTENT_REPLAY_STATUS, ORDER_REF_PREFIX
+from poma.ucits_instruments import ucits_listing
 
 # ib_insync reports market data type as an int on the ticker/reqMarketDataType callback:
 # 1=live, 2=frozen, 3=delayed, 4=delayed-frozen. Only live/frozen reflect real-time prices:
@@ -187,14 +188,18 @@ def _stock_contract(ticker: str, exchange: str, resolved: Stock | None = None) -
     Pinning the conId (and primary exchange) makes a direct-venue request unambiguous even when
     the bare symbol alone does not resolve on that venue.
     """
+    listing = ucits_listing(ticker)
+    primary_exchange = listing.primary_exchange if listing is not None else ""
     if resolved is not None and getattr(resolved, "conId", 0):
         return Stock(
             symbol=ticker,
             exchange=exchange,
             currency="USD",
             conId=resolved.conId,
-            primaryExchange=getattr(resolved, "primaryExchange", "") or "",
+            primaryExchange=getattr(resolved, "primaryExchange", "") or primary_exchange,
         )
+    if listing is not None:
+        return Stock(ticker, exchange, listing.currency, primaryExchange=primary_exchange)
     return Stock(ticker, exchange, "USD")
 
 
@@ -258,10 +263,14 @@ def _request_execution_quotes_for_type(
     resolved = resolved or {}
     ib.reqMarketDataType(market_data_type)
     for exchange in exchanges:
+        # US-only IEX is not a valid venue for USD-traded London ETFs.
         batch = {
             ticker: ib.reqMktData(_stock_contract(ticker, exchange, resolved.get(ticker)), "", False, False)
             for ticker in remaining
+            if ucits_listing(ticker) is None or exchange == "SMART"
         }
+        if not batch:
+            continue
         ib.sleep(wait_seconds)
         sampled_at = datetime.now(UTC)
         settled: set[str] = set()
@@ -337,7 +346,7 @@ def _resolve_stock_contracts(ib: IB, tickers: Sequence[str]) -> dict[str, Stock]
     qualify = getattr(ib, "qualifyContracts", None)
     if qualify is None:
         return None
-    contracts = {ticker: Stock(ticker, "SMART", "USD") for ticker in tickers}
+    contracts = {ticker: _stock_contract(ticker, "SMART") for ticker in tickers}
     try:
         qualify(*contracts.values())
     except Exception:  # noqa: BLE001 - fall back to symbol quoting rather than blocking on lookup
@@ -791,7 +800,7 @@ class IbkrBroker:
                 submitted = None
                 try:
                     self._assert_connected(ib)
-                    contract = Stock(proposed.ticker, "SMART", "USD")
+                    contract = _stock_contract(proposed.ticker, "SMART")
                     order = self._build_order(proposed)
                     if self.settings.ibkr_account:
                         order.account = self.settings.ibkr_account
@@ -1225,7 +1234,7 @@ class IbkrBroker:
         limit_price: float,
         order_ref: str,
     ) -> OpenOrderSnapshot:
-        contract = Stock(ticker, "SMART", "USD")
+        contract = _stock_contract(ticker, "SMART")
         order = LimitOrder(side.value, quantity, limit_price)
         order.tif = self.settings.order_time_in_force
         order.orderRef = order_ref
