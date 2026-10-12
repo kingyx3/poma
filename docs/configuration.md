@@ -74,7 +74,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 
-In GitHub Actions, the required investment settings can be set as Environment variables or Environment secrets. The workflows use variables when both are defined; store each setting in one place to avoid ambiguity. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
+In GitHub Actions, `INVESTMENT_STRATEGY_WEIGHTS`, `CASH_TARGET_PCT`, `MARKET_CALENDAR` and `REBALANCE_AFTER_OPEN_MINUTES` must be GitHub **Environment variables** (not secrets). `CORE_ETF_WEIGHTS` may be an Environment variable or secret. All mandatory values are checked before deployment. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
 
 ## Strategy pricing vs. execution pricing
 
