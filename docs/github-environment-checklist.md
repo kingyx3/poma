@@ -12,11 +12,11 @@ are missing. They list missing **names**, never secret values.
 |---|---|---|
 | `INVESTMENT_STRATEGY_WEIGHTS` | `core_etf=1.0` | Registered strategy weights, summing to 100% of the **invested** sleeve |
 | `CASH_TARGET_PCT` | `0.02` | 2% of **total** portfolio remains cash |
-| `CORE_ETF_WEIGHTS` | `USMC=1.0` | Which ETF(s) the built-in `core_etf` strategy owns |
+| `CORE_ETF_WEIGHTS` | `USMC=1.0` | Mandatory if `core_etf` is in the investment mix; otherwise optional |
 | `MARKET_CALENDAR` | `LSE` | USMC is traded in London |
 | `REBALANCE_AFTER_OPEN_MINUTES` | `390` | LSE rebalance after 14:30 London time, overlapping the US session |
 
-All five must be nonempty for paper/live. Invalid percentages, unregistered strategies,
+The four general settings must be nonempty for paper/live. `CORE_ETF_WEIGHTS` must also be nonempty if the strategy mix includes `core_etf`. Invalid percentages, unregistered strategies,
 conflicting calendars, missing required live permissions and quote settings are rejected by
 the runtime-config validation step. The legacy GH variable
 `STRATEGY_ALLOCATIONS` must be **unset**; its semantics were total-portfolio weights
