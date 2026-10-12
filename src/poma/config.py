@@ -14,8 +14,7 @@ from poma.portfolio import (
     parse_strategy_allocations,
 )
 from poma.strategies import default_registry
-from poma.strategies.core_etf import NAME as CORE_ETF_STRATEGY_NAME
-from poma.strategies.core_etf import parse_core_etf_weights
+from poma.strategies.core_etf import CORE_ETF_TICKER, NAME as CORE_ETF_STRATEGY_NAME
 from poma.ucits_instruments import ucits_listing
 
 
@@ -89,9 +88,8 @@ class Settings(BaseSettings):
     strategy_allocations: str | None = Field(default=None, alias="STRATEGY_ALLOCATIONS")
     investment_strategy_weights: str | None = Field(default=None, alias="INVESTMENT_STRATEGY_WEIGHTS")
     cash_target_pct: float = Field(default=0.02, alias="CASH_TARGET_PCT")
-    # core_etf strategy: sleeve weights per ETF, plus an optional monthly trend filter that moves
-    # an ETF's weight to CORE_ETF_SAFE_ASSET (or cash when empty) while it is below its average.
-    core_etf_weights: str | None = Field(default=None, alias="CORE_ETF_WEIGHTS")
+    # core_etf always holds USMC. Exposure is controlled only by investment strategy weights.
+    # Trend-filter settings remain optional for this strategy.
     core_etf_trend_filter: bool = Field(default=False, alias="CORE_ETF_TREND_FILTER")
     core_etf_trend_sma_months: PositiveInt = Field(default=10, alias="CORE_ETF_TREND_SMA_MONTHS")
     core_etf_safe_asset: str = Field(default="cash", alias="CORE_ETF_SAFE_ASSET")
@@ -258,18 +256,17 @@ class Settings(BaseSettings):
         if not self.ibkr_market_data_exchanges:
             self.ibkr_market_data_exchanges = "SMART" if self.trading_mode == TradingMode.LIVE else "IEX,SMART"
 
-        # Investment selection is independent of environment: paper and live use the
-        # exact same default ETF; GitHub environments still control broker credentials.
-        if self.core_etf_weights is None:
-            self.core_etf_weights = "USMC=1.0"
-
         if self.strategy_allocations is not None and self.investment_strategy_weights is not None:
             raise ValueError(
                 "configure either INVESTMENT_STRATEGY_WEIGHTS + CASH_TARGET_PCT or legacy "
                 "STRATEGY_ALLOCATIONS, not both"
             )
         if self.strategy_allocations is None:
-            weights = self.investment_strategy_weights or "core_etf=1.0"
+            weights = (
+                self.investment_strategy_weights
+                if self.investment_strategy_weights is not None
+                else "core_etf=1.0"
+            )
             allocations = investment_weights_to_portfolio_allocations(weights, self.cash_target_pct)
             # Existing orchestration and report paths consume whole-portfolio allocations.
             self.strategy_allocations = ",".join(
@@ -289,13 +286,10 @@ class Settings(BaseSettings):
                 f"strategy allocation references unregistered strategies {unknown}; "
                 f"available strategies: {available}"
             )
-        etf_weights = (
-            parse_core_etf_weights(self.core_etf_weights)
-            if CORE_ETF_STRATEGY_NAME in allocations else {}
-        )
+        core_etf_active = allocations.get(CORE_ETF_STRATEGY_NAME, 0) > 0
+        target_tickers = {CORE_ETF_TICKER} if core_etf_active else set()
         safe_ticker = (self.core_etf_safe_asset or "").strip().upper()
-        target_tickers = set(etf_weights)
-        if self.core_etf_trend_filter and safe_ticker not in {"", "CASH", "NONE"}:
+        if core_etf_active and self.core_etf_trend_filter and safe_ticker not in {"", "CASH", "NONE"}:
             target_tickers.add(safe_ticker)
         london_target = any(ucits_listing(ticker) is not None for ticker in target_tickers)
         if self.market_calendar is None:
