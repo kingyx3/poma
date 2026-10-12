@@ -31,7 +31,10 @@ require_secret TELEGRAM_CHAT_ID
 if [ "${mode}" != "dry_run" ]; then
   require_var INVESTMENT_STRATEGY_WEIGHTS
   require_var CASH_TARGET_PCT
-  require_var CORE_ETF_WEIGHTS
+  # CORE_ETF_WEIGHTS is mandatory only when core_etf is in the investment mix.
+  if printf '%s' "${INVESTMENT_STRATEGY_WEIGHTS:-}" | grep -Eq '(^|,)[[:space:]]*core_etf[[:space:]]*[:=]'; then
+    require_var CORE_ETF_WEIGHTS
+  fi
   require_var MARKET_CALENDAR
   require_var REBALANCE_AFTER_OPEN_MINUTES
 fi
