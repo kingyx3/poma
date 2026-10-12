@@ -7,6 +7,7 @@ from typing import Any, Protocol
 import pandas as pd
 
 from poma.config import Settings
+from poma.ucits_instruments import price_symbol
 
 YAHOO_SUPPORTED_UNIVERSES = {"us_top_market_cap", "us_top500"}
 YAHOO_EXCHANGES = ("NMS", "NYQ", "ASE")
@@ -219,13 +220,21 @@ class YahooFinanceMarketDataClient:
         """
         end = date.today()
         start = end - timedelta(days=lookback_days)
+        # Yahoo's London suffix is a data-provider identifier, not the IBKR order symbol.
+        # Keep strategy targets keyed to their broker ticker to prevent orphan positions.
+        yahoo_symbols = [price_symbol(ticker) for ticker in tickers]
         prices = self._download_close_prices(
-            list(tickers),
+            yahoo_symbols,
             start,
             end,
             price_columns=("Adj Close", "Close"),
         )
-        return pd.DataFrame(prices).sort_index()
+        mapped = {
+            ticker: prices[price_symbol(ticker)]
+            for ticker in tickers
+            if price_symbol(ticker) in prices
+        }
+        return pd.DataFrame(mapped).sort_index()
 
     def _download_close_prices(
         self,
