@@ -14,7 +14,8 @@ from poma.portfolio import (
     parse_strategy_allocations,
 )
 from poma.strategies import default_registry
-from poma.strategies.core_etf import CORE_ETF_TICKER, NAME as CORE_ETF_STRATEGY_NAME
+from poma.strategies.core_etf import CORE_ETF_TICKER
+from poma.strategies.core_etf import NAME as CORE_ETF_STRATEGY_NAME
 from poma.ucits_instruments import ucits_listing
 
 
