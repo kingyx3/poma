@@ -203,6 +203,43 @@ def _stock_contract(ticker: str, exchange: str, resolved: Stock | None = None) -
     return Stock(ticker, exchange, "USD")
 
 
+def _live_order_contract(ib: IB, ticker: str, settings: Settings) -> Stock:
+    """Validate a real-money order's venue and contract before it can be transmitted.
+
+    London USD UCITS listings must qualify to one IBKR conId. Never replace a failed
+    qualification with a symbol-only SMART order: USMC also trades on Xetra in EUR.
+    The calendar check is deliberately performed at order time, including replacements.
+    """
+    from poma.market_calendar import is_market_open
+
+    listing = ucits_listing(ticker)
+    calendar = "LSE" if listing is not None else "NASDAQ"
+    if not is_market_open(calendar):
+        raise BrokerUnavailable(f"{ticker}: {calendar} regular market is closed; no live order placed")
+    if listing is None:
+        return _stock_contract(ticker, "SMART")
+
+    qualify = getattr(ib, "qualifyContracts", None)
+    if not callable(qualify):
+        raise BrokerUnavailable(f"{ticker}: IBKR contract qualification is unavailable")
+    requested = _stock_contract(ticker, "SMART")
+    try:
+        qualified = qualify(requested)
+    except Exception as exc:
+        raise BrokerUnavailable(f"{ticker}: cannot qualify USD LSEETF contract: {exc}") from exc
+    if len(qualified) != 1:
+        raise BrokerUnavailable(f"{ticker}: IBKR did not uniquely qualify the USD LSEETF contract")
+    contract = qualified[0]
+    if (
+        not getattr(contract, "conId", 0)
+        or str(getattr(contract, "symbol", "")).upper() != ticker.upper()
+        or str(getattr(contract, "currency", "")).upper() != listing.currency
+        or str(getattr(contract, "primaryExchange", "")).upper() != listing.primary_exchange
+    ):
+        raise BrokerUnavailable(f"{ticker}: IBKR qualified the wrong exchange/currency or missing conId")
+    return contract
+
+
 def _has_tick_time(market_data: object) -> bool:
     return isinstance(getattr(market_data, "time", None), datetime)
 
@@ -800,7 +837,11 @@ class IbkrBroker:
                 submitted = None
                 try:
                     self._assert_connected(ib)
-                    contract = _stock_contract(proposed.ticker, "SMART")
+                    contract = (
+                        _live_order_contract(ib, proposed.ticker, self.settings)
+                        if self.settings.trading_mode == TradingMode.LIVE
+                        else _stock_contract(proposed.ticker, "SMART")
+                    )
                     order = self._build_order(proposed)
                     if self.settings.ibkr_account:
                         order.account = self.settings.ibkr_account
@@ -1069,6 +1110,22 @@ class IbkrBroker:
             self._assert_connected(ib)
             with _collect_market_data_errors(ib) as errors:
                 resolved = _resolve_stock_contracts(ib, unique_tickers)
+                if self.settings.trading_mode == TradingMode.LIVE:
+                    # No symbol-only market-data fallback for the live London instruments.
+                    for ticker in unique_tickers:
+                        listing = ucits_listing(ticker)
+                        if listing is None:
+                            continue
+                        contract = (resolved or {}).get(ticker)
+                        if (
+                            contract is None
+                            or not getattr(contract, "conId", 0)
+                            or str(getattr(contract, "currency", "")).upper() != listing.currency
+                            or str(getattr(contract, "primaryExchange", "")).upper() != listing.primary_exchange
+                        ):
+                            raise BrokerUnavailable(
+                                f"{ticker}: live USD LSEETF quote contract was not uniquely qualified"
+                            )
                 # Only IBKR's explicit "no security definition" (error 200) proves a symbol is
                 # unknown; a lookup that merely came back empty (e.g. a timeout) is quoted by
                 # symbol as before rather than condemned.
@@ -1234,7 +1291,11 @@ class IbkrBroker:
         limit_price: float,
         order_ref: str,
     ) -> OpenOrderSnapshot:
-        contract = _stock_contract(ticker, "SMART")
+        contract = (
+            _live_order_contract(ib, ticker, self.settings)
+            if self.settings.trading_mode == TradingMode.LIVE
+            else _stock_contract(ticker, "SMART")
+        )
         order = LimitOrder(side.value, quantity, limit_price)
         order.tif = self.settings.order_time_in_force
         order.orderRef = order_ref

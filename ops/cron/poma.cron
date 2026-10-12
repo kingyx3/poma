@@ -1,5 +1,5 @@
-# Check every 5 minutes. POMA decides whether the US market has been open for 10+ minutes
-# and whether today's rebalance already ran. This avoids DST-specific cron schedules.
+# Check every 5 minutes. POMA decides exchange-local trading hours and whether the
+# configured rebalance window has opened. USMC uses LSE 14:30 local for US overlap.
 */5 * * * * cd /opt/poma && bash ops/cron/run_logged.sh /opt/poma/logs/poma-cron.log /usr/bin/docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma monitor
 
 # Follow up on working orders independent of the rebalance process lifetime: replaces a

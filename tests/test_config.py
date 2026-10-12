@@ -141,7 +141,9 @@ def test_delayed_execution_quotes_default_by_trading_mode() -> None:
         ALLOW_LIVE_TRADING=True,
     )
     assert live.allow_delayed_execution_quotes is False
-    assert live.core_etf_weights == "VTI=1.0"  # unverified London live trading remains disabled
+    assert live.core_etf_weights == "USMC=1.0"
+    assert live.market_calendar == "LSE"
+    assert live.rebalance_after_open_minutes == 390
 
     explicit = Settings(
         TELEGRAM_BOT_TOKEN="token",

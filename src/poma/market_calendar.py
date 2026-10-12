@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import pandas_market_calendars as mcal
 
@@ -15,14 +14,14 @@ class MarketDecision:
 
 
 def _session_bounds(calendar_name: str, now: datetime) -> tuple[datetime, datetime] | None:
-    """Return the UTC (open, close) of today's New York session, or ``None`` off trading days."""
+    """Return exchange-local session bounds converted to UTC, or None off trading days."""
     if now.tzinfo is None:
         raise ValueError("now_utc must be timezone-aware")
-    ny_date = now.astimezone(ZoneInfo("America/New_York")).date()
     calendar = mcal.get_calendar(calendar_name)
+    session_date = now.astimezone(calendar.tz).date()
     schedule = calendar.schedule(
-        start_date=ny_date.isoformat(),
-        end_date=ny_date.isoformat(),
+        start_date=session_date.isoformat(),
+        end_date=session_date.isoformat(),
     )
     if schedule.empty:
         return None
@@ -32,7 +31,7 @@ def _session_bounds(calendar_name: str, now: datetime) -> tuple[datetime, dateti
 
 
 def is_market_open(calendar_name: str, now_utc: datetime | None = None) -> bool:
-    """Whether the US regular trading session is currently open."""
+    """Whether the requested exchange regular trading session is currently open."""
     now = now_utc or datetime.now(UTC)
     bounds = _session_bounds(calendar_name, now)
     if bounds is None:
@@ -52,7 +51,7 @@ def should_rebalance_now(
     if bounds is None:
         return MarketDecision(False, None, "not a trading day")
 
-    session_date = now.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    session_date = now.astimezone(mcal.get_calendar(calendar_name).tz).date().isoformat()
     market_open, market_close = bounds
     rebalance_time = market_open + timedelta(minutes=after_open_minutes)
 

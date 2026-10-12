@@ -11,8 +11,8 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `APP_ENV` | yes | `development` | Local/runtime label. CI/CD deploys render `dev`, `stg`, or `prd` from the selected GitHub Environment. |
 | `TRADING_MODE` | yes | `dry_run` | Supported values: `dry_run`, `paper`, `live`. |
 | `ALLOW_LIVE_TRADING` | live only | `false` | Set by deploy workflow input. Must be true for live trading. |
-| `MARKET_CALENDAR` | yes | `NASDAQ` | Used by `pandas-market-calendars` for the US equity trading session. |
-| `REBALANCE_AFTER_OPEN_MINUTES` | yes | `10` | Rebalance window after market open. |
+| `MARKET_CALENDAR` | yes | `LSE` | Used by `pandas-market-calendars` for the US equity trading session. |
+| `REBALANCE_AFTER_OPEN_MINUTES` | yes | `390` | Rebalance window after market open. |
 | `DATA_PROVIDER` | yes | `yahoo` | Supported values: `yahoo` for real runs and `fixture` for tests/PR dry-runs. Paper/live deploy validation requires `yahoo`. |
 | `YAHOO_SCREENER_LIMIT` | yahoo only | `500` | Yahoo provider limit. Used by the current rank-velocity strategy before issuer/share-class dedupe and scoring; see `docs/strategies/rank-velocity-size-equal-weight.md`. |
 | `YAHOO_SCREENER_PAGE_SIZE` | yahoo only | `250` | Yahoo screen page size. yfinance/Yahoo caps this at 250. |
