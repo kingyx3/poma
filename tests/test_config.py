@@ -28,7 +28,7 @@ def test_default_strategy_is_direct_usmc_with_legacy_strategies_kept() -> None:
         "USMC": 0.98,
         CASH_STRATEGY_NAME: 0.02,
     }
-    assert DEFAULT_STRATEGY_NAME == "core_etf"  # Legacy named strategy remains available.
+    assert DEFAULT_STRATEGY_NAME == "USMC"  # Legacy core_etf remains selectable.
     assert settings.core_etf_trend_filter is False
     assert settings.max_order_notional_usd == 25_000
     # The previous strategy stays selectable with its original knobs.
