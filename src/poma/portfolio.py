@@ -9,7 +9,7 @@ from poma.ucits_instruments import USD_LSE_UCITS
 # The original daily top-market-cap stock strategy. Still registered; select it through
 # STRATEGY_ALLOCATIONS to restore the pre-core_etf behavior.
 CURRENT_STRATEGY_NAME = "rank_velocity_size_equal_weight"
-DEFAULT_STRATEGY_NAME = "core_etf"
+DEFAULT_STRATEGY_NAME = "USMC"
 CASH_STRATEGY_NAME = "cash"
 DEFAULT_STRATEGY_ALLOCATIONS = f"{DEFAULT_STRATEGY_NAME}=0.98,{CASH_STRATEGY_NAME}=0.02"
 
