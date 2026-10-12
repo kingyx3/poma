@@ -19,15 +19,16 @@ def test_settings_accepts_telegram_config() -> None:
     assert settings.telegram_chat_id == "chat"
 
 
-def test_default_strategy_is_core_etf_with_rank_strategy_settings_kept() -> None:
+def test_default_strategy_is_direct_usmc_with_legacy_strategies_kept() -> None:
     settings = Settings(
         TELEGRAM_BOT_TOKEN="token",
         TELEGRAM_CHAT_ID="chat",
     )
     assert settings.strategy_allocation_map() == {
-        DEFAULT_STRATEGY_NAME: 0.98,
+        "USMC": 0.98,
         CASH_STRATEGY_NAME: 0.02,
     }
+    assert DEFAULT_STRATEGY_NAME == "core_etf"  # Legacy named strategy remains available.
     assert settings.core_etf_trend_filter is False
     assert settings.max_order_notional_usd == 25_000
     # The previous strategy stays selectable with its original knobs.
