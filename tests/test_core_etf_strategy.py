@@ -3,7 +3,6 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from conftest import FakeBroker, make_settings
-from pydantic import ValidationError
 
 from poma.data import FixtureMarketDataClient, YahooFinanceMarketDataClient
 from poma.engine import RebalanceEngine
@@ -13,9 +12,9 @@ from poma.risk import validate_targets
 from poma.strategies import StrategyContext
 from poma.strategies.core_etf import (
     NAME,
+    CORE_ETF_TICKER,
     CoreEtfStrategy,
     completed_month_closes,
-    parse_core_etf_weights,
     trend_is_up,
 )
 
@@ -43,21 +42,21 @@ def _context(settings, history: pd.DataFrame | None = None, capital: float = 9_8
     )
 
 
-def test_parse_core_etf_weights_accepts_basket_and_rejects_bad_input() -> None:
-    assert parse_core_etf_weights(" vti=0.6, vxus=0.4 ") == {"VTI": 0.6, "VXUS": 0.4}
-    for raw in ["", "VTI", "VTI=0", "VTI=0.7,VXUS=0.4", "VTI=0.5,vti=0.5", "VTI=nan"]:
-        with pytest.raises(ValueError):
-            parse_core_etf_weights(raw)
+def test_core_etf_is_a_single_usmc_instrument_without_nested_weights() -> None:
+    assert CORE_ETF_TICKER == "USMC"
+    # Even a stale legacy ETF-weight setting cannot redirect investment to VTI.
+    settings = make_settings(CORE_ETF_WEIGHTS="VTI=1.0")
+    assert CoreEtfStrategy().data_requirements(settings).price_history_tickers == ("USMC",)
 
 
-def test_settings_validate_core_etf_weights_only_when_allocated() -> None:
-    with pytest.raises(ValidationError, match="CORE_ETF_WEIGHTS"):
-        make_settings(CORE_ETF_WEIGHTS="VTI=1.5")
+def test_core_etf_not_selected_when_only_rank_strategy_is_allocated() -> None:
     settings = make_settings(
-        CORE_ETF_WEIGHTS="VTI=1.5",
-        STRATEGY_ALLOCATIONS=f"{CURRENT_STRATEGY_NAME}=0.98,cash=0.02",
+        INVESTMENT_STRATEGY_WEIGHTS=f"{CURRENT_STRATEGY_NAME}=1.0",
     )
-    assert settings.core_etf_weights == "VTI=1.5"
+    assert settings.market_calendar == "NASDAQ"
+    assert settings.strategy_allocation_map() == pytest.approx({
+        CURRENT_STRATEGY_NAME: 0.98, "cash": 0.02,
+    })
 
 
 def test_default_holds_full_sleeve_in_usmc_without_universe_data() -> None:
@@ -91,39 +90,35 @@ def test_trend_signal_uses_only_completed_months() -> None:
     assert trend_is_up(falling, 10) is False
 
 
-def test_trend_filter_moves_weight_to_safe_asset_or_cash() -> None:
+def test_trend_filter_moves_usmc_to_safe_asset_or_cash() -> None:
     falling = _monthly_history([110, 109, 108, 107, 106, 105, 104, 103, 102, 100, 99], last_day="2026-10-09")
     rising = _monthly_history([100, 101, 102, 103, 104, 105, 106, 107, 108, 110, 111], last_day="2026-10-09")
-    history = pd.DataFrame({"VTI": falling, "VXUS": rising, "SGOV": rising})
+    history = pd.DataFrame({"USMC": falling, "SGOV": rising})
     strategy = CoreEtfStrategy()
 
-    with_safe = make_settings(
-        CORE_ETF_WEIGHTS="VTI=0.6,VXUS=0.4",
-        CORE_ETF_TREND_FILTER="true",
-        CORE_ETF_SAFE_ASSET="sgov",
-    )
+    with_safe = make_settings(CORE_ETF_TREND_FILTER="true", CORE_ETF_SAFE_ASSET="sgov")
     requirements = strategy.data_requirements(with_safe)
-    assert requirements.price_history_tickers == ("VTI", "VXUS", "SGOV")
+    assert requirements.price_history_tickers == ("USMC", "SGOV")
     assert requirements.price_history_days >= 10 * 31
 
     book = strategy.build_targets(_context(with_safe, history, capital=10_000.0))
-    assert {t.ticker: t.sleeve_weight for t in book.targets} == {"SGOV": 0.6, "VXUS": 0.4}
-    assert book.diversified_fund_tickers == ("SGOV", "VTI", "VXUS")
-    assert any("VTI: below its trend average" in w for w in book.warnings)
+    assert {t.ticker: t.sleeve_weight for t in book.targets} == {"SGOV": 1.0}
+    assert book.diversified_fund_tickers == ("SGOV", "USMC")
+    assert any("USMC: below its trend average" in w for w in book.warnings)
 
-    to_cash = make_settings(CORE_ETF_WEIGHTS="VTI=0.6,VXUS=0.4", CORE_ETF_TREND_FILTER="true")
+    to_cash = make_settings(CORE_ETF_TREND_FILTER="true")
     book = strategy.build_targets(_context(to_cash, history, capital=10_000.0))
-    assert {t.ticker: t.sleeve_weight for t in book.targets} == {"VXUS": 0.4}
+    assert not book.targets
     assert any("holding its weight in cash" in w for w in book.warnings)
 
 
 def test_trend_filter_holds_etf_with_warning_when_history_is_short() -> None:
-    settings = make_settings(CORE_ETF_WEIGHTS="VTI=1.0", CORE_ETF_TREND_FILTER="true")
-    history = pd.DataFrame({"VTI": _monthly_history([100, 101, 102], last_day="2026-10-09")})
+    settings = make_settings(CORE_ETF_TREND_FILTER="true")
+    history = pd.DataFrame({"USMC": _monthly_history([100, 101, 102], last_day="2026-10-09")})
 
     book = CoreEtfStrategy().build_targets(_context(settings, history))
 
-    assert [t.ticker for t in book.targets] == ["VTI"]
+    assert [t.ticker for t in book.targets] == ["USMC"]
     assert any("fewer than 10 completed months" in w for w in book.warnings)
 
 
