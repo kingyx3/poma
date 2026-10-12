@@ -105,6 +105,28 @@ def test_lse_usd_positions_are_retained_in_broker_account(monkeypatch: pytest.Mo
     assert warnings == []
 
 
+
+def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate the actual broker placement helper without sending a real order."""
+    from poma.models import OrderSide
+
+    fake = FakeIB()
+    monkeypatch.setattr("poma.broker.IB", lambda: fake)
+    broker = IbkrBroker(_settings(monkeypatch))
+    snapshot = broker._place_limit_order(
+        fake, "SP1", OrderSide.BUY, 2.0, 11.53, "poma:paper:0:SP1:BUY:r1"
+    )
+
+    contract, order = fake.placed_orders[0]
+    assert contract.symbol == "SP1"
+    assert contract.primaryExchange == "LSEETF"
+    assert contract.currency == "USD"
+    assert order.action == "BUY"
+    assert order.lmtPrice == 11.53
+    assert snapshot.order_ref == "poma:paper:0:SP1:BUY:r1"
+    assert snapshot.raw_status == "Submitted"
+
+
 @pytest.mark.parametrize("ticker", ["SP1", "USMC"])
 def test_london_etf_in_live_allocation_is_rejected(ticker: str) -> None:
     with pytest.raises(ValueError, match="LIVE trading of London UCITS ETFs is disabled"):
