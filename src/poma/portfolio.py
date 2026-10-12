@@ -4,6 +4,8 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from poma.ucits_instruments import USD_LSE_UCITS
+
 # The original daily top-market-cap stock strategy. Still registered; select it through
 # STRATEGY_ALLOCATIONS to restore the pre-core_etf behavior.
 CURRENT_STRATEGY_NAME = "rank_velocity_size_equal_weight"
@@ -134,7 +136,15 @@ def investment_weights_to_portfolio_allocations(
     """
     if not math.isfinite(cash_target_pct) or not 0 <= cash_target_pct < 1:
         raise ValueError("CASH_TARGET_PCT must be finite and between 0 (inclusive) and 1 (exclusive)")
-    weights = parse_strategy_allocations(raw_weights)
+    raw_parsed = parse_strategy_allocations(raw_weights)
+    # Registered direct ETF IDs are canonical uppercase symbols. Accept the familiar
+    # lower-case input "usmc=1.0", and reject case-colliding duplicate allocations.
+    weights: dict[str, float] = {}
+    for name, weight in raw_parsed.items():
+        canonical_name = name.upper() if name.upper() in USD_LSE_UCITS else name
+        if canonical_name in weights:
+            raise ValueError(f"duplicate investment strategy allocation for {canonical_name!r}")
+        weights[canonical_name] = weight
     if CASH_STRATEGY_NAME in weights:
         raise ValueError("INVESTMENT_STRATEGY_WEIGHTS must not include cash; use CASH_TARGET_PCT")
     if not any(weight > 0 for weight in weights.values()):
