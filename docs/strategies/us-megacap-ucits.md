@@ -22,14 +22,14 @@ of the portfolio. That also concentrates valuation, sector and single-name risks
 
 ## Safety / configuration
 
-Default remains `CORE_ETF_WEIGHTS=VTI=1.0`. The UCITS lines are **opt-in for dry-run/paper only**:
+USMC is now the default for dry-run and paper configurations. The implicit live default remains `VTI=1.0` and explicit London UCITS live allocations remain rejected. To select SP1 instead for a paper experiment:
 
 ```env
 TRADING_MODE=paper
 CORE_ETF_WEIGHTS=SP1=1.0
 ```
 
-or `CORE_ETF_WEIGHTS=USMC=1.0`, only on a paper account with the relevant LSE
+The default USMC paper allocation should only be used on a paper account with the relevant LSE
 trading permissions and market-data entitlement. The order symbol is **SP1 / USMC**;
 Yahoo historical prices are **SP1.L / USMC.L**, mapped back to the order symbol so
 position reconciliation does not introduce a duplicate symbol.
@@ -66,6 +66,6 @@ are implemented and validated.
 5. Obtain user investment approval and promote via a separate reviewed PR if
    all gates pass.
 
-No backtested excess return or dominance over the S&P 500 is implied. The
+The historical VTI return backtest is not a USMC return backtest. No backtested excess return or dominance over the S&P 500 is implied. The
 operating-cost comparison must include LSE bid/ask spreads and IBKR minimum
 commission, not just the fund TER.
