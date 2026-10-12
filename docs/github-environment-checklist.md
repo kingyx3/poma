@@ -6,7 +6,16 @@ paper/live Deploy GCP VM or IB Gateway Ops `configure-paper`/`configure-live`.
 These workflows now fail **before provisioning/remote access** if mandatory inputs
 are missing. They list missing **names**, never secret values.
 
-## Required GitHub Environment variables (non-secret)
+## Required GitHub Environment configuration (variables or secrets)
+
+The strategy settings below may be stored under either **Environment variables**
+or **Environment secrets**. The workflows resolve `vars.NAME || secrets.NAME`, with
+the variable taking priority when both exist. If you configured the five strategy
+settings as **secrets** in `dev`, you do not need to duplicate them as variables.
+Missing values in both locations still fail before deployment. To avoid accidental
+precedence, maintain each value in only one location per environment.
+
+## Strategy settings (non-sensitive; variables preferred)
 
 | Variable | Example | Meaning |
 |---|---|---|
@@ -71,7 +80,7 @@ strategies may need different market calendars/trading schedules if combined.
 Do not enable a mixed-exchange live allocation until per-instrument market-hours
 and scheduling are reviewed.
 
-The workflow checks each environment independently: identical strategy variables
+The workflow accepts these five strategy settings as GitHub Environment variables or secrets, and checks each environment independently: identical strategy variables
 are **not automatically synchronized** between dev and prd. To keep paper and live
 aligned, set the same five non-secret values in both GitHub Environments and keep
 broker credentials, account identifiers and release approvals separate.

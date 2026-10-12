@@ -109,6 +109,26 @@ def test_legacy_environment_strategy_var_fails_with_migration_message() -> None:
     assert "migrate" in result.stderr.lower()
 
 
+def test_strategy_settings_accept_either_environment_vars_or_secrets() -> None:
+    deploy = (ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text()
+    gateway = (ROOT / ".github/workflows/ib-gateway-ops.yml").read_text()
+    # A GitHub secret configured under dev must be equivalent to a non-secret
+    # GitHub Environment variable, without needing to duplicate the value.
+    for workflow in (deploy, gateway):
+        for name in (
+            "INVESTMENT_STRATEGY_WEIGHTS",
+            "CASH_TARGET_PCT",
+            "CORE_ETF_WEIGHTS",
+            "MARKET_CALENDAR",
+            "REBALANCE_AFTER_OPEN_MINUTES",
+        ):
+            assert (
+                "${{ vars." + name + " || secrets." + name + " }}"
+            ) in workflow
+        assert "${{ vars.STRATEGY_ALLOCATIONS || secrets.STRATEGY_ALLOCATIONS }}" in workflow
+        assert "bash ops/scripts/validate_github_environment.sh" in workflow
+
+
 def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> None:
     deploy = (ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text()
     gateway = (ROOT / ".github/workflows/ib-gateway-ops.yml").read_text()
