@@ -11,8 +11,8 @@ from poma.portfolio import CURRENT_STRATEGY_NAME
 from poma.risk import validate_targets
 from poma.strategies import StrategyContext
 from poma.strategies.core_etf import (
-    NAME,
     CORE_ETF_TICKER,
+    NAME,
     CoreEtfStrategy,
     completed_month_closes,
     trend_is_up,
