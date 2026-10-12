@@ -1,8 +1,9 @@
 """Explicit mappings for USD-traded Irish UCITS ETFs.
 
 Only LSE USD lines are supported here: the strategy ticker is the IBKR trading
-symbol while Yahoo Finance expects a '.L' suffix. Live orders require a unique IBKR conId for the USD/LSEETF listing, live market
-quotes and exchange regular-session checks; no raw-symbol order fallback.
+symbol while Yahoo Finance expects a '.L' suffix. Live orders require a
+unique IBKR conId for the USD/LSEETF listing, current quotes and an open
+regular-market session; there is no symbol-only order fallback.
 """
 from __future__ import annotations
 
