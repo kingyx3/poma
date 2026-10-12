@@ -67,9 +67,9 @@ class Settings(BaseSettings):
     trading_mode: TradingMode = Field(default=TradingMode.DRY_RUN, alias="TRADING_MODE")
     allow_live_trading: bool = Field(default=False, alias="ALLOW_LIVE_TRADING")
 
-    market_calendar: str = Field(default="NASDAQ", alias="MARKET_CALENDAR")
-    rebalance_after_open_minutes: PositiveInt = Field(
-        default=10,
+    market_calendar: str | None = Field(default=None, alias="MARKET_CALENDAR")
+    rebalance_after_open_minutes: PositiveInt | None = Field(
+        default=None,
         alias="REBALANCE_AFTER_OPEN_MINUTES",
     )
 
@@ -253,10 +253,10 @@ class Settings(BaseSettings):
         if not self.ibkr_market_data_exchanges:
             self.ibkr_market_data_exchanges = "SMART" if self.trading_mode == TradingMode.LIVE else "IEX,SMART"
 
-        # London ETF paper/dry-run default; keep the verified US ETF for implicit live
-        # configurations until IBKR London execution and calendars are validated.
+        # Investment selection is independent of environment: paper and live use the
+        # exact same default ETF; GitHub environments still control broker credentials.
         if self.core_etf_weights is None:
-            self.core_etf_weights = "VTI=1.0" if self.trading_mode == TradingMode.LIVE else "USMC=1.0"
+            self.core_etf_weights = "USMC=1.0"
 
         allocations = parse_strategy_allocations(self.strategy_allocations)
         registry = default_registry()
@@ -271,16 +271,24 @@ class Settings(BaseSettings):
                 f"STRATEGY_ALLOCATIONS references unregistered strategies {unknown}; "
                 f"available strategies: {available}"
             )
-        if CORE_ETF_STRATEGY_NAME in allocations:
-            etf_weights = parse_core_etf_weights(self.core_etf_weights)
-            # The LSE broker contract mapping is new and needs paper-account proof first.
-            # Fail closed for live until the UCITS trading, market-hours and tick-size
-            # assumptions are verified with real IBKR contract details.
-            safe_ticker = (self.core_etf_safe_asset or "").strip().upper()
-            if self.trading_mode == TradingMode.LIVE and any(
-                ucits_listing(ticker) is not None for ticker in (*etf_weights, safe_ticker)
-            ):
-                raise ValueError("LIVE trading of London UCITS ETFs is disabled pending IBKR paper verification")
+        etf_weights = (
+            parse_core_etf_weights(self.core_etf_weights)
+            if CORE_ETF_STRATEGY_NAME in allocations else {}
+        )
+        safe_ticker = (self.core_etf_safe_asset or "").strip().upper()
+        target_tickers = set(etf_weights)
+        if self.core_etf_trend_filter and safe_ticker not in {"", "CASH", "NONE"}:
+            target_tickers.add(safe_ticker)
+        london_target = any(ucits_listing(ticker) is not None for ticker in target_tickers)
+        if self.market_calendar is None:
+            self.market_calendar = "LSE" if london_target else "NASDAQ"
+        self.market_calendar = self.market_calendar.upper()
+        if london_target and self.market_calendar != "LSE":
+            raise ValueError("London UCITS holdings require MARKET_CALENDAR=LSE")
+        if self.rebalance_after_open_minutes is None:
+            # 14:30 London local time also overlaps the regular US market, permitting
+            # an orderly VTI-to-USMC migration and more liquid USMC execution.
+            self.rebalance_after_open_minutes = 390 if london_target else 10
         if (
             self.managed_cap_mode == ManagedCapMode.MIN_OF_BROKER_TOTAL_AND_CAP
             and self.managed_cap_usd <= 0
