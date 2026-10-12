@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from poma.execution_policy import build_execution_rules
 from poma.models import InstrumentExecutionRule
-from poma.portfolio import CASH_STRATEGY_NAME, DEFAULT_STRATEGY_ALLOCATIONS, parse_strategy_allocations
+from poma.portfolio import (
+    CASH_STRATEGY_NAME,
+    investment_weights_to_portfolio_allocations,
+    parse_strategy_allocations,
+)
 from poma.strategies import default_registry
 from poma.strategies.core_etf import NAME as CORE_ETF_STRATEGY_NAME
 from poma.strategies.core_etf import parse_core_etf_weights
@@ -80,10 +84,11 @@ class Settings(BaseSettings):
     universe: str = Field(default="us_top_market_cap", alias="UNIVERSE")
     rank_lookback_days: PositiveInt = Field(default=90, alias="RANK_LOOKBACK_DAYS")
     max_holdings: PositiveInt = Field(default=50, alias="MAX_HOLDINGS")
-    strategy_allocations: str = Field(
-        default=DEFAULT_STRATEGY_ALLOCATIONS,
-        alias="STRATEGY_ALLOCATIONS",
-    )
+    # New preferred model: weights add to 100% of the invested sleeve, which excludes cash.
+    # Legacy STRATEGY_ALLOCATIONS remains supported, measured over the full account.
+    strategy_allocations: str | None = Field(default=None, alias="STRATEGY_ALLOCATIONS")
+    investment_strategy_weights: str | None = Field(default=None, alias="INVESTMENT_STRATEGY_WEIGHTS")
+    cash_target_pct: float = Field(default=0.02, alias="CASH_TARGET_PCT")
     # core_etf strategy: sleeve weights per ETF, plus an optional monthly trend filter that moves
     # an ETF's weight to CORE_ETF_SAFE_ASSET (or cash when empty) while it is below its average.
     core_etf_weights: str | None = Field(default=None, alias="CORE_ETF_WEIGHTS")
@@ -258,7 +263,20 @@ class Settings(BaseSettings):
         if self.core_etf_weights is None:
             self.core_etf_weights = "USMC=1.0"
 
-        allocations = parse_strategy_allocations(self.strategy_allocations)
+        if self.strategy_allocations is not None and self.investment_strategy_weights is not None:
+            raise ValueError(
+                "configure either INVESTMENT_STRATEGY_WEIGHTS + CASH_TARGET_PCT or legacy "
+                "STRATEGY_ALLOCATIONS, not both"
+            )
+        if self.strategy_allocations is None:
+            weights = self.investment_strategy_weights or "core_etf=1.0"
+            allocations = investment_weights_to_portfolio_allocations(weights, self.cash_target_pct)
+            # Existing orchestration and report paths consume whole-portfolio allocations.
+            self.strategy_allocations = ",".join(
+                f"{name}={allocation:.15g}" for name, allocation in allocations.items()
+            )
+        else:
+            allocations = parse_strategy_allocations(self.strategy_allocations)
         registry = default_registry()
         unknown = sorted(
             name
@@ -268,7 +286,7 @@ class Settings(BaseSettings):
         if unknown:
             available = ", ".join(registry.names()) or "none"
             raise ValueError(
-                f"STRATEGY_ALLOCATIONS references unregistered strategies {unknown}; "
+                f"strategy allocation references unregistered strategies {unknown}; "
                 f"available strategies: {available}"
             )
         etf_weights = (

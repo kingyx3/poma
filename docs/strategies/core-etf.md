@@ -9,7 +9,8 @@ core_etf
 Default allocation:
 
 ```text
-STRATEGY_ALLOCATIONS=core_etf=0.98,cash=0.02
+INVESTMENT_STRATEGY_WEIGHTS=core_etf=1.0
+CASH_TARGET_PCT=0.02
 CORE_ETF_WEIGHTS=USMC=1.0
 CORE_ETF_TREND_FILTER=false
 ```
@@ -85,7 +86,8 @@ On Shiller's monthly S&P total-return series from 1880 to 2023 (not part of the 
 ## Switching back
 
 ```text
-STRATEGY_ALLOCATIONS=rank_velocity_size_equal_weight=0.98,cash=0.02
+INVESTMENT_STRATEGY_WEIGHTS=rank_velocity_size_equal_weight=1.0
+CASH_TARGET_PCT=0.02
 MAX_ORDER_NOTIONAL_USD=2000
 ```
 

@@ -121,6 +121,37 @@ def parse_strategy_allocations(raw_allocations: str) -> dict[str, float]:
     return _validate_allocations(parsed)
 
 
+
+def investment_weights_to_portfolio_allocations(
+    raw_weights: str,
+    cash_target_pct: float = 0.02,
+) -> dict[str, float]:
+    """Turn a 100%-of-investment strategy mix into whole-portfolio allocations.
+
+    For 2% cash, a 60/20/20 investment mix becomes 58.8/19.6/19.6% of
+    *total* account equity, plus a 2% dedicated cash sleeve. Unknown strategy
+    names are validated separately against the registered strategy catalog.
+    """
+    if not math.isfinite(cash_target_pct) or not 0 <= cash_target_pct < 1:
+        raise ValueError("CASH_TARGET_PCT must be finite and between 0 (inclusive) and 1 (exclusive)")
+    weights = parse_strategy_allocations(raw_weights)
+    if CASH_STRATEGY_NAME in weights:
+        raise ValueError("INVESTMENT_STRATEGY_WEIGHTS must not include cash; use CASH_TARGET_PCT")
+    if not any(weight > 0 for weight in weights.values()):
+        raise ValueError("INVESTMENT_STRATEGY_WEIGHTS must allocate positive investment weight")
+    total = sum(weights.values())
+    if not math.isclose(total, 1.0, abs_tol=1e-8, rel_tol=0):
+        raise ValueError(
+            "INVESTMENT_STRATEGY_WEIGHTS must sum to 100% of the investment portfolio "
+            f"(got {total:.4%})"
+        )
+    investable_pct = 1.0 - cash_target_pct
+    return {
+        **{name: weight / total * investable_pct for name, weight in weights.items()},
+        CASH_STRATEGY_NAME: cash_target_pct,
+    }
+
+
 def build_strategy_capital_plan(
     portfolio_value_usd: float,
     allocations: str | Mapping[str, float],

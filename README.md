@@ -24,13 +24,13 @@ POMA is a low-cost Python scaffold for a personal long-only US equities portfoli
 paper/live broker AccountSnapshot
   -> USD-only cash + USD positions + USD net liquidation
   -> MANAGED_CAP_MODE resolves managed portfolio value
-  -> STRATEGY_ALLOCATIONS splits value across named sleeves
+  -> INVESTMENT_STRATEGY_WEIGHTS splits (1 - CASH_TARGET_PCT) across strategy sleeves
   -> each registered non-cash strategy builds a StrategyTargetBook
   -> portfolio_constructor combines sleeve targets into one target per ticker
   -> risk, order, pricing, and broker execution guards run at portfolio level
 ```
 
-Capital is allocated through `STRATEGY_ALLOCATIONS`. Before each paper/live rebalance, POMA reads the configured IBKR account's USD cash, USD-denominated positions, and USD net liquidation in one `AccountSnapshot`, then resolves the managed portfolio value through `MANAGED_CAP_MODE`. A passive `cash` sleeve reserves cash explicitly; cash is not modeled as a hidden buffer inside any active strategy. See [`docs/portfolio-management.md`](docs/portfolio-management.md) for the strategy-neutral capital model.
+Capital is allocated through `INVESTMENT_STRATEGY_WEIGHTS` as 100% of the invested sleeve and `CASH_TARGET_PCT=0.02` as a dedicated 2% total-equity reserve. The legacy `STRATEGY_ALLOCATIONS` full-account syntax remains accepted by the application but is not used by the GitHub deployment workflow. Before each paper/live rebalance, POMA reads the configured IBKR account's USD cash, USD-denominated positions, and USD net liquidation in one `AccountSnapshot`, then resolves the managed portfolio value through `MANAGED_CAP_MODE`. A passive `cash` sleeve reserves cash explicitly; cash is not modeled as a hidden buffer inside any active strategy. See [`docs/portfolio-management.md`](docs/portfolio-management.md) for the strategy-neutral capital model.
 
 Every allocated non-`cash` sleeve is executed through the strategy registry. When multiple sleeves target the same ticker, POMA combines their targets into one portfolio-level order. See [`docs/strategy-contract.md`](docs/strategy-contract.md) for the extension contract and [`docs/strategies/core-etf.md`](docs/strategies/core-etf.md) for the default built-in strategy.
 
