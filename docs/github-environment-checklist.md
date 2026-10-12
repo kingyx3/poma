@@ -15,16 +15,14 @@ substitute; an absent Environment variable fails the deploy/Gateway preflight.
 
 | GitHub Environment variable | Example | Meaning |
 |---|---|---|
-| `INVESTMENT_STRATEGY_WEIGHTS` | `core_etf=1.0` | Strategy weights sum to 100% of the invested sleeve |
+| `INVESTMENT_STRATEGY_WEIGHTS` | `USMC=1.0` | Strategy weights sum to 100% of the invested sleeve |
 | `CASH_TARGET_PCT` | `0.02` | 2% of total equity held as cash |
 | `MARKET_CALENDAR` | `LSE` | London Stock Exchange calendar for USMC |
 | `REBALANCE_AFTER_OPEN_MINUTES` | `390` | London rebalance from 14:30 local time |
 
 ## Instrument selection
 
-The `core_etf` strategy always targets the USMC USD London listing. It has
-**no** `CORE_ETF_WEIGHTS` setting, and requires no corresponding GitHub
-Environment secret or variable. To change the investment mix, edit only
+Allocate directly by instrument ticker: `USMC=1.0`, `USMC=0.8,SP1=0.2`, or a mixture of a direct fund and an algorithm such as `USMC=0.8,rank_velocity_size_equal_weight=0.2`. The legacy `core_etf` strategy still targets USMC but is no longer the default. No `CORE_ETF_WEIGHTS` setting or extra instrument-weight layer exists. To change the investment mix, edit only
 `INVESTMENT_STRATEGY_WEIGHTS`, which must total exactly `1.0`; the cash weight
 is configured independently through `CASH_TARGET_PCT`.
 
@@ -64,20 +62,17 @@ CASH_TARGET_PCT=0.02
 
 Then $2,000 stays cash, while strategy A gets $58,800, B gets $19,600,
 and C gets $19,600. The example strategy names are conceptual: POMA currently
-registers only `core_etf` and `rank_velocity_size_equal_weight`. To use A/B/C,
+registers `USMC`, `SP1`, `core_etf` (legacy alias) and `rank_velocity_size_equal_weight`. To use A/B/C,
 implement and register them first; unknown names cause validation failure.
 
 A working *registered-strategies* split is:
 
 ```text
-INVESTMENT_STRATEGY_WEIGHTS=core_etf=60%,rank_velocity_size_equal_weight=40%
+INVESTMENT_STRATEGY_WEIGHTS=USMC=80%,SP1=20%
 CASH_TARGET_PCT=0.02
 ```
 
-This deploys 58.8% to USMC, 39.2% to rank velocity, and 2% cash. The two
-strategies may need different market calendars/trading schedules if combined.
-Do not enable a mixed-exchange live allocation until per-instrument market-hours
-and scheduling are reviewed.
+This deploys 78.4% to USMC, 19.6% to SP1, and 2% cash. Both funds use USD London listings. Unknown ticker IDs, including literal `XXX`, must be registered and mapped to a verified broker exchange/currency before deployment. Mixing London ETFs with US-stock algorithms still requires careful market-session alignment.
 
 The workflow checks each environment independently: values are **not synchronized**
 between `dev` and `prd`. Set the four required Environment variables for each
