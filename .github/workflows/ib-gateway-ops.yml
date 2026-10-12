@@ -66,6 +66,24 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Validate mandatory GitHub Environment variables and secrets
+        if: ${{ inputs.action == 'configure-paper' || inputs.action == 'configure-live' }}
+        env:
+          INVESTMENT_STRATEGY_WEIGHTS: ${{ vars.INVESTMENT_STRATEGY_WEIGHTS }}
+          CASH_TARGET_PCT: ${{ vars.CASH_TARGET_PCT }}
+          CORE_ETF_WEIGHTS: ${{ vars.CORE_ETF_WEIGHTS }}
+          MARKET_CALENDAR: ${{ vars.MARKET_CALENDAR }}
+          REBALANCE_AFTER_OPEN_MINUTES: ${{ vars.REBALANCE_AFTER_OPEN_MINUTES }}
+          LEGACY_STRATEGY_ALLOCATIONS: ${{ vars.STRATEGY_ALLOCATIONS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          IBKR_ACCOUNT: ${{ secrets.IBKR_ACCOUNT }}
+          IBKR_ACCOUNT_PAPER: ${{ secrets.IBKR_ACCOUNT_PAPER }}
+        run: |
+          mode=paper
+          if [ "${INPUT_ACTION}" = "configure-live" ]; then mode=live; fi
+          bash ops/scripts/validate_github_environment.sh "${mode}"
+
       - name: Resolve broker login secrets
         if: ${{ inputs.action == 'configure-paper' || inputs.action == 'configure-live' }}
         run: |
