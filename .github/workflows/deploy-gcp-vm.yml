@@ -130,7 +130,6 @@ jobs:
       # Vars are scoped to the selected GitHub Environment, not to main or a shared VM.
       INVESTMENT_STRATEGY_WEIGHTS: ${{ vars.INVESTMENT_STRATEGY_WEIGHTS }}
       CASH_TARGET_PCT: ${{ vars.CASH_TARGET_PCT }}
-      CORE_ETF_WEIGHTS: ${{ vars.CORE_ETF_WEIGHTS || secrets.CORE_ETF_WEIGHTS }}
       MARKET_CALENDAR: ${{ vars.MARKET_CALENDAR }}
       REBALANCE_AFTER_OPEN_MINUTES: ${{ vars.REBALANCE_AFTER_OPEN_MINUTES }}
       LEGACY_STRATEGY_ALLOCATIONS: ${{ vars.STRATEGY_ALLOCATIONS || secrets.STRATEGY_ALLOCATIONS }}
@@ -212,8 +211,7 @@ jobs:
           set_default MAX_HOLDINGS "50"
           set_default INVESTMENT_STRATEGY_WEIGHTS "core_etf=1.0"
           set_default CASH_TARGET_PCT "0.02"
-          # Investment strategy is identical for all GitHub environments.
-          set_default CORE_ETF_WEIGHTS "USMC=1.0"
+          # Investment strategies are weighted once; core_etf always holds USMC.
           set_default CORE_ETF_TREND_FILTER "false"
           set_default CORE_ETF_TREND_SMA_MONTHS "10"
           set_default CORE_ETF_SAFE_ASSET "cash"
