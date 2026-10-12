@@ -109,24 +109,36 @@ def test_legacy_environment_strategy_var_fails_with_migration_message() -> None:
     assert "migrate" in result.stderr.lower()
 
 
-def test_strategy_settings_accept_either_environment_vars_or_secrets() -> None:
+def test_investment_mandate_requires_github_environment_vars_not_secrets() -> None:
     deploy = (ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text()
     gateway = (ROOT / ".github/workflows/ib-gateway-ops.yml").read_text()
-    # A GitHub secret configured under dev must be equivalent to a non-secret
-    # GitHub Environment variable, without needing to duplicate the value.
+    required_vars = (
+        "INVESTMENT_STRATEGY_WEIGHTS",
+        "CASH_TARGET_PCT",
+        "MARKET_CALENDAR",
+        "REBALANCE_AFTER_OPEN_MINUTES",
+    )
     for workflow in (deploy, gateway):
-        for name in (
-            "INVESTMENT_STRATEGY_WEIGHTS",
-            "CASH_TARGET_PCT",
-            "CORE_ETF_WEIGHTS",
-            "MARKET_CALENDAR",
-            "REBALANCE_AFTER_OPEN_MINUTES",
-        ):
-            assert (
-                "${{ vars." + name + " || secrets." + name + " }}"
-            ) in workflow
+        for name in required_vars:
+            assert "${{ vars." + name + " }}" in workflow
+            assert "secrets." + name not in workflow
+            assert "vars." + name + " ||" not in workflow
+
+        # The UCITS ticker selection may continue to use the existing dev secret.
+        assert "${{ vars.CORE_ETF_WEIGHTS || secrets.CORE_ETF_WEIGHTS }}" in workflow
         assert "${{ vars.STRATEGY_ALLOCATIONS || secrets.STRATEGY_ALLOCATIONS }}" in workflow
         assert "bash ops/scripts/validate_github_environment.sh" in workflow
+
+
+def test_required_environment_var_errors_distinguish_core_etf_secret() -> None:
+    config = run_check("paper", {key: value for key, value in PAPER.items() if key != "CASH_TARGET_PCT"})
+    assert config.returncode != 0
+    assert "GitHub Environment Variable CASH_TARGET_PCT" in config.stderr
+    assert "Variable/Secret CASH_TARGET_PCT" not in config.stderr
+
+    core = run_check("paper", {key: value for key, value in PAPER.items() if key != "CORE_ETF_WEIGHTS"})
+    assert core.returncode != 0
+    assert "GitHub Environment Variable or Secret CORE_ETF_WEIGHTS" in core.stderr
 
 
 def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> None:
