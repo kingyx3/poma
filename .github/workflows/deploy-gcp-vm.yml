@@ -739,15 +739,15 @@ jobs:
             # Never remove Docker volumes, which may contain persistent runtime data.
             # Keep non-dev/production untouched: free space issues there fail closed.
             image_pull_min_free_kib=4194304  # 4 GiB to unpack the scientific Python image.
-            free_kib="$(df -Pk / | awk "NR==2 {print \\$4}")"
+            free_kib="$(df -Pk / | awk "NR==2 {print \$4}")"
             if [ "${free_kib}" -lt "${image_pull_min_free_kib}" ]; then
               echo "Low VM disk headroom before image pull: ${free_kib} KiB available (<4 GiB)."
               if [ "${{ inputs.deploy_environment }}" = "dev" ]; then
-                remote_timed "Prune unused dev Docker images, caches and stopped containers (no volumes)" \\
+                remote_timed "Prune unused dev Docker images, caches and stopped containers (no volumes)" \
                   sudo timeout --kill-after=30s 4m docker system prune --all --force
                 # Journal files are independent of app state and safe to compact on dev.
                 sudo journalctl --vacuum-size=100M || true
-                free_kib="$(df -Pk / | awk "NR==2 {print \\$4}")"
+                free_kib="$(df -Pk / | awk "NR==2 {print \$4}")"
                 echo "Available root disk after dev cleanup: ${free_kib} KiB"
               fi
               if [ "${free_kib}" -lt "${image_pull_min_free_kib}" ]; then
