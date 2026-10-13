@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "ops/scripts/vm_housekeeping.sh"
 IMAGE = "ghcr.io/kingyx3/poma:"
