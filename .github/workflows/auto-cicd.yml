@@ -73,6 +73,7 @@ jobs:
               .github/workflows/deploy-gcp-vm.yml|\
               .github/workflows/build-app-image.yml|\
               Dockerfile|\
+              .env.example|\
               docker-compose.yml|\
               docker-compose.vm.yml|\
               .dockerignore|\
@@ -80,6 +81,7 @@ jobs:
               pyproject.toml|\
               ops/scripts/deploy.sh|\
               ops/scripts/render_env.py|\
+              ops/scripts/validate_github_environment.sh|\
               ops/scripts/resolve_gcp_deploy_env.sh|\
               ops/scripts/validate_runtime_config.py|\
               ops/scripts/validate_deployment_plan.py|\
