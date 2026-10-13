@@ -25,10 +25,12 @@ class UcitsListing:
 # Both are accumulating, Ireland-domiciled USD lines. SP1 trades on the LSE ETF segment. USMC
 # is traded on IBKR's SIX Swiss Exchange line (primary exchange "EBS", USD): IBKR returns "no
 # security definition" for the LSEETF/USD lookup, and a symbol-only USMC resolves to the
-# unrelated Principal US Mega-Cap ETF on NASDAQ.
+# unrelated Principal US Mega-Cap ETF on NASDAQ. The Yahoo symbol is price data only and may
+# differ from the order venue: Yahoo has no USMC.SW, its SIX line is the thinly traded US100.SW
+# (stale quotes), while USMC.L is the same fund (same ISIN/NAV) with fresh USD prices.
 USD_LSE_UCITS: dict[str, UcitsListing] = {
     "SP1": UcitsListing("SP1", "SP1.L", "IE000MU0FDZ8"),
-    "USMC": UcitsListing("USMC", "USMC.SW", "IE0008M1R3N4", primary_exchange="EBS", calendar="SIX"),
+    "USMC": UcitsListing("USMC", "USMC.L", "IE0008M1R3N4", primary_exchange="EBS", calendar="SIX"),
 }
 
 

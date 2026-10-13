@@ -24,7 +24,7 @@ from poma.ucits_instruments import price_symbol, ucits_listing
     ("ticker", "yahoo", "isin", "primary_exchange"),
     [
         ("SP1", "SP1.L", "IE000MU0FDZ8", "LSEETF"),
-        ("USMC", "USMC.SW", "IE0008M1R3N4", "EBS"),
+        ("USMC", "USMC.L", "IE0008M1R3N4", "EBS"),
     ],
 )
 def test_usd_ucits_etf_identity_is_explicit(ticker: str, yahoo: str, isin: str, primary_exchange: str) -> None:
@@ -55,7 +55,7 @@ def test_yahoo_lse_usd_etf_symbol_maps_back_to_strategy_ticker(monkeypatch: pyte
         @classmethod
         def download(cls, tickers, **_kwargs):
             cls.downloaded = tickers
-            columns = pd.MultiIndex.from_product([["SP1.L", "USMC.SW"], ["Adj Close"]])
+            columns = pd.MultiIndex.from_product([["SP1.L", "USMC.L"], ["Adj Close"]])
             return pd.DataFrame(
                 [[11.0, 32.0], [11.5, 33.0]],
                 columns=columns,
@@ -66,7 +66,7 @@ def test_yahoo_lse_usd_etf_symbol_maps_back_to_strategy_ticker(monkeypatch: pyte
     client = YahooFinanceMarketDataClient(make_settings())
     history = client.close_price_history(["SP1", "USMC"], 10)
 
-    assert YahooStub.downloaded == "SP1.L USMC.SW"
+    assert YahooStub.downloaded == "SP1.L USMC.L"
     assert list(history.columns) == ["SP1", "USMC"]
     assert history.iloc[-1]["SP1"] == 11.5
     assert history.iloc[-1]["USMC"] == 33.0
