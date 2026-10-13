@@ -1,0 +1,4 @@
+# Run as root once daily; flock prevents overlap with an in-progress deploy
+# housekeeping invocation. Output goes to journald rather than an unbounded file.
+# POMA_HOUSEKEEPING_ENV is set when this file is installed on the target VM.
+20 3 * * * root /usr/bin/flock -n /run/lock/poma-housekeeping.lock /bin/bash /opt/poma/ops/scripts/vm_housekeeping.sh daily POMA_HOUSEKEEPING_ENV 2>&1 | /usr/bin/logger -t poma-housekeeping
