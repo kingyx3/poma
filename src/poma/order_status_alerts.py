@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from poma.models import OrderResult, ProposedTrade
-from poma.order_lifecycle import OrderLedgerEntry
+from poma.order_lifecycle import OrderLedgerEntry, OrderLifecycleState
 
 
 def _quote_line(
@@ -35,7 +35,11 @@ def lifecycle_status_alert(entry: OrderLedgerEntry, action: str | None, detail: 
     if entry.avg_fill_price is not None:
         lines.append(f"Average fill: ${entry.avg_fill_price:.2f}")
     if action == "replace":
-        lines.append(f"Action: replaced with a more aggressive limit (${entry.limit_price:.2f})")
+        line = f"Action: replaced with a more aggressive limit (${entry.limit_price:.2f})"
+        if entry.lifecycle_state == OrderLifecycleState.FILLED:
+            # The status above belongs to the replacement order, which can fill on placement.
+            line += "; the replacement order then filled"
+        lines.append(line)
     elif action == "cancel":
         lines.append("Action: cancelled after exceeding the unfilled-order timeout")
     elif action == "closed":

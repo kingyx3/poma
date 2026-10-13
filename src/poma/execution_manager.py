@@ -180,6 +180,11 @@ class ExecutionManager:
             and entry.filled_qty <= 1e-9
         ):
             return None
+        # Carry the earlier outcome forward: "already rejected" alone hides why (e.g. IBKR has
+        # no contract for the symbol), and the earlier attempt's alert may not be at hand.
+        earlier = entry.raw_status or entry.lifecycle_state.value
+        if entry.terminal_reason:
+            earlier = f"{earlier}: {entry.terminal_reason}"
         return OrderResult(
             ticker=trade.ticker,
             side=trade.side,
@@ -191,7 +196,7 @@ class ExecutionManager:
             average_fill_price=entry.avg_fill_price,
             message=(
                 f"orderRef {trade.order_ref} already {entry.lifecycle_state.value} from an "
-                "earlier attempt of this run; not resubmitted"
+                f"earlier attempt of this run ({earlier}); not resubmitted"
             ),
             order_ref=trade.order_ref,
             perm_id=entry.perm_id,

@@ -654,3 +654,35 @@ def test_submit_plan_does_not_refresh_cash_when_there_are_no_buys(tmp_path: Path
     manager.submit_plan(_plan(trades))
 
     assert broker.account_snapshot_calls == 0
+
+
+def test_idempotent_replay_message_carries_the_earlier_rejection_reason(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings())
+    plan = _plan([_trade("AAPL", OrderSide.BUY)], run_id="run-1")
+
+    manager.submit_plan(plan)
+    entry = store.load_open_orders()[0]
+    store.upsert(
+        entry.with_order_result(
+            OrderResult(
+                ticker="AAPL",
+                side=OrderSide.BUY,
+                quantity=5.0,
+                notional=500.0,
+                order_id=None,
+                status="ContractUnresolved",
+                filled=0.0,
+                average_fill_price=None,
+                message="Error 200: No security definition has been found for the request",
+            )
+        )
+    )
+
+    replay = manager.submit_plan(plan)[0]
+
+    assert replay.status == "IdempotentReplay"
+    assert replay.message is not None
+    assert "already rejected" in replay.message
+    assert "ContractUnresolved: Error 200: No security definition" in replay.message
