@@ -141,6 +141,15 @@ def test_required_environment_variable_is_distinct_from_old_etf_weights() -> Non
     assert "INVESTMENT_STRATEGY_WEIGHTS" in legacy.stderr
 
 
+def test_auto_cicd_deploys_when_mandate_preflight_changes() -> None:
+    workflow = (ROOT / ".github/workflows/auto-cicd.yml").read_text()
+    assert "ops/scripts/validate_github_environment.sh" in workflow
+    assert ".env.example" in workflow
+    deploy_paths = workflow.split("is_deploy_path() {", 1)[1].split("is_gateway_path() {", 1)[0]
+    assert "ops/scripts/validate_github_environment.sh" in deploy_paths
+    assert ".env.example" in deploy_paths
+
+
 def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> None:
     deploy = (ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text()
     gateway = (ROOT / ".github/workflows/ib-gateway-ops.yml").read_text()
