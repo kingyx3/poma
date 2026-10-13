@@ -213,7 +213,7 @@ def _live_order_contract(ib: IB, ticker: str, settings: Settings) -> Stock:
     from poma.market_calendar import is_market_open
 
     listing = ucits_listing(ticker)
-    calendar = "LSE" if listing is not None else "NASDAQ"
+    calendar = listing.calendar if listing is not None else "NASDAQ"
     if not is_market_open(calendar):
         raise BrokerUnavailable(f"{ticker}: {calendar} regular market is closed; no live order placed")
     if listing is None:
@@ -226,9 +226,9 @@ def _live_order_contract(ib: IB, ticker: str, settings: Settings) -> Stock:
     try:
         qualified = qualify(requested)
     except Exception as exc:
-        raise BrokerUnavailable(f"{ticker}: cannot qualify USD LSEETF contract: {exc}") from exc
+        raise BrokerUnavailable(f"{ticker}: cannot qualify USD {listing.primary_exchange} contract: {exc}") from exc
     if len(qualified) != 1:
-        raise BrokerUnavailable(f"{ticker}: IBKR did not uniquely qualify the USD LSEETF contract")
+        raise BrokerUnavailable(f"{ticker}: IBKR did not uniquely qualify the USD {listing.primary_exchange} contract")
     contract = qualified[0]
     if (
         not getattr(contract, "conId", 0)
@@ -1124,7 +1124,7 @@ class IbkrBroker:
                             or str(getattr(contract, "primaryExchange", "")).upper() != listing.primary_exchange
                         ):
                             raise BrokerUnavailable(
-                                f"{ticker}: live USD LSEETF quote contract was not uniquely qualified"
+                                f"{ticker}: live USD {listing.primary_exchange} quote contract not uniquely qualified"
                             )
                 # Only IBKR's explicit "no security definition" (error 200) proves a symbol is
                 # unknown; a lookup that merely came back empty (e.g. a timeout) is quoted by
