@@ -732,6 +732,32 @@ jobs:
               /opt/poma/reports \
               /opt/poma/state
             cd /opt/poma
+
+            # A failed image extraction previously filled the 29 GB dev root disk and
+            # left cron unable to install its crontab. Cleanup must happen BEFORE
+            # pulling again, independently of the optional deploy smoke test.
+            # Never remove Docker volumes, which may contain persistent runtime data.
+            # Keep non-dev/production untouched: free space issues there fail closed.
+            image_pull_min_free_kib=4194304  # 4 GiB to unpack the scientific Python image.
+            free_kib="$(df -Pk / | awk "NR==2 {print \\$4}")"
+            if [ "${free_kib}" -lt "${image_pull_min_free_kib}" ]; then
+              echo "Low VM disk headroom before image pull: ${free_kib} KiB available (<4 GiB)."
+              if [ "${{ inputs.deploy_environment }}" = "dev" ]; then
+                remote_timed "Prune unused dev Docker images, caches and stopped containers (no volumes)" \\
+                  sudo timeout --kill-after=30s 4m docker system prune --all --force
+                # Journal files are independent of app state and safe to compact on dev.
+                sudo journalctl --vacuum-size=100M || true
+                free_kib="$(df -Pk / | awk "NR==2 {print \\$4}")"
+                echo "Available root disk after dev cleanup: ${free_kib} KiB"
+              fi
+              if [ "${free_kib}" -lt "${image_pull_min_free_kib}" ]; then
+                echo "Insufficient root disk space to safely pull the application image." >&2
+                df -h / >&2
+                sudo timeout --kill-after=10s 10s docker system df >&2 || true
+                exit 1
+              fi
+            fi
+
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + optional smoke + cron).
