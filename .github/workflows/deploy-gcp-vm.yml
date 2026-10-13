@@ -498,7 +498,8 @@ jobs:
             pyproject.toml \
             src \
             ops/cron \
-            ops/scripts/deploy.sh || {
+            ops/scripts/deploy.sh \
+            ops/scripts/vm_housekeeping.sh || {
               echo "::error::Runtime package creation timed out or failed"
               exit 1
             }
@@ -566,19 +567,20 @@ jobs:
             ' || true
           }
 
-          # Poll the VM over IAP until the POMA startup readiness sentinel matches this
-          # deploy's startup revision and the app user plus Docker/cron services exist. Each
-          # probe is a short, independently timed SSH, so a cold boot or a transient
-          # IAP/SSH-key-propagation hang is retried with a fresh connection. Do not accept
-          # cloud-init's boot-finished marker by itself: the Google metadata startup script can
-          # still be running, and deploy needs the concrete POMA host contract.
+          # Poll until startup revision/boot ID match, the app user exists, Docker is
+          # running and cron is INSTALLED/ENABLED. Cron does not have to be ACTIVE
+          # here: the previous deploy attempt deliberately stopped the scheduler
+          # before installing the new app. Requiring cron to be active makes retries
+          # deadlock for 12 minutes on a healthy, already bootstrapped VM. A successful
+          # remote install explicitly restarts cron after installing its schedule.
+          # Do not accept cloud-init's boot-finished marker without the sentinel.
           wait_for_vm_ready() {
             local wait_seconds="$1" wait_label="$2"
             local deadline=$((SECONDS + wait_seconds)) attempt=0 status=1 saw_remote=0
             while true; do
               set +e
               run_with_timeout 45s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; if test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron; then exit 0; fi; if systemctl is-active --quiet google-startup-scripts.service; then echo \"startup_status=running\" >&2; exit 43; fi; echo \"startup_status=not-ready\" >&2; exit 44"
+                --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; if test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-enabled --quiet cron; then exit 0; fi; if systemctl is-active --quiet google-startup-scripts.service; then echo \"startup_status=running\" >&2; exit 43; fi; echo \"startup_status=not-ready\" >&2; exit 44"
               status="$?"
               set -e
               if [ "${status}" -eq 0 ]; then
@@ -657,6 +659,14 @@ jobs:
               fi
             '
 
+          # A full root filesystem can reject SCP itself (before the app bundle is
+          # unpacked). Stream the cleanup script over SSH stdin: no remote file write
+          # is required until disk space has been reclaimed. Serialized with cron.
+          timed "Pre-upload disk housekeeping" run_with_timeout 5m \
+            gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
+              --command "sudo /usr/bin/flock -w 45 /run/lock/poma-housekeeping.lock /bin/bash -s -- predeploy ${DEPLOY_ENVIRONMENT}" \
+              < ops/scripts/vm_housekeeping.sh
+
           timed "Deployment bundle upload" retry_with_backoff 4m "Deployment bundle upload" 2 \
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
 
@@ -731,10 +741,23 @@ jobs:
               /opt/poma/reports \
               /opt/poma/state
             cd /opt/poma
+
+            # Recheck headroom after the app bundle has been extracted.
+            # The same script is used by pre-upload recovery and daily cron.
+            remote_timed "Post-extract disk housekeeping" sudo /bin/bash \
+              ops/scripts/vm_housekeeping.sh predeploy ${{ inputs.deploy_environment }}
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + optional smoke + cron).
             remote_timed "Docker pull and optional smoke" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} RUN_DOCKER_PULL_DIAGNOSTICS=${{ inputs.deploy_smoke }} RUN_DOCKER_PRUNE=${{ inputs.deploy_smoke }} POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh
+            # Separate root cron job protects the VM even when POMA trades only
+            # occasionally. Never install a scheduled prune of Docker volumes.
+            remote_timed "Install POMA log rotation" sudo install -m 0644 \
+              ops/cron/poma-logrotate.conf /etc/logrotate.d/poma
+            sed "s/POMA_HOUSEKEEPING_ENV/${{ inputs.deploy_environment }}/g" \
+              ops/cron/poma-housekeeping.cron | sudo tee /etc/cron.d/poma-housekeeping >/dev/null
+            remote_timed "Secure VM housekeeping schedule" sudo chmod 0644 \
+              /etc/cron.d/poma-housekeeping
             if [ "${{ inputs.trading_mode }}" = "live" ]; then
               echo "Live schedule remains paused until configure-live passes authenticated API checks."
             else

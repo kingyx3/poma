@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -114,7 +116,7 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
     assert "exit 42" in workflow
     assert "id poma >/dev/null 2>&1" in workflow
     assert "systemctl is-active --quiet docker" in workflow
-    assert "systemctl is-active --quiet cron" in workflow
+    assert "systemctl is-enabled --quiet cron" in workflow
     assert "sudo crontab -r -u poma" in workflow
     assert "sudo systemctl stop cron" in workflow
     assert "docker compose --env-file .compose.env -f docker-compose.vm.yml down --remove-orphans" in workflow
@@ -125,6 +127,27 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
     assert "failed after ${attempt} attempt(s)" in workflow
     assert "timeout --kill-after=30s" in workflow
     assert "timed out; check VM readiness" in workflow
+
+
+def test_vm_readiness_accepts_enabled_but_stopped_cron_after_interrupted_deploy() -> None:
+    """Restart a failed deployment when cron was paused during the previous attempt."""
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    upload = workflow.split("- name: Upload and install on VM", 1)[1]
+    probe = upload.split("wait_for_vm_ready() {", 1)[1].split("ensure_vm_ready() {", 1)[0]
+
+    assert "systemctl is-active --quiet docker && systemctl is-enabled --quiet cron" in probe
+    assert "systemctl is-active --quiet docker && systemctl is-active --quiet cron" not in probe
+    assert "/var/lib/poma/vm-ready" in probe
+    assert "startup_revision" in probe
+    assert "boot_id" in probe
+
+    # The scheduler stays paused until the new runtime and schedule are installed.
+    pause = upload.index('timed "Pause app cron before deploy"')
+    install = upload.index('timed "Remote install, Docker pull, optional smoke, cron"')
+    restart = upload.index('remote_timed "Restart cron scheduler"')
+    assert pause < install < restart
+    assert "sudo systemctl stop cron" in upload
+    assert "sudo systemctl restart cron" in upload
 
 
 def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
@@ -166,6 +189,77 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
     assert "docker image prune -f >/dev/null\n}" not in script
     assert "DOCKER_BUILDKIT" not in script
     assert "DEFAULT_IMAGE_TAG" not in script
+
+
+def test_dev_housekeeping_runs_before_scp_and_is_installed_daily() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    upload = workflow.split("- name: Upload and install on VM", 1)[1]
+    assert 'timed "Pre-upload disk housekeeping"' in upload
+    assert '< ops/scripts/vm_housekeeping.sh' in upload
+    assert upload.index('timed "Pre-upload disk housekeeping"') < upload.index(
+        'timed "Deployment bundle upload"'
+    )
+    assert upload.index('timed "Deployment bundle upload"') < upload.index(
+        'remote_timed "Post-extract disk housekeeping"'
+    )
+    assert upload.index('remote_timed "Post-extract disk housekeeping"') < upload.index(
+        'remote_timed "Docker pull and optional smoke"'
+    )
+    assert "ops/cron/poma-housekeeping.cron" in upload
+    assert "/etc/cron.d/poma-housekeeping" in upload
+    assert "ops/cron/poma-logrotate.conf" in upload
+    assert upload.index("Secure VM housekeeping schedule") < upload.index(
+        'remote_timed "Restart cron scheduler"'
+    )
+    cron = (REPO_ROOT / "ops/cron/poma-housekeeping.cron").read_text()
+    assert "/usr/bin/flock -n" in cron
+    assert "vm_housekeeping.sh daily POMA_HOUSEKEEPING_ENV" in cron
+    assert "/usr/bin/logger -t poma-housekeeping" in cron
+
+    cleanup = (REPO_ROOT / "ops/scripts/vm_housekeeping.sh").read_text()
+    assert "min_free_kib=4194304" in cleanup
+    assert "docker image prune -f" in cleanup
+    assert "docker builder prune" in cleanup
+    assert "docker image rm" in cleanup
+    assert "current_image" in cleanup
+    assert "docker system prune --all --force" not in cleanup
+    assert "--volumes" not in cleanup.split('run_bounded "Remove old stopped containers"', 1)[1].split(
+        'disk_status', 1
+    )[0]
+    assert "state/" in cleanup and "reports/" in cleanup
+
+
+def test_deploy_does_not_treat_compose_zero_exit_as_success_without_image(tmp_path: Path) -> None:
+    """Compose v5 has returned zero after reporting a containerd ENOSPC extraction failure."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_docker = bin_dir / "docker"
+    fake_docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(DEPLOY_SCRIPT)],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+            "APP_DIR": str(tmp_path),
+            "POMA_IMAGE": "ghcr.io/kingyx3/poma:" + "a" * 40,
+            "POMA_UID": "1000",
+            "POMA_GID": "1000",
+            "RUN_DEPLOY_SMOKE": "false",
+            "RUN_DOCKER_PRUNE": "false",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "absent after docker compose pull" in result.stderr
 
 
 def test_vm_compose_uses_prebuilt_image() -> None:

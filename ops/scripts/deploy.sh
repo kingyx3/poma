@@ -110,6 +110,13 @@ pull_image() {
   fi
 
   timeout_compose 5m pull poma
+  # Docker Compose v5 can print a containerd "no space left on device" layer
+  # extraction failure but still return exit status 0. The immutable SHA image
+  # must actually exist locally before installation proceeds to crontab.
+  if ! docker image inspect "${POMA_IMAGE}" >/dev/null 2>&1; then
+    echo "Image ${POMA_IMAGE} is absent after docker compose pull; refusing incomplete deployment." >&2
+    return 1
+  fi
 
   if [ "${RUN_DOCKER_PULL_DIAGNOSTICS:-false}" = "true" ]; then
     bounded_docker_diagnostics "after image pull"
