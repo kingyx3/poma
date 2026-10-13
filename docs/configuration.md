@@ -11,8 +11,8 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `APP_ENV` | yes | `development` | Local/runtime label. CI/CD deploys render `dev`, `stg`, or `prd` from the selected GitHub Environment. |
 | `TRADING_MODE` | yes | `dry_run` | Supported values: `dry_run`, `paper`, `live`. |
 | `ALLOW_LIVE_TRADING` | live only | `false` | Set by deploy workflow input. Must be true for live trading. |
-| `MARKET_CALENDAR` | optional GitHub override | `LSE` for deploy | Exchange trading calendar; USD London ETFs require LSE. For US-only strategy portfolios, set NASDAQ explicitly to use US market hours. |
-| `REBALANCE_AFTER_OPEN_MINUTES` | optional GitHub override | `390` for deploy | Minutes after chosen exchange opens; at least 390 for London ETF paper/live order safety. |
+| `MARKET_CALENDAR` | required paper/live GitHub Environment var | `LSE` in `.env.example` | Exchange trading calendar controlling rebalance scheduling; USD London ETFs require LSE. US-only portfolios may use NASDAQ. |
+| `REBALANCE_AFTER_OPEN_MINUTES` | required paper/live GitHub Environment var | `390` in `.env.example` | Minutes after the selected exchange opens; at least 390 for London ETF paper/live order safety. |
 | `DATA_PROVIDER` | yes | `yahoo` | Supported values: `yahoo` for real runs and `fixture` for tests/PR dry-runs. Paper/live deploy validation requires `yahoo`. |
 | `YAHOO_SCREENER_LIMIT` | yahoo only | `500` | Yahoo provider limit. Used by the current rank-velocity strategy before issuer/share-class dedupe and scoring; see `docs/strategies/rank-velocity-size-equal-weight.md`. |
 | `YAHOO_SCREENER_PAGE_SIZE` | yahoo only | `250` | Yahoo screen page size. yfinance/Yahoo caps this at 250. |
@@ -73,7 +73,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `TELEGRAM_BOT_TOKEN` | yes | none | Authenticates the Telegram bot. |
 | `TELEGRAM_CHAT_ID` | yes | none | Destination chat/channel/user for alerts. Discover it with the **Discover Telegram chat ID** workflow. |
 
-In GitHub Actions, only `INVESTMENT_STRATEGY_WEIGHTS` and `CASH_TARGET_PCT` are mandatory GitHub **Environment variables** (not secrets). `MARKET_CALENDAR` and `REBALANCE_AFTER_OPEN_MINUTES` are optional overrides; the deploy workflow defaults them to `LSE` and `390` for the supported London ETF portfolio. For a solely NASDAQ strategy, explicitly override them as needed. The legacy `core_etf` strategy still holds USMC, but use `USMC=1.0` directly to avoid naming indirection. `SP1` also works as a direct strategy ID. All mandatory values are checked before deployment. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
+In GitHub Actions, all four settings—`INVESTMENT_STRATEGY_WEIGHTS`, `CASH_TARGET_PCT`, `MARKET_CALENDAR`, and `REBALANCE_AFTER_OPEN_MINUTES`—are mandatory **Environment variables** (not secrets) for paper/live deployments and Gateway configuration. For USMC/SP1 set `MARKET_CALENDAR=LSE` and `REBALANCE_AFTER_OPEN_MINUTES=390`; 390 is the number of minutes **since LSE market open**, yielding 14:30 London local time on standard trading days. A portfolio using only US-stock algorithms may select `NASDAQ` and an appropriate time after the US market opens. The legacy `core_etf` strategy still holds USMC, but use `USMC=1.0` directly to avoid naming indirection. `SP1` also works as a direct strategy ID. All mandatory values are checked before deployment. See [GitHub Environment checklist](github-environment-checklist.md).\n\n`CASH_TARGET_PCT=0.02` explicitly reserves 2% of total portfolio equity as the cash sleeve. No second cash buffer is applied. Investment weights are normalized only within the remaining 98%.
 
 ## Strategy pricing vs. execution pricing
 
