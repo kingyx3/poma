@@ -26,12 +26,14 @@ require_secret() {
 require_secret TELEGRAM_BOT_TOKEN
 require_secret TELEGRAM_CHAT_ID
 
-# Paper and live trades must carry explicit, reviewed investment and cash allocations.
-# Calendar and rebalance time are optional: runtime defaults safely select London
-# and the 14:30 local trading window for USD-listed LSE UCITS ETFs.
+# Paper and live trades must carry explicit, reviewed investment, cash,
+# exchange calendar and rebalance schedule settings. A runtime default must not
+# silently substitute for a missing GitHub Environment variable.
 if [ "${mode}" != "dry_run" ]; then
   require_var INVESTMENT_STRATEGY_WEIGHTS
   require_var CASH_TARGET_PCT
+  require_var MARKET_CALENDAR
+  require_var REBALANCE_AFTER_OPEN_MINUTES
 fi
 if [ -n "${LEGACY_STRATEGY_ALLOCATIONS:-}" ]; then
   echo "::error::Legacy STRATEGY_ALLOCATIONS GitHub variable/secret is not supported by the new deploy flow; migrate it to INVESTMENT_STRATEGY_WEIGHTS + CASH_TARGET_PCT" >&2
