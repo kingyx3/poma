@@ -21,23 +21,23 @@ from poma.ucits_instruments import price_symbol, ucits_listing
 
 
 @pytest.mark.parametrize(
-    ("ticker", "yahoo", "isin"),
+    ("ticker", "yahoo", "isin", "primary_exchange"),
     [
-        ("SP1", "SP1.L", "IE000MU0FDZ8"),
-        ("USMC", "USMC.L", "IE0008M1R3N4"),
+        ("SP1", "SP1.L", "IE000MU0FDZ8", "LSEETF"),
+        ("USMC", "USMC.L", "IE0008M1R3N4", "EBS"),
     ],
 )
-def test_usd_lse_etf_identity_is_explicit(ticker: str, yahoo: str, isin: str) -> None:
+def test_usd_ucits_etf_identity_is_explicit(ticker: str, yahoo: str, isin: str, primary_exchange: str) -> None:
     listing = ucits_listing(ticker)
     assert listing is not None
     assert listing.isin == isin
-    assert listing.primary_exchange == "LSEETF"
+    assert listing.primary_exchange == primary_exchange
     assert listing.currency == "USD"
     assert price_symbol(ticker) == yahoo
     contract = _stock_contract(ticker, "SMART")
     assert contract.symbol == ticker
     assert contract.currency == "USD"
-    assert contract.primaryExchange == "LSEETF"
+    assert contract.primaryExchange == primary_exchange
 
 
 def test_us_equities_continue_using_legacy_unambiguous_contracts() -> None:
@@ -120,7 +120,7 @@ def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: py
 
     contract, order = fake.placed_orders[0]
     assert contract.symbol == ticker
-    assert contract.primaryExchange == "LSEETF"
+    assert contract.primaryExchange == ("EBS" if ticker == "USMC" else "LSEETF")
     assert contract.currency == "USD"
     assert order.action == "BUY"
     assert order.lmtPrice == 11.53

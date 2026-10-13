@@ -14,7 +14,7 @@ from poma.models import OrderSide
 
 
 class QualifyingIB(FakeIB):
-    """Simulate IBKR's qualifying the exact USD LSEETF contract to a conId."""
+    """Simulate IBKR qualifying the exact USD contract to a conId."""
 
     def qualifyContracts(self, *contracts):  # noqa: N802, ANN201
         for contract in contracts:
@@ -62,13 +62,13 @@ def test_london_holiday_and_closed_session_are_never_tradeable() -> None:
     ).should_run is False
 
 
-def test_live_usmc_contract_qualifies_to_one_correct_usd_london_conid(monkeypatch) -> None:
+def test_live_usmc_contract_qualifies_to_one_correct_usd_six_conid(monkeypatch) -> None:
     monkeypatch.setattr("poma.market_calendar.is_market_open", lambda _calendar: True)
     ib = QualifyingIB()
     contract = _live_order_contract(ib, "USMC", _live())
     assert contract.symbol == "USMC"
     assert contract.currency == "USD"
-    assert contract.primaryExchange == "LSEETF"
+    assert contract.primaryExchange == "EBS"
     assert contract.exchange == "SMART"
     assert contract.conId == 923456
 
@@ -89,7 +89,7 @@ def test_live_usmc_order_fails_closed_on_broker_ambiguity(monkeypatch, kind: str
                 if kind == "wrong_currency":
                     contract.currency = "EUR"
                 else:
-                    contract.primaryExchange = "SIX"
+                    contract.primaryExchange = "LSEETF"
                 return result
         broker = IncorrectIB()
     with pytest.raises(BrokerUnavailable, match="qualification|did not uniquely|wrong exchange"):
@@ -99,7 +99,7 @@ def test_live_usmc_order_fails_closed_on_broker_ambiguity(monkeypatch, kind: str
 def test_live_order_checks_actual_exchange_is_open_before_placement(monkeypatch) -> None:
     monkeypatch.setattr("poma.market_calendar.is_market_open", lambda calendar: False)
     ib = QualifyingIB()
-    with pytest.raises(BrokerUnavailable, match="LSE regular market is closed"):
+    with pytest.raises(BrokerUnavailable, match="SIX regular market is closed"):
         _live_order_contract(ib, "USMC", _live())
     assert ib.placed_orders == []
 
@@ -129,3 +129,14 @@ def test_live_quote_requires_resolved_usmc_contract_not_symbol_fallback(monkeypa
     with pytest.raises(BrokerUnavailable, match="not uniquely qualified"):
         IbkrBroker(_live()).execution_quotes(["USMC"])
     assert fake.placed_orders == []
+
+
+def test_usmc_is_pinned_to_the_usd_six_swiss_line_and_its_own_calendar() -> None:
+    from poma.ucits_instruments import ucits_listing
+
+    usmc = ucits_listing("USMC")
+    assert usmc is not None
+    assert (usmc.primary_exchange, usmc.currency, usmc.calendar) == ("EBS", "USD", "SIX")
+    sp1 = ucits_listing("SP1")
+    assert sp1 is not None
+    assert (sp1.primary_exchange, sp1.calendar) == ("LSEETF", "LSE")

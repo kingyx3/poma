@@ -86,7 +86,7 @@ INVESTMENT_STRATEGY_WEIGHTS=USMC=80%,SP1=20%
 CASH_TARGET_PCT=0.02
 ```
 
-This deploys 78.4% to USMC, 19.6% to SP1, and 2% cash. Both funds use USD London listings. Unknown ticker IDs, including literal `XXX`, must be registered and mapped to a verified broker exchange/currency before deployment. Mixing London ETFs with US-stock algorithms still requires careful market-session alignment.
+This deploys 78.4% to USMC, 19.6% to SP1, and 2% cash. SP1 uses its USD London listing; USMC uses the USD SIX Swiss listing (IBKR primary exchange `EBS`), each checked against its own exchange calendar at order time. Rebalance scheduling still uses the LSE calendar, whose session coincides with SIX. Unknown ticker IDs, including literal `XXX`, must be registered and mapped to a verified broker exchange/currency before deployment. Mixing London ETFs with US-stock algorithms still requires careful market-session alignment.
 
 The workflow checks each environment independently: values are **not synchronized**
 between `dev` and `prd`. Set all four required Environment variables for each
