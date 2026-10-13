@@ -1,5 +1,63 @@
 # Operations runbook
 
+## VM disk housekeeping and resource limits
+
+The 30 GB e2-micro boot disk is deliberately small. Old Docker image layers,
+build caches and cron logs must not silently consume all of it. Deployment
+checks available space **over SSH before SCP**, so a full disk cannot prevent
+recovery by blocking the upload itself. The recovery code is streamed to the VM
+via stdin and needs no initial remote file write.
+
+Each successful deployment also installs `/etc/cron.d/poma-housekeeping` to
+run `ops/scripts/vm_housekeeping.sh daily <environment>` at **03:20 UTC**
+(under root and a non-overlapping `flock` lock). It performs bounded,
+best-effort housekeeping:
+
+- Clears apt package caches and limits archived system journals to 100 MB.
+- Prunes Docker build caches older than 7 days, stopped containers older than
+  7 days and dangling layers. Under dev disk pressure, clears unused Docker
+  build cache and stopped containers regardless of age.
+- On **dev only**, removes obsolete SHA-tagged POMA app images while retaining
+  the current `.compose.env` image and one more recent rollback candidate.
+  Docker itself refuses to remove an image still referenced by a container.
+- Installs `/etc/logrotate.d/poma` for POMA's cron logs: rotation daily or
+  when above 10 MB, 14 compressed retained rotations.
+
+**Never removed:** Docker volumes, active containers, broker credentials,
+`/opt/poma/.env`, `/opt/poma/data`, `/opt/poma/state`,
+`/opt/poma/reports`, and app working orders. The housekeeping process
+does not issue trades or change market allocations. Non-dev environments
+only receive conservative cache and dangling-resource cleanup; historical
+tagged release images are retained for rollback.
+
+On dev deployment, a pre-upload/after-extraction disk check requires **4 GiB
+free** before pulling the new image. If safe cleanup does not recover enough
+space, deployment fails closed instead of filling the disk or installing a
+partially extracted image. Docker Compose return code alone is insufficient:
+the exact pinned image must exist locally after a pull.
+
+To inspect the VM without modifying anything:
+
+```bash
+df -h /
+sudo docker system df
+sudo journalctl -t poma-housekeeping --no-pager -n 80
+sudo cat /etc/cron.d/poma-housekeeping
+```
+
+Run the script manually if needed:
+
+```bash
+sudo flock -n /run/lock/poma-housekeeping.lock \
+  bash /opt/poma/ops/scripts/vm_housekeeping.sh daily dev
+```
+
+Never use `docker system prune --volumes`, blindly delete the Docker runtime
+directories, or purge `state/` and `data/` to make a deployment pass.
+If the disk cannot be safely reclaimed, investigate which mount or data
+directory is consuming it before expanding storage or deleting anything.
+
+
 This runbook is the day-to-day checklist for operating POMA safely in `dry_run`, `paper`, and eventually `live`.
 
 ## Portfolio and capital model
