@@ -498,7 +498,8 @@ jobs:
             pyproject.toml \
             src \
             ops/cron \
-            ops/scripts/deploy.sh || {
+            ops/scripts/deploy.sh \
+            ops/scripts/vm_housekeeping.sh || {
               echo "::error::Runtime package creation timed out or failed"
               exit 1
             }
