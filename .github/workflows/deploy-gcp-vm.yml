@@ -754,7 +754,7 @@ jobs:
             # occasionally. Never install a scheduled prune of Docker volumes.
             remote_timed "Install POMA log rotation" sudo install -m 0644 \
               ops/cron/poma-logrotate.conf /etc/logrotate.d/poma
-            sed 's/POMA_HOUSEKEEPING_ENV/${{ inputs.deploy_environment }}/g' \
+            sed "s/POMA_HOUSEKEEPING_ENV/${{ inputs.deploy_environment }}/g" \
               ops/cron/poma-housekeeping.cron | sudo tee /etc/cron.d/poma-housekeeping >/dev/null
             remote_timed "Secure VM housekeeping schedule" sudo chmod 0644 \
               /etc/cron.d/poma-housekeeping
