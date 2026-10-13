@@ -53,6 +53,8 @@ def test_complete_environment_passes_without_leaking_secrets(mode: str, settings
     [
         "INVESTMENT_STRATEGY_WEIGHTS",
         "CASH_TARGET_PCT",
+        "MARKET_CALENDAR",
+        "REBALANCE_AFTER_OPEN_MINUTES",
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_CHAT_ID",
     ],
@@ -87,12 +89,15 @@ def test_core_etf_requires_no_instrument_weight_configuration() -> None:
 
 
 @pytest.mark.parametrize(("mode", "settings"), [("paper", PAPER), ("live", LIVE)])
-def test_calendar_and_rebalance_vars_are_optional(mode: str, settings: dict[str, str]) -> None:
-    optional = ("MARKET_CALENDAR", "REBALANCE_AFTER_OPEN_MINUTES")
-    without = {key: value for key, value in settings.items() if key not in optional}
-    result = run_check(mode, without)
-    assert result.returncode == 0, result.stderr
-    assert all(name not in result.stderr for name in optional)
+@pytest.mark.parametrize("name", ("MARKET_CALENDAR", "REBALANCE_AFTER_OPEN_MINUTES"))
+def test_market_schedule_environment_vars_are_required(
+    mode: str, settings: dict[str, str], name: str
+) -> None:
+    missing = {key: value for key, value in settings.items() if key != name}
+    result = run_check(mode, missing)
+    assert result.returncode != 0
+    assert f"Missing GitHub Environment Variable {name}" in result.stderr
+    assert "secret-" not in result.stderr
 
 
 def test_missing_many_settings_reports_all_names_without_values() -> None:
@@ -115,15 +120,14 @@ def test_investment_mandate_requires_github_environment_vars_not_secrets() -> No
     required_vars = (
         "INVESTMENT_STRATEGY_WEIGHTS",
         "CASH_TARGET_PCT",
+        "MARKET_CALENDAR",
+        "REBALANCE_AFTER_OPEN_MINUTES",
     )
     for workflow in (deploy, gateway):
         for name in required_vars:
             assert "${{ vars." + name + " }}" in workflow
             assert "secrets." + name not in workflow
             assert "vars." + name + " ||" not in workflow
-        for optional_name in ("MARKET_CALENDAR", "REBALANCE_AFTER_OPEN_MINUTES"):
-            assert "${{ vars." + optional_name + " }}" in workflow
-
         assert "CORE_ETF_WEIGHTS" not in workflow
         assert "bash ops/scripts/validate_github_environment.sh" in workflow
 
@@ -165,8 +169,8 @@ def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> Non
     mandatory = preflight.split('if [ "${mode}" != "dry_run" ]; then', 1)[1].split("fi", 1)[0]
     assert "require_var INVESTMENT_STRATEGY_WEIGHTS" in mandatory
     assert "require_var CASH_TARGET_PCT" in mandatory
-    assert "require_var MARKET_CALENDAR" not in mandatory
-    assert "require_var REBALANCE_AFTER_OPEN_MINUTES" not in mandatory
+    assert "require_var MARKET_CALENDAR" in mandatory
+    assert "require_var REBALANCE_AFTER_OPEN_MINUTES" in mandatory
     for workflow in (deploy, gateway):
         assert "bash ops/scripts/validate_github_environment.sh" in workflow
         assert "secrets.IBKR_LOGIN_SECRET" in workflow
