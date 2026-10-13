@@ -658,6 +658,14 @@ jobs:
               fi
             '
 
+          # A full root filesystem can reject SCP itself (before the app bundle is
+          # unpacked). Stream the cleanup script over SSH stdin: no remote file write
+          # is required until disk space has been reclaimed. Serialized with cron.
+          timed "Pre-upload disk housekeeping" run_with_timeout 5m \
+            gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
+              --command "sudo /usr/bin/flock -w 45 /run/lock/poma-housekeeping.lock /bin/bash -s -- predeploy ${DEPLOY_ENVIRONMENT}" \
+              < ops/scripts/vm_housekeeping.sh
+
           timed "Deployment bundle upload" retry_with_backoff 4m "Deployment bundle upload" 2 \
             gcloud compute scp /tmp/poma.tar.gz "${instance_name}:/tmp/poma.tar.gz" "${ssh_common[@]}"
 
@@ -733,35 +741,22 @@ jobs:
               /opt/poma/state
             cd /opt/poma
 
-            # A failed image extraction previously filled the 29 GB dev root disk and
-            # left cron unable to install its crontab. Cleanup must happen BEFORE
-            # pulling again, independently of the optional deploy smoke test.
-            # Never remove Docker volumes, which may contain persistent runtime data.
-            # Keep non-dev/production untouched: free space issues there fail closed.
-            image_pull_min_free_kib=4194304  # 4 GiB to unpack the scientific Python image.
-            free_kib="$(df -Pk / | awk "NR==2 {print \$4}")"
-            if [ "${free_kib}" -lt "${image_pull_min_free_kib}" ]; then
-              echo "Low VM disk headroom before image pull: ${free_kib} KiB available (<4 GiB)."
-              if [ "${{ inputs.deploy_environment }}" = "dev" ]; then
-                remote_timed "Prune unused dev Docker images, caches and stopped containers (no volumes)" \
-                  sudo timeout --kill-after=30s 4m docker system prune --all --force
-                # Journal files are independent of app state and safe to compact on dev.
-                sudo journalctl --vacuum-size=100M || true
-                free_kib="$(df -Pk / | awk "NR==2 {print \$4}")"
-                echo "Available root disk after dev cleanup: ${free_kib} KiB"
-              fi
-              if [ "${free_kib}" -lt "${image_pull_min_free_kib}" ]; then
-                echo "Insufficient root disk space to safely pull the application image." >&2
-                df -h / >&2
-                sudo timeout --kill-after=10s 10s docker system df >&2 || true
-                exit 1
-              fi
-            fi
-
+            # Recheck headroom after the app bundle has been extracted.
+            # The same script is used by pre-upload recovery and daily cron.
+            remote_timed "Post-extract disk housekeeping" sudo /bin/bash \
+              ops/scripts/vm_housekeeping.sh predeploy ${{ inputs.deploy_environment }}
             # IB Gateway runtime (binaries, GUI packages, helpers, systemd service) is owned by
             # the IB Gateway Ops workflow, which Auto CI/CD runs right after this deploy. Keeping
             # it out of the deploy keeps this step to app concerns only (image pull + optional smoke + cron).
             remote_timed "Docker pull and optional smoke" sudo -u poma env RUN_DEPLOY_SMOKE=${{ inputs.deploy_smoke }} RUN_DOCKER_PULL_DIAGNOSTICS=${{ inputs.deploy_smoke }} RUN_DOCKER_PRUNE=${{ inputs.deploy_smoke }} POMA_IMAGE=${{ inputs.image }} bash ops/scripts/deploy.sh
+            # Separate root cron job protects the VM even when POMA trades only
+            # occasionally. Never install a scheduled prune of Docker volumes.
+            remote_timed "Install POMA log rotation" sudo install -m 0644 \
+              ops/cron/poma-logrotate.conf /etc/logrotate.d/poma
+            sed 's/POMA_HOUSEKEEPING_ENV/${{ inputs.deploy_environment }}/g' \
+              ops/cron/poma-housekeeping.cron | sudo tee /etc/cron.d/poma-housekeeping >/dev/null
+            remote_timed "Secure VM housekeeping schedule" sudo chmod 0644 \
+              /etc/cron.d/poma-housekeeping
             if [ "${{ inputs.trading_mode }}" = "live" ]; then
               echo "Live schedule remains paused until configure-live passes authenticated API checks."
             else
