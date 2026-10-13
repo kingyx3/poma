@@ -191,17 +191,42 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
     assert "DEFAULT_IMAGE_TAG" not in script
 
 
-def test_dev_disk_pressure_cleanup_is_before_docker_pull_and_never_removes_volumes() -> None:
+def test_dev_housekeeping_runs_before_scp_and_is_installed_daily() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
     upload = workflow.split("- name: Upload and install on VM", 1)[1]
-    assert "image_pull_min_free_kib=4194304" in upload
-    assert 'if [ "${{ inputs.deploy_environment }}" = "dev" ]; then' in upload
-    assert "docker system prune --all --force" in upload
-    assert "docker system prune --all --force --volumes" not in upload
-    assert "Insufficient root disk space to safely pull the application image" in upload
-    assert upload.index("docker system prune --all --force") < upload.index(
+    assert 'timed "Pre-upload disk housekeeping"' in upload
+    assert '< ops/scripts/vm_housekeeping.sh' in upload
+    assert upload.index('timed "Pre-upload disk housekeeping"') < upload.index(
+        'timed "Deployment bundle upload"'
+    )
+    assert upload.index('timed "Deployment bundle upload"') < upload.index(
+        'remote_timed "Post-extract disk housekeeping"'
+    )
+    assert upload.index('remote_timed "Post-extract disk housekeeping"') < upload.index(
         'remote_timed "Docker pull and optional smoke"'
     )
+    assert "ops/cron/poma-housekeeping.cron" in upload
+    assert "/etc/cron.d/poma-housekeeping" in upload
+    assert "ops/cron/poma-logrotate.conf" in upload
+    assert upload.index("Secure VM housekeeping schedule") < upload.index(
+        'remote_timed "Restart cron scheduler"'
+    )
+    cron = (REPO_ROOT / "ops/cron/poma-housekeeping.cron").read_text()
+    assert "/usr/bin/flock -n" in cron
+    assert "vm_housekeeping.sh daily POMA_HOUSEKEEPING_ENV" in cron
+    assert "/usr/bin/logger -t poma-housekeeping" in cron
+
+    cleanup = (REPO_ROOT / "ops/scripts/vm_housekeeping.sh").read_text()
+    assert "min_free_kib=4194304" in cleanup
+    assert "docker image prune -f" in cleanup
+    assert "docker builder prune" in cleanup
+    assert "docker image rm" in cleanup
+    assert "current_image" in cleanup
+    assert "docker system prune --all --force" not in cleanup
+    assert "--volumes" not in cleanup.split('run_bounded "Remove old stopped containers"', 1)[1].split(
+        'disk_status', 1
+    )[0]
+    assert "state/" in cleanup and "reports/" in cleanup
 
 
 def test_deploy_does_not_treat_compose_zero_exit_as_success_without_image(tmp_path: Path) -> None:
