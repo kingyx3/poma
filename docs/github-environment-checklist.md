@@ -8,17 +8,28 @@ are missing. They list missing **names**, never secret values.
 
 ## Required GitHub Environment variables (not secrets)
 
-Set these four fields under **Settings → Environments → dev → Environment variables**
-(and separately under `prd` when enabling production). They are deliberately
-read from GitHub Actions `vars.*` **only**. A secret with the same name is not a
-substitute; an absent Environment variable fails the deploy/Gateway preflight.
+Set these **two** non-secret settings under **Settings → Environments →
+dev → Environment variables** (and separately in `stg` or `prd` when deploying).
+These use GitHub Actions `vars.*` only; placing them under Environment secrets
+does not satisfy the deployment preflight.
 
 | GitHub Environment variable | Example | Meaning |
 |---|---|---|
-| `INVESTMENT_STRATEGY_WEIGHTS` | `USMC=1.0` | Strategy weights sum to 100% of the invested sleeve |
+| `INVESTMENT_STRATEGY_WEIGHTS` | `USMC=1.0` | Direct ticker and/or registered-strategy weights summing to 100% of the invested sleeve |
 | `CASH_TARGET_PCT` | `0.02` | 2% of total equity held as cash |
-| `MARKET_CALENDAR` | `LSE` | London Stock Exchange calendar for USMC |
-| `REBALANCE_AFTER_OPEN_MINUTES` | `390` | London rebalance from 14:30 local time |
+
+### Optional market scheduling overrides
+
+For the default USD London ETFs USMC and SP1, the deploy workflow already
+defaults `MARKET_CALENDAR=LSE` and `REBALANCE_AFTER_OPEN_MINUTES=390`
+(14:30 London local time). You **do not need to create these GitHub variables**
+for the default ETF deployment. If you override them, POMA still rejects
+invalid calendars or a trading window too early for London paper/live orders.
+
+For an investment mix consisting solely of US-listed stock strategies, explicitly
+set `MARKET_CALENDAR=NASDAQ` and `REBALANCE_AFTER_OPEN_MINUTES=10`
+if you want the US-open rebalance schedule instead of the deployment's
+London-overlap defaults.
 
 ## Instrument selection
 
@@ -75,6 +86,5 @@ CASH_TARGET_PCT=0.02
 This deploys 78.4% to USMC, 19.6% to SP1, and 2% cash. Both funds use USD London listings. Unknown ticker IDs, including literal `XXX`, must be registered and mapped to a verified broker exchange/currency before deployment. Mixing London ETFs with US-stock algorithms still requires careful market-session alignment.
 
 The workflow checks each environment independently: values are **not synchronized**
-between `dev` and `prd`. Set the four required Environment variables for each
-environment. Keep broker credentials,
-account identifiers and release approvals separate.
+between `dev` and `prd`. Set the two required Environment variables for each
+environment. Keep broker credentials, account identifiers and release approvals separate.
