@@ -8,28 +8,31 @@ are missing. They list missing **names**, never secret values.
 
 ## Required GitHub Environment variables (not secrets)
 
-Set these **two** non-secret settings under **Settings → Environments →
+Set these **four** non-secret settings under **Settings → Environments →
 dev → Environment variables** (and separately in `stg` or `prd` when deploying).
-These use GitHub Actions `vars.*` only; placing them under Environment secrets
-does not satisfy the deployment preflight.
+Paper/live deployment and Gateway configuration use GitHub Actions `vars.*`
+**only** and fail before provisioning/remote access if any setting is missing.
+A GitHub Environment secret with the same name does not satisfy the preflight.
 
 | GitHub Environment variable | Example | Meaning |
 |---|---|---|
-| `INVESTMENT_STRATEGY_WEIGHTS` | `USMC=1.0` | Direct ticker and/or registered-strategy weights summing to 100% of the invested sleeve |
-| `CASH_TARGET_PCT` | `0.02` | 2% of total equity held as cash |
+| `INVESTMENT_STRATEGY_WEIGHTS` | `USMC=1.0` | Registered ETF ticker/strategy weights summing to 100% of the invested sleeve |
+| `CASH_TARGET_PCT` | `0.02` | Cash reserve as a fraction of total equity |
+| `MARKET_CALENDAR` | `LSE` | Exchange calendar governing the rebalance schedule |
+| `REBALANCE_AFTER_OPEN_MINUTES` | `390` | Minutes after that calendar's regular market opening before rebalancing |
 
-### Optional market scheduling overrides
+For the supported USD London UCITS tickers USMC and SP1, set
+`MARKET_CALENDAR=LSE` and `REBALANCE_AFTER_OPEN_MINUTES=390`.
+On a normal LSE trading day this starts the rebalance window at 14:30 London
+time (8:00 opening plus 390 minutes). It does not force execution at that
+instant; market-hours, contract, quote and account guards still apply.
+If any London UCITS fund is allocated, runtime configuration rejects a
+non-LSE calendar or a paper/live rebalance window earlier than 390 minutes.
 
-For the default USD London ETFs USMC and SP1, the deploy workflow already
-defaults `MARKET_CALENDAR=LSE` and `REBALANCE_AFTER_OPEN_MINUTES=390`
-(14:30 London local time). You **do not need to create these GitHub variables**
-for the default ETF deployment. If you override them, POMA still rejects
-invalid calendars or a trading window too early for London paper/live orders.
-
-For an investment mix consisting solely of US-listed stock strategies, explicitly
-set `MARKET_CALENDAR=NASDAQ` and `REBALANCE_AFTER_OPEN_MINUTES=10`
-if you want the US-open rebalance schedule instead of the deployment's
-London-overlap defaults.
+For portfolios allocated only to registered US-stock algorithms, `NASDAQ`
+and a suitable earlier start may be selected explicitly, after validating
+the intended exchange/session. The calendar is currently global to a
+deployment, not per-strategy.
 
 ## Instrument selection
 
@@ -86,5 +89,5 @@ CASH_TARGET_PCT=0.02
 This deploys 78.4% to USMC, 19.6% to SP1, and 2% cash. Both funds use USD London listings. Unknown ticker IDs, including literal `XXX`, must be registered and mapped to a verified broker exchange/currency before deployment. Mixing London ETFs with US-stock algorithms still requires careful market-session alignment.
 
 The workflow checks each environment independently: values are **not synchronized**
-between `dev` and `prd`. Set the two required Environment variables for each
+between `dev` and `prd`. Set all four required Environment variables for each
 environment. Keep broker credentials, account identifiers and release approvals separate.
