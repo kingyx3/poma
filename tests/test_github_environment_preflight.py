@@ -53,8 +53,6 @@ def test_complete_environment_passes_without_leaking_secrets(mode: str, settings
     [
         "INVESTMENT_STRATEGY_WEIGHTS",
         "CASH_TARGET_PCT",
-        "MARKET_CALENDAR",
-        "REBALANCE_AFTER_OPEN_MINUTES",
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_CHAT_ID",
     ],
@@ -88,6 +86,15 @@ def test_core_etf_requires_no_instrument_weight_configuration() -> None:
     assert run_check("paper", {**PAPER, "CORE_ETF_WEIGHTS": "VTI=1.0"}).returncode == 0
 
 
+@pytest.mark.parametrize(("mode", "settings"), [("paper", PAPER), ("live", LIVE)])
+def test_calendar_and_rebalance_vars_are_optional(mode: str, settings: dict[str, str]) -> None:
+    optional = ("MARKET_CALENDAR", "REBALANCE_AFTER_OPEN_MINUTES")
+    without = {key: value for key, value in settings.items() if key not in optional}
+    result = run_check(mode, without)
+    assert result.returncode == 0, result.stderr
+    assert all(name not in result.stderr for name in optional)
+
+
 def test_missing_many_settings_reports_all_names_without_values() -> None:
     result = run_check("live", {})
     assert result.returncode != 0
@@ -108,14 +115,14 @@ def test_investment_mandate_requires_github_environment_vars_not_secrets() -> No
     required_vars = (
         "INVESTMENT_STRATEGY_WEIGHTS",
         "CASH_TARGET_PCT",
-        "MARKET_CALENDAR",
-        "REBALANCE_AFTER_OPEN_MINUTES",
     )
     for workflow in (deploy, gateway):
         for name in required_vars:
             assert "${{ vars." + name + " }}" in workflow
             assert "secrets." + name not in workflow
             assert "vars." + name + " ||" not in workflow
+        for optional_name in ("MARKET_CALENDAR", "REBALANCE_AFTER_OPEN_MINUTES"):
+            assert "${{ vars." + optional_name + " }}" in workflow
 
         assert "CORE_ETF_WEIGHTS" not in workflow
         assert "bash ops/scripts/validate_github_environment.sh" in workflow
@@ -134,6 +141,15 @@ def test_required_environment_variable_is_distinct_from_old_etf_weights() -> Non
     assert "INVESTMENT_STRATEGY_WEIGHTS" in legacy.stderr
 
 
+def test_auto_cicd_deploys_when_mandate_preflight_changes() -> None:
+    workflow = (ROOT / ".github/workflows/auto-cicd.yml").read_text()
+    assert "ops/scripts/validate_github_environment.sh" in workflow
+    assert ".env.example" in workflow
+    deploy_paths = workflow.split("is_deploy_path() {", 1)[1].split("is_gateway_path() {", 1)[0]
+    assert "ops/scripts/validate_github_environment.sh" in deploy_paths
+    assert ".env.example" in deploy_paths
+
+
 def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> None:
     deploy = (ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text()
     gateway = (ROOT / ".github/workflows/ib-gateway-ops.yml").read_text()
@@ -145,6 +161,12 @@ def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> Non
     ):
         assert "vars." + name in deploy
         assert "vars." + name in gateway
+    preflight = CHECK.read_text()
+    mandatory = preflight.split('if [ "${mode}" != "dry_run" ]; then', 1)[1].split("fi", 1)[0]
+    assert "require_var INVESTMENT_STRATEGY_WEIGHTS" in mandatory
+    assert "require_var CASH_TARGET_PCT" in mandatory
+    assert "require_var MARKET_CALENDAR" not in mandatory
+    assert "require_var REBALANCE_AFTER_OPEN_MINUTES" not in mandatory
     for workflow in (deploy, gateway):
         assert "bash ops/scripts/validate_github_environment.sh" in workflow
         assert "secrets.IBKR_LOGIN_SECRET" in workflow
