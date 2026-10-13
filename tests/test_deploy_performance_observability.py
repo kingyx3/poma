@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -187,6 +189,52 @@ def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
     assert "docker image prune -f >/dev/null\n}" not in script
     assert "DOCKER_BUILDKIT" not in script
     assert "DEFAULT_IMAGE_TAG" not in script
+
+
+def test_dev_disk_pressure_cleanup_is_before_docker_pull_and_never_removes_volumes() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    upload = workflow.split("- name: Upload and install on VM", 1)[1]
+    assert "image_pull_min_free_kib=4194304" in upload
+    assert 'if [ "${{ inputs.deploy_environment }}" = "dev" ]; then' in upload
+    assert "docker system prune --all --force" in upload
+    assert "docker system prune --all --force --volumes" not in upload
+    assert "Insufficient root disk space to safely pull the application image" in upload
+    assert upload.index("docker system prune --all --force") < upload.index(
+        'remote_timed "Docker pull and optional smoke"'
+    )
+
+
+def test_deploy_does_not_treat_compose_zero_exit_as_success_without_image(tmp_path: Path) -> None:
+    """Compose v5 has returned zero after reporting a containerd ENOSPC extraction failure."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_docker = bin_dir / "docker"
+    fake_docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(DEPLOY_SCRIPT)],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+            "APP_DIR": str(tmp_path),
+            "POMA_IMAGE": "ghcr.io/kingyx3/poma:" + "a" * 40,
+            "POMA_UID": "1000",
+            "POMA_GID": "1000",
+            "RUN_DEPLOY_SMOKE": "false",
+            "RUN_DOCKER_PRUNE": "false",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "absent after docker compose pull" in result.stderr
 
 
 def test_vm_compose_uses_prebuilt_image() -> None:
