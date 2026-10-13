@@ -114,7 +114,10 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
     assert "exit 42" in workflow
     assert "id poma >/dev/null 2>&1" in workflow
     assert "systemctl is-active --quiet docker" in workflow
-    assert "systemctl is-active --quiet cron" in workflow
+    # Readiness requires cron installed, not active: the deploy pauses cron itself, so a
+    # cancelled/failed earlier deploy must not wedge every later one.
+    assert "command -v cron >/dev/null 2>&1" in workflow
+    assert "systemctl is-active --quiet cron" not in workflow
     assert "sudo crontab -r -u poma" in workflow
     assert "sudo systemctl stop cron" in workflow
     assert "docker compose --env-file .compose.env -f docker-compose.vm.yml down --remove-orphans" in workflow

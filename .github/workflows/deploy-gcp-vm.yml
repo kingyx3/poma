@@ -567,7 +567,11 @@ jobs:
           }
 
           # Poll the VM over IAP until the POMA startup readiness sentinel matches this
-          # deploy's startup revision and the app user plus Docker/cron services exist. Each
+          # deploy's startup revision, the app user exists, Docker is running and cron is
+          # installed. Cron is deliberately not required to be active: the deploy stops it
+          # ("Pause app cron before deploy") and restarts it at the end, so a deploy that was
+          # cancelled or failed in between leaves it stopped on an otherwise ready host, and
+          # requiring it active would wedge every later deploy until someone starts it by hand. Each
           # probe is a short, independently timed SSH, so a cold boot or a transient
           # IAP/SSH-key-propagation hang is retried with a fresh connection. Do not accept
           # cloud-init's boot-finished marker by itself: the Google metadata startup script can
@@ -578,7 +582,7 @@ jobs:
             while true; do
               set +e
               run_with_timeout 45s gcloud compute ssh "${instance_name}" "${ssh_common[@]}" \
-                --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; if test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && systemctl is-active --quiet cron; then exit 0; fi; if systemctl is-active --quiet google-startup-scripts.service; then echo \"startup_status=running\" >&2; exit 43; fi; echo \"startup_status=not-ready\" >&2; exit 44"
+                --command "startup_failed=\"\$(cat /var/lib/poma/vm-startup-failed 2>/dev/null || true)\"; if [ -n \"\${startup_failed}\" ]; then echo \"startup_failed=\${startup_failed}\" >&2; exit 42; fi; sentinel=\"\$(cat /var/lib/poma/vm-ready 2>/dev/null || true)\"; boot_id=\"\$(cat /proc/sys/kernel/random/boot_id)\"; if test \"\${sentinel}\" = \"${startup_revision} \${boot_id}\" && id poma >/dev/null 2>&1 && systemctl is-active --quiet docker && command -v cron >/dev/null 2>&1; then exit 0; fi; if systemctl is-active --quiet google-startup-scripts.service; then echo \"startup_status=running\" >&2; exit 43; fi; echo \"startup_status=not-ready\" >&2; exit 44"
               status="$?"
               set -e
               if [ "${status}" -eq 0 ]; then
