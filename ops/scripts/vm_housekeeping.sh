@@ -10,6 +10,7 @@ case "${mode}" in daily|predeploy) ;; *) echo "Invalid housekeeping mode" >&2; e
 case "${environment}" in dev|stg|prd) ;; *) echo "Invalid POMA environment" >&2; exit 2;; esac
 
 min_free_kib=4194304  # 4 GiB: leave room to unpack the scientific Python image.
+app_dir="${POMA_APP_DIR:-/opt/poma}"
 free_kib() { df -Pk / | awk 'NR==2 {print $4}'; }
 say() { printf '[poma-housekeeping] %s\n' "$*"; }
 disk_status() {
@@ -53,19 +54,31 @@ if command -v docker >/dev/null 2>&1 && timeout 20s docker info >/dev/null 2>&1;
   # is running (POMA's cron runs use short-lived containers).
   if [[ "${environment}" == "dev" ]]; then
     current_image=""
-    if [[ -r /opt/poma/.compose.env ]]; then
-      current_image="$(sed -n 's/^POMA_IMAGE=//p' /opt/poma/.compose.env | head -n 1)"
+    if [[ -r "${app_dir}/.compose.env" ]]; then
+      current_image="$(sed -n 's/^POMA_IMAGE=//p' "${app_dir}/.compose.env" | head -n 1)"
     fi
     if [[ -z "${current_image}" ]]; then
       say "No pinned POMA_IMAGE found; retaining tagged images"
     else
+      # Retain the newest older image as a rollback candidate. A failed prior
+      # pull may have updated .compose.env to a tag that does not yet exist.
+      fallback_image=""
       while IFS= read -r image; do
         [[ "${image}" =~ ^ghcr[.]io/kingyx3/poma:[0-9a-fA-F]{40}$ ]] || continue
-        [[ "${image}" == "${current_image}" ]] && continue
+        if [[ "${image}" != "${current_image}" ]]; then
+          fallback_image="${image}"
+          break
+        fi
+      done < <(docker image ls --format '{{.Repository}}:{{.Tag}}')
+      while IFS= read -r image; do
+        [[ "${image}" =~ ^ghcr[.]io/kingyx3/poma:[0-9a-fA-F]{40}$ ]] || continue
+        if [[ "${image}" == "${current_image}" || "${image}" == "${fallback_image}" ]]; then
+          continue
+        fi
         say "Reclaim unused historical dev app image: ${image}"
         timeout --kill-after=10s 90s docker image rm "${image}" ||
           say "Image retained because Docker still references it: ${image}"
-      done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' | sort -u)
+      done < <(docker image ls --format '{{.Repository}}:{{.Tag}}')
     fi
 
     # Under acute pressure, reclaim build cache regardless of age and
