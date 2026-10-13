@@ -114,7 +114,7 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
     assert "exit 42" in workflow
     assert "id poma >/dev/null 2>&1" in workflow
     assert "systemctl is-active --quiet docker" in workflow
-    assert "systemctl is-active --quiet cron" in workflow
+    assert "systemctl is-enabled --quiet cron" in workflow
     assert "sudo crontab -r -u poma" in workflow
     assert "sudo systemctl stop cron" in workflow
     assert "docker compose --env-file .compose.env -f docker-compose.vm.yml down --remove-orphans" in workflow
@@ -125,6 +125,27 @@ def test_deploy_polling_and_retries_are_bounded() -> None:
     assert "failed after ${attempt} attempt(s)" in workflow
     assert "timeout --kill-after=30s" in workflow
     assert "timed out; check VM readiness" in workflow
+
+
+def test_vm_readiness_accepts_enabled_but_stopped_cron_after_interrupted_deploy() -> None:
+    """Restart a failed deployment when cron was paused during the previous attempt."""
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    upload = workflow.split("- name: Upload and install on VM", 1)[1]
+    probe = upload.split("wait_for_vm_ready() {", 1)[1].split("ensure_vm_ready() {", 1)[0]
+
+    assert "systemctl is-active --quiet docker && systemctl is-enabled --quiet cron" in probe
+    assert "systemctl is-active --quiet docker && systemctl is-active --quiet cron" not in probe
+    assert "/var/lib/poma/vm-ready" in probe
+    assert "startup_revision" in probe
+    assert "boot_id" in probe
+
+    # The scheduler stays paused until the new runtime and schedule are installed.
+    pause = upload.index('timed "Pause app cron before deploy"')
+    install = upload.index('timed "Remote install, Docker pull, optional smoke, cron"')
+    restart = upload.index('remote_timed "Restart cron scheduler"')
+    assert pause < install < restart
+    assert "sudo systemctl stop cron" in upload
+    assert "sudo systemctl restart cron" in upload
 
 
 def test_vm_deploy_script_pulls_prebuilt_image_and_bounds_smoke() -> None:
