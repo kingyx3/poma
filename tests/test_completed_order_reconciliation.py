@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 from conftest import make_settings
@@ -117,11 +117,16 @@ def test_completed_history_failure_keeps_order_fail_closed_without_crashing_reco
 class FakeExecution:
     shares: float
     price: float
+    permId: int = 9007
+    execId: str = "execution-1"
+    acctNumber: str = "DU1234567"
+    side: str = "SLD"
 
 
 @dataclass
 class FakeFill:
     execution: FakeExecution
+    contract: FakeContract | None = None
 
 
 @dataclass
@@ -159,6 +164,7 @@ class FakeTrade:
 class FakeHistoryIB:
     completed: list[FakeTrade]
     hydrated: list[FakeTrade]
+    executions: list[FakeFill] = field(default_factory=list)
     executions_error: Exception | None = None
     disconnected: bool = False
 
@@ -169,7 +175,7 @@ class FakeHistoryIB:
     def reqExecutions(self) -> list[FakeFill]:  # noqa: N802
         if self.executions_error is not None:
             raise self.executions_error
-        return []
+        return list(self.executions)
 
     def trades(self) -> list[FakeTrade]:
         return self.hydrated
@@ -260,3 +266,95 @@ def test_ibkr_completed_history_filters_non_poma_and_other_accounts(monkeypatch:
     snapshots = fetch_completed_order_snapshots(settings)
 
     assert [snapshot.order_ref for snapshot in snapshots] == ["poma:run-1:0:RY:SELL"]
+
+
+def test_completed_status_wins_over_stale_hydrated_submitted_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    completed = _fake_trade(status="Filled")
+    stale_cache = _fake_trade(status="Submitted")
+    ib = FakeHistoryIB(completed=[completed], hydrated=[stale_cache])
+    monkeypatch.setattr("poma.ibkr_order_history._connect_ib", lambda *_args, **_kwargs: ib)
+
+    snapshots = fetch_completed_order_snapshots(make_settings(IBKR_ACCOUNT="DU1234567"))
+
+    assert len(snapshots) == 1
+    assert snapshots[0].raw_status == "Filled"
+    assert snapshots[0].filled == 1.0
+
+
+def test_execution_fills_close_order_when_completed_order_history_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry = _accepted_entry()
+    ib = FakeHistoryIB(
+        completed=[],
+        hydrated=[],
+        executions=[
+            FakeFill(FakeExecution(0.4, 204.0, execId="exec-1"), FakeContract("RY")),
+            FakeFill(FakeExecution(0.6, 205.0, execId="exec-2"), FakeContract("RY")),
+        ],
+    )
+    monkeypatch.setattr("poma.ibkr_order_history._connect_ib", lambda *_args, **_kwargs: ib)
+
+    snapshots = fetch_completed_order_snapshots(
+        make_settings(IBKR_ACCOUNT="DU1234567"), unresolved_entries=[entry]
+    )
+
+    assert len(snapshots) == 1
+    assert snapshots[0].order_ref == entry.order_ref
+    assert snapshots[0].perm_id == entry.perm_id
+    assert snapshots[0].raw_status == "Filled"
+    assert snapshots[0].filled == 1.0
+    assert snapshots[0].remaining == 0.0
+    assert snapshots[0].avg_fill_price == pytest.approx(204.6)
+
+
+@pytest.mark.parametrize(
+    ("execution", "entry_change"),
+    [
+        (FakeExecution(0.5, 204.0), {}),
+        (FakeExecution(1.0, 204.0, acctNumber="DU9999999"), {}),
+        (FakeExecution(1.0, 204.0, side="BOT"), {}),
+        (FakeExecution(1.0, 204.0, permId=9999), {}),
+        (FakeExecution(1.0, 204.0), {"perm_id": None}),
+        (FakeExecution(1.0, 204.0), {"replace_count": 1}),
+    ],
+)
+def test_incomplete_or_wrong_identity_executions_do_not_close_order(
+    monkeypatch: pytest.MonkeyPatch, execution: FakeExecution, entry_change: dict
+) -> None:
+    entry = replace(_accepted_entry(), **entry_change)
+    ib = FakeHistoryIB(
+        completed=[], hydrated=[], executions=[FakeFill(execution, FakeContract("RY"))]
+    )
+    monkeypatch.setattr("poma.ibkr_order_history._connect_ib", lambda *_args, **_kwargs: ib)
+
+    snapshots = fetch_completed_order_snapshots(
+        make_settings(IBKR_ACCOUNT="DU1234567"), unresolved_entries=[entry]
+    )
+
+    assert snapshots == []
+
+
+def test_execution_fills_require_matching_ticker_and_nonduplicated_quantity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = _accepted_entry()
+    ib = FakeHistoryIB(
+        completed=[],
+        hydrated=[],
+        executions=[
+            FakeFill(FakeExecution(0.5, 204.0, execId="exec-1"), FakeContract("RY")),
+            FakeFill(FakeExecution(0.5, 205.0, execId="exec-2"), FakeContract("WRONG")),
+        ],
+    )
+    monkeypatch.setattr("poma.ibkr_order_history._connect_ib", lambda *_args, **_kwargs: ib)
+    assert fetch_completed_order_snapshots(
+        make_settings(IBKR_ACCOUNT="DU1234567"), unresolved_entries=[entry]
+    ) == []
+
+
+def test_reconcile_promotes_execution_proven_full_fill_to_terminal(tmp_path) -> None:
+    store = OrderStore(tmp_path)
+    store.upsert(_accepted_entry())
+    manager = ExecutionManager(HistoryBroker([_filled_ry_snapshot()]), store, make_settings())
+    summary = manager.reconcile()
+    assert summary.updates[0].entry.is_terminal
+    assert store.load_open_orders() == []
