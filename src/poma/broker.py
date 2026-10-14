@@ -203,8 +203,19 @@ def _stock_contract(ticker: str, exchange: str, resolved: Stock | None = None) -
     return Stock(ticker, exchange, "USD")
 
 
+def _execution_order_contract(ib: IB, ticker: str, settings: Settings) -> Stock:
+    """Apply strict UCITS contract and venue safety to paper AND live orders.
+
+    Paper UCITS orders must resolve to exactly the same instrument as live orders.
+    Ordinary US stock paper orders preserve the SMART path.
+    """
+    if settings.trading_mode == TradingMode.LIVE or ucits_listing(ticker) is not None:
+        return _live_order_contract(ib, ticker, settings)
+    return _stock_contract(ticker, "SMART")
+
+
 def _live_order_contract(ib: IB, ticker: str, settings: Settings) -> Stock:
-    """Validate a real-money order's venue and contract before it can be transmitted.
+    """Validate a listed order's venue and contract before it can be transmitted.
 
     London USD UCITS listings must qualify to one IBKR conId. Never replace a failed
     qualification with a symbol-only SMART order: USMC also trades on Xetra in EUR.
@@ -837,11 +848,7 @@ class IbkrBroker:
                 submitted = None
                 try:
                     self._assert_connected(ib)
-                    contract = (
-                        _live_order_contract(ib, proposed.ticker, self.settings)
-                        if self.settings.trading_mode == TradingMode.LIVE
-                        else _stock_contract(proposed.ticker, "SMART")
-                    )
+                    contract = _execution_order_contract(ib, proposed.ticker, self.settings)
                     order = self._build_order(proposed)
                     if self.settings.ibkr_account:
                         order.account = self.settings.ibkr_account
@@ -1291,11 +1298,7 @@ class IbkrBroker:
         limit_price: float,
         order_ref: str,
     ) -> OpenOrderSnapshot:
-        contract = (
-            _live_order_contract(ib, ticker, self.settings)
-            if self.settings.trading_mode == TradingMode.LIVE
-            else _stock_contract(ticker, "SMART")
-        )
+        contract = _execution_order_contract(ib, ticker, self.settings)
         order = LimitOrder(side.value, quantity, limit_price)
         order.tif = self.settings.order_time_in_force
         order.orderRef = order_ref
