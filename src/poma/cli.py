@@ -139,6 +139,11 @@ def _portfolio_summary(
         f"Orders: {len(items)} total · {buys} buy · {sells} sell",
     ]
 
+    if executed and any(
+        isinstance(item, OrderResult) and item.filled < item.quantity for item in items
+    ):
+        lines.append("Execution: one or more broker fills are still unconfirmed; submitted is not filled")
+
     if items:
         lines.extend(["", "Order details"])
     else:

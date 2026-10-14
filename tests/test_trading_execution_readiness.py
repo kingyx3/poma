@@ -520,3 +520,26 @@ def test_validate_runtime_config_does_not_warn_on_turnover_for_paper(
     settings = _settings(monkeypatch, DATA_PROVIDER="yahoo", MAX_TURNOVER_PCT="1.0")
     module = _load_validate_runtime_config()
     assert module.warn(settings) == []
+
+
+def test_working_order_alert_does_not_claim_execution() -> None:
+    message = order_status_alert(
+        "2026-10-14",
+        OrderResult(
+            ticker="USMC", side=OrderSide.BUY, quantity=251.0, notional=9149.0,
+            order_id=615, status="Submitted", filled=0.0, average_fill_price=None,
+        ),
+    )
+    assert "Execution: accepted/working at IBKR; fill not yet confirmed" in message
+    assert "Filled: 0/251" in message
+
+
+def test_pending_submission_does_not_claim_broker_acceptance() -> None:
+    message = order_status_alert(
+        "2026-10-14",
+        OrderResult(
+            ticker="USMC", side=OrderSide.BUY, quantity=251.0, notional=9149.0,
+            order_id=615, status="PendingSubmit", filled=0.0, average_fill_price=None,
+        ),
+    )
+    assert "Execution: pending broker acceptance; no fill confirmed" in message

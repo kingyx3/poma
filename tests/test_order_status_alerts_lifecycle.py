@@ -32,3 +32,20 @@ def test_replace_alert_for_a_working_replacement_is_unchanged() -> None:
 
     assert "Action: replaced with a more aggressive limit ($12.02)\n" in message
     assert "then filled" not in message
+
+
+def test_unverified_lifecycle_alert_tells_operator_to_check_broker_not_resubmit() -> None:
+    entry = _entry(OrderLifecycleState.UNKNOWN, 0.0)
+    message = lifecycle_status_alert(entry, "unverified")
+
+    assert "Status: unknown" in message
+    assert "Order Ops (read-only)" in message
+    assert "will not automatically resubmit" in message
+    assert "Action: marked terminal" not in message
+
+
+def test_confirmed_terminal_alert_names_broker_evidence() -> None:
+    entry = _entry(OrderLifecycleState.FILLED, 85.0)
+    message = lifecycle_status_alert(entry, "closed")
+
+    assert "confirmed IBKR terminal order or full-fill execution evidence" in message

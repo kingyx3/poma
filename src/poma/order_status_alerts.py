@@ -43,7 +43,10 @@ def lifecycle_status_alert(entry: OrderLedgerEntry, action: str | None, detail: 
     elif action == "cancel":
         lines.append("Action: cancelled after exceeding the unfilled-order timeout")
     elif action == "closed":
-        lines.append("Action: marked terminal because IBKR no longer reports it as open")
+        lines.append("Action: reconciled from confirmed IBKR terminal order or full-fill execution evidence")
+    elif action == "unverified":
+        lines.append("Action: unresolved — check IBKR Trades/Executions and run GitHub Order Ops (read-only)")
+        lines.append("Safety: POMA will not automatically resubmit this unverified order")
     elif action == "replace_deferred":
         lines.append("Action: replace waiting on IBKR cancel confirmation; replacement follows on the next reconcile")
     elif action == "error":
@@ -91,6 +94,10 @@ def order_status_alert(session_date: str, result: OrderResult, trade: ProposedTr
         )
         if quote_line:
             lines.append(quote_line)
+    if result.status == "PendingSubmit":
+        lines.append("Execution: pending broker acceptance; no fill confirmed")
+    elif result.status in {"Submitted", "PreSubmitted"}:
+        lines.append("Execution: accepted/working at IBKR; fill not yet confirmed")
     if result.message:
         lines.append(f"Detail: {result.message}")
     return "\n".join(lines)

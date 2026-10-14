@@ -571,7 +571,9 @@ class ExecutionManager:
                 if callable(fetch_completed):
                     completed = fetch_completed()
                 elif isinstance(self.broker, IbkrBroker):
-                    completed = fetch_ibkr_completed_order_snapshots(self.settings)
+                    completed = fetch_ibkr_completed_order_snapshots(
+                        self.settings, wanted_order_refs=wanted_refs, unresolved_entries=unmatched
+                    )
                 else:
                     completed = []
                 completed_snapshots = [

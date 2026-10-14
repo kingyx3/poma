@@ -8,9 +8,9 @@ import pytest
 from conftest import make_settings
 from test_broker_order_lifecycle import FakeContract, FakeIB, FakeMarketData
 
-from poma.broker import BrokerUnavailable, IbkrBroker, _live_order_contract
+from poma.broker import BrokerUnavailable, IbkrBroker, _execution_order_contract, _live_order_contract
 from poma.market_calendar import is_market_open, should_rebalance_now
-from poma.models import OrderSide
+from poma.models import OrderSide, ProposedTrade
 
 
 class QualifyingIB(FakeIB):
@@ -140,3 +140,66 @@ def test_usmc_is_pinned_to_the_usd_six_swiss_line_and_its_own_calendar() -> None
     sp1 = ucits_listing("SP1")
     assert sp1 is not None
     assert (sp1.primary_exchange, sp1.calendar) == ("LSEETF", "LSE")
+
+
+def _paper():
+    return make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567")
+
+
+def test_paper_usmc_order_uses_same_qualified_six_usd_contract_as_live(monkeypatch) -> None:
+    monkeypatch.setattr("poma.market_calendar.is_market_open", lambda _calendar: True)
+    ib = QualifyingIB(connected=True)
+    broker = IbkrBroker(_paper())
+    monkeypatch.setattr(broker, "_connect", lambda: ib)
+    monkeypatch.setattr(broker, "_assert_ready_for_orders", lambda _ib: None)
+    trade = ProposedTrade(
+        ticker="USMC", side=OrderSide.BUY, quantity=2.0, notional=73.0,
+        reference_price=36.50, limit_price=36.55, reason="test",
+    )
+
+    results = broker.submit_trades([trade])
+
+    assert results[0].status == "Submitted"
+    assert len(ib.placed_orders) == 1
+    contract = ib.placed_orders[0][0]
+    assert contract.symbol == "USMC"
+    assert contract.currency == "USD"
+    assert contract.primaryExchange == "EBS"
+    assert contract.conId == 923456
+
+
+def test_paper_usmc_order_cannot_submit_without_unique_contract_qualification(monkeypatch) -> None:
+    monkeypatch.setattr("poma.market_calendar.is_market_open", lambda _calendar: True)
+    ib = FakeIB(connected=True)
+    broker = IbkrBroker(_paper())
+    monkeypatch.setattr(broker, "_connect", lambda: ib)
+    monkeypatch.setattr(broker, "_assert_ready_for_orders", lambda _ib: None)
+    trade = ProposedTrade(
+        ticker="USMC", side=OrderSide.BUY, quantity=2.0, notional=73.0,
+        reference_price=36.50, limit_price=36.55, reason="test",
+    )
+
+    results = broker.submit_trades([trade])
+
+    assert results[0].status != "Submitted"
+    assert ib.placed_orders == []
+
+
+def test_paper_usmc_replacement_uses_qualified_contract_and_closed_venue_blocks(monkeypatch) -> None:
+    monkeypatch.setattr("poma.market_calendar.is_market_open", lambda _calendar: True)
+    ib = QualifyingIB()
+    broker = IbkrBroker(_paper())
+
+    broker._place_limit_order(ib, "USMC", OrderSide.BUY, 2.0, 36.55, "poma:test:0:USMC:BUY:r1")
+    assert ib.placed_orders[0][0].conId == 923456
+
+    monkeypatch.setattr("poma.market_calendar.is_market_open", lambda _calendar: False)
+    with pytest.raises(BrokerUnavailable, match="SIX regular market is closed"):
+        _execution_order_contract(ib, "USMC", _paper())
+    assert len(ib.placed_orders) == 1
+
+
+def test_plain_us_paper_stock_does_not_require_ucits_qualification() -> None:
+    contract = _execution_order_contract(FakeIB(), "AAPL", _paper())
+    assert contract.symbol == "AAPL"
+    assert contract.exchange == "SMART"
