@@ -116,7 +116,17 @@ Do not skip paper validation. Before live:
 
 Reaching `PreSubmitted`/`Submitted` only means IBKR accepted the order; a working limit order can sit unfilled indefinitely. `ops/cron/poma.cron` schedules `poma reconcile-orders` on its own cron entry at +2 and +4 minutes within each 5-minute `poma monitor` interval. Those slots never land on a minute divisible by 5, so reconciliation does not compete with monitor for the shared single-VM command lock, while a 120-second replacement threshold still gets a scheduled opportunity before the 300-second cancellation threshold. Working orders are therefore followed up even after the rebalance process exits: reconciliation polls IBKR for every open POMA-tagged order, replaces a still-unfilled order once after `REPLACE_AFTER_SECONDS`, cancels it after `CANCEL_AFTER_SECONDS` if still unfilled, and sends a Telegram alert on every lifecycle change. The replace price is computed from a fresh IBKR quote at reconcile time (`REPLACE_PRICE_IMPROVEMENT_BPS` applied on top of the current side-of-market price), not by blindly improving the order's old limit price — if no valid fresh quote is available the replace is skipped for that pass rather than repricing off stale data. It is a no-op in `dry_run` mode and safe to run even when there is nothing open.
 
-The **Reconcile Orders** workflow is the manual recovery path when a rebalance is blocked by unresolved open orders from a prior run. It uses the same generated deploy config, WIF auth, and IAP SSH path as the other VM workflows, then runs the deployed container's `poma reconcile-orders` command and prints the open-order ledger before and after the run.
+Use **Order Ops** (`.github/workflows/order-ops.yml`) with `deploy_environment=dev` for a **read-only**
+investigation of a `NotOpenUnverified` order. It compares the durable ledger and lifecycle events
+to current open orders, completed-order callbacks, execution records by IBKR `permId`, and
+broker positions. Check IBKR activity independently before any operator action.
+
+The **Resolve Stale Order** workflow is a separate, guarded ledger-repair path that requires
+matching retained/current position evidence and no later same-ticker activity; it does not place
+orders or clear scheduler state. If the evidence is insufficient, leave the order unresolved and
+investigate with IBKR rather than manually deleting state or replaying the trade. A deployed
+`poma reconcile-orders` cron entry continues to poll automatically, and a manual execution
+of that command requires VM access.
 
 The next scheduled rebalance also checks the order ledger for anything still open from a *prior* session, or from a *different run* within the same session, before planning. By default (`STALE_ORDER_POLICY=block`) it blocks until those orders are reconciled or cancelled manually; set `STALE_ORDER_POLICY=cancel` to have it cancel them automatically instead.
 
@@ -166,8 +176,9 @@ Normal cron checks outside the rebalance window are console-only to avoid Telegr
 | `completed_with_order_issues` | One or more orders failed, cancelled, timed out, or only partially progressed | Open the latest report in `reports/`, check Telegram order details, then review IBKR activity. |
 | `blocked` rebalance | Risk guard blocked execution, usually broker balance, turnover/order-size/trade-count | Review report warnings and adjust config or Gateway only if the block is expected and safe. |
 | No strategy history snapshot | First run or insufficient provider snapshot history for the active strategy | Run `poma refresh-market-data`; check the active strategy docs for fallback behavior. |
-| Limit order accepted but never fills | Working limit price never crossed the market | Confirm the `poma reconcile-orders` cron entry (`ops/cron/poma.cron`) is installed; it replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`. Run **Reconcile Orders** to force an immediate check. |
-| New rebalance blocked: "open order(s) from a prior session" / "a different run in this session" | A previous session's (or a different run's) order never reached a terminal state | Run **Reconcile Orders** to resolve it, or set `STALE_ORDER_POLICY=cancel` to have the next rebalance cancel it automatically. |
+| Limit order accepted but never fills | Working limit price never crossed the market | Confirm the `poma reconcile-orders` cron entry (`ops/cron/poma.cron`) is installed; it replaces once then cancels per `REPLACE_AFTER_SECONDS`/`CANCEL_AFTER_SECONDS`. Review IBKR Orders and the subsequent lifecycle alert. |
+| Order `unknown` / `NotOpenUnverified` | The open-order API no longer shows a broker-accepted order, but final state is not proven | Run **Order Ops** read-only for the matching environment and compare `permId`/fills/positions with IBKR activity. Do not blindly resubmit or clear the order ledger. |
+| New rebalance blocked: "open order(s) from a prior session" / "a different run in this session" | A prior order still lacks terminal evidence | Investigate using **Order Ops** first. Cancel only confirmed working orders, and leave unknown ones fail-closed until resolved. |
 | Buy orders show `BuyingPowerBlocked` | Broker cash refreshed after the sell phase did not cover the repriced buy limit cash requirement | Expected when sells have not settled/filled or the fresh buy quote/limit offset made the order more expensive than planned; review the sell fills and rerun once cash confirms, rather than assuming the sell proceeds. |
 | Telegram missing | Wrong chat id, bot not started in the chat, or Telegram outage | Use **Discover Telegram chat ID** and send `/start` or a new message while it polls. |
 
