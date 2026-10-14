@@ -111,7 +111,14 @@ def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: py
     """Simulate the actual broker placement helper without sending a real order."""
     from poma.models import OrderSide
 
-    fake = FakeIB()
+    class QualifiedFakeIB(FakeIB):
+        def qualifyContracts(self, *contracts):  # noqa: N802 - ib_insync API
+            for contract in contracts:
+                contract.conId = 923456
+            return list(contracts)
+
+    fake = QualifiedFakeIB()
+    monkeypatch.setattr("poma.market_calendar.is_market_open", lambda _calendar: True)
     monkeypatch.setattr("poma.broker.IB", lambda: fake)
     broker = IbkrBroker(_settings(monkeypatch))
     snapshot = broker._place_limit_order(
@@ -122,6 +129,7 @@ def test_replacement_limit_order_preserves_lse_contract_identity(monkeypatch: py
     assert contract.symbol == ticker
     assert contract.primaryExchange == ("EBS" if ticker == "USMC" else "LSEETF")
     assert contract.currency == "USD"
+    assert contract.conId == 923456
     assert order.action == "BUY"
     assert order.lmtPrice == 11.53
     assert snapshot.order_ref == f"poma:paper:0:{ticker}:BUY:r1"
