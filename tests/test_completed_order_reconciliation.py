@@ -351,10 +351,26 @@ def test_execution_fills_require_matching_ticker_and_nonduplicated_quantity(
     ) == []
 
 
-def test_reconcile_promotes_execution_proven_full_fill_to_terminal(tmp_path) -> None:
+def test_reconcile_promotes_execution_proven_full_fill_to_terminal(monkeypatch, tmp_path) -> None:
+    from poma.broker import IbkrBroker
+
     store = OrderStore(tmp_path)
     store.upsert(_accepted_entry())
-    manager = ExecutionManager(HistoryBroker([_filled_ry_snapshot()]), store, make_settings())
+    settings = make_settings(TRADING_MODE="paper", IBKR_ACCOUNT="DU1234567")
+    ib = FakeHistoryIB(
+        completed=[],
+        hydrated=[],
+        executions=[FakeFill(FakeExecution(1.0, 204.5), FakeContract("RY"))],
+    )
+    monkeypatch.setattr("poma.ibkr_order_history._connect_ib", lambda *_args, **_kwargs: ib)
+
+    class EmptyOpenIbkrBroker(IbkrBroker):
+        def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
+            return []
+
+    manager = ExecutionManager(EmptyOpenIbkrBroker(settings), store, settings)
     summary = manager.reconcile()
-    assert summary.updates[0].entry.is_terminal
+    assert summary.updates[0].action == "closed"
+    assert summary.updates[0].matched is True
+    assert summary.updates[0].entry.lifecycle_state == OrderLifecycleState.FILLED
     assert store.load_open_orders() == []
