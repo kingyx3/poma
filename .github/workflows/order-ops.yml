@@ -1,6 +1,12 @@
 name: Order Ops
 
 on:
+  # One-time, internal PR diagnostic trigger: exercises this read-only workflow on DEV
+  # without adding a dispatch privilege to the GitHub connector.
+  pull_request:
+    types: [opened]
+    paths:
+      - .github/workflows/order-ops.yml
   workflow_dispatch:
     inputs:
       deploy_environment:
@@ -15,17 +21,18 @@ permissions:
   id-token: write
 
 concurrency:
-  group: poma-order-ops-${{ inputs.deploy_environment }}
+  group: poma-order-ops-${{ inputs.deploy_environment || 'dev' }}
   cancel-in-progress: false
 
 jobs:
   order-ops:
-    name: Inspect unresolved orders (${{ inputs.deploy_environment }})
+    name: Inspect unresolved orders (${{ inputs.deploy_environment || 'dev' }})
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'ops/verify-ibkr-order-state-dev-20261015') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: ${{ inputs.deploy_environment }}
+    environment: ${{ inputs.deploy_environment || 'dev' }}
     env:
-      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment || 'dev' }}
       REMOTE_INSPECTOR: /tmp/poma-inspect-unresolved-orders.py
       REMOTE_INSPECT_HELPER: /tmp/poma-run-order-ops-inspect.sh
 
@@ -98,4 +105,4 @@ jobs:
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: >-
-            POMA[${{ inputs.deploy_environment }}] order inspection ${{ job.status }} — read-only.
+            POMA[${{ inputs.deploy_environment || 'dev' }}] order inspection ${{ job.status }} — read-only.
