@@ -107,9 +107,10 @@ def test_completed_history_failure_keeps_order_fail_closed_without_crashing_reco
     summary = manager.reconcile()
 
     update = summary.updates[0]
-    assert update.entry.lifecycle_state == OrderLifecycleState.UNKNOWN
-    assert update.entry.raw_status == "NotOpenUnverified"
-    assert update.action == "unverified"
+    assert update.entry.lifecycle_state == OrderLifecycleState.BROKER_ACCEPTED
+    assert update.entry.raw_status == "PreSubmitted"
+    assert update.action == "error"
+    assert "completed history unavailable" in (update.detail or "")
     assert update.matched is False
 
 
