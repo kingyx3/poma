@@ -118,3 +118,41 @@ def test_position_from_snapshot_treats_absent_ticker_as_zero() -> None:
         "quantity": 0.0,
         "market_value": 0.0,
     }
+
+
+def test_order_ops_does_not_treat_empty_ledger_as_successful_order_verification(
+    tmp_path, monkeypatch, capsys,
+) -> None:
+    from conftest import make_settings
+
+    from ops.scripts import inspect_unresolved_orders
+    from poma.models import AccountSnapshot
+
+    settings = make_settings(DATA_DIR=tmp_path / "data", STATE_DIR=tmp_path / "state",
+                             REPORT_DIR=tmp_path / "reports")
+    calls = []
+
+    class ReadOnlyBroker:
+        def fetch_open_order_snapshots(self):
+            calls.append("open")
+            return []
+
+        def fetch_completed_order_snapshots(self):
+            calls.append("completed")
+            return []
+
+        def account_snapshot(self):
+            calls.append("portfolio")
+            return AccountSnapshot(cash_usd=1000.0, positions=(), positions_market_value_usd=0.0)
+
+    monkeypatch.setattr(inspect_unresolved_orders, "get_settings", lambda: settings)
+    monkeypatch.setattr(inspect_unresolved_orders, "build_broker", lambda _settings: ReadOnlyBroker())
+
+    assert inspect_unresolved_orders.main() == 0
+    output = capsys.readouterr().out
+    assert "unresolved_count=0" in output
+    assert "durable_order_history_count=0" in output
+    assert "HISTORY_WARNING=no durable order events present" in output
+    assert "broker_open_count=0" in output
+    assert "current_broker_portfolio=" in output
+    assert calls == ["open", "completed", "portfolio"]

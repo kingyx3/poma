@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from contextlib import suppress
 from math import isclose
 
 from poma.broker import ORDER_REF_PREFIX, _connect_ib
@@ -31,13 +30,23 @@ def fetch_completed_order_snapshots(
     try:
         # Completed-order history is not always available through a new API session. A full
         # set of executions may independently establish a fill even if this query fails.
+        completed_error: Exception | None = None
         try:
             completed = list(ib.reqCompletedOrders(apiOnly=True))
-        except Exception:  # noqa: BLE001 - remain fail-closed unless executions prove a full fill
+        except Exception as exc:  # noqa: BLE001 - execution evidence may still prove a full fill
+            completed_error = exc
             completed = []
         executions: list[object] = []
-        with suppress(Exception):
+        execution_error: Exception | None = None
+        try:
             executions = list(ib.reqExecutions())
+        except Exception as exc:  # noqa: BLE001 - completed status remains useful on its own
+            execution_error = exc
+        if completed_error is not None and execution_error is not None:
+            raise RuntimeError(
+                "IBKR completed orders AND execution history unavailable; do not infer terminal order state "
+                f"(completed: {completed_error}; executions: {execution_error})"
+            ) from completed_error
 
         hydrated_by_perm_id = {
             int(getattr(trade.order, "permId", 0) or 0): trade

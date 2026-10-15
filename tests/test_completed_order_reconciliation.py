@@ -107,9 +107,10 @@ def test_completed_history_failure_keeps_order_fail_closed_without_crashing_reco
     summary = manager.reconcile()
 
     update = summary.updates[0]
-    assert update.entry.lifecycle_state == OrderLifecycleState.UNKNOWN
-    assert update.entry.raw_status == "NotOpenUnverified"
-    assert update.action == "unverified"
+    assert update.entry.lifecycle_state == OrderLifecycleState.BROKER_ACCEPTED
+    assert update.entry.raw_status == "PreSubmitted"
+    assert update.action == "error"
+    assert "completed history unavailable" in (update.detail or "")
     assert update.matched is False
 
 
@@ -166,10 +167,13 @@ class FakeHistoryIB:
     hydrated: list[FakeTrade]
     executions: list[FakeFill] = field(default_factory=list)
     executions_error: Exception | None = None
+    completed_error: Exception | None = None
     disconnected: bool = False
 
     def reqCompletedOrders(self, apiOnly: bool) -> list[FakeTrade]:  # noqa: N802
         assert apiOnly is True
+        if self.completed_error is not None:
+            raise self.completed_error
         return self.completed
 
     def reqExecutions(self) -> list[FakeFill]:  # noqa: N802
@@ -374,3 +378,16 @@ def test_reconcile_promotes_execution_proven_full_fill_to_terminal(monkeypatch, 
     assert summary.updates[0].matched is True
     assert summary.updates[0].entry.lifecycle_state == OrderLifecycleState.FILLED
     assert store.load_open_orders() == []
+
+
+def test_broker_history_double_outage_does_not_look_like_no_completed_orders(monkeypatch) -> None:
+    fake_ib = FakeHistoryIB(
+        completed=[], hydrated=[],
+        completed_error=ConnectionError("completed API unavailable"),
+        executions_error=ConnectionError("executions API unavailable"),
+    )
+    monkeypatch.setattr("poma.ibkr_order_history._connect_ib", lambda *_args, **_kwargs: fake_ib)
+
+    with pytest.raises(RuntimeError, match="completed orders AND execution history unavailable"):
+        fetch_completed_order_snapshots(make_settings(IBKR_ACCOUNT="DU1234567"))
+    assert fake_ib.disconnected
