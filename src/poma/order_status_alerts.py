@@ -44,6 +44,9 @@ def lifecycle_status_alert(entry: OrderLedgerEntry, action: str | None, detail: 
         lines.append("Action: cancelled after exceeding the unfilled-order timeout")
     elif action == "closed":
         lines.append("Action: reconciled from confirmed IBKR terminal order or full-fill execution evidence")
+    elif action == "recovered":
+        lines.append("Action: recovered a working POMA broker order missing from local state")
+        lines.append("Safety: automated replacement/cancellation disabled until broker outcome is verified")
     elif action == "unverified":
         lines.append("Action: unresolved — check IBKR Trades/Executions and run GitHub Order Ops (read-only)")
         lines.append("Safety: POMA will not automatically resubmit this unverified order")
