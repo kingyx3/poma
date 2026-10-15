@@ -1069,6 +1069,20 @@ class IbkrBroker:
         that originally submitted the orders; only ``reqAllOpenOrders`` returns orders placed
         by other client ids on the same account.
         """
+        # A socket can drop after the initial handshake or during reqAllOpenOrders.
+        # Reads are safe to retry with a NEW IBKR session; submissions never are.
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                return self._fetch_open_orders_once()
+            except Exception as exc:  # noqa: BLE001 - fresh connection for a read-only retry
+                last_error = exc
+                if attempt == 0:
+                    time.sleep(IBKR_CONNECT_RETRY_DELAY_SECONDS)
+        assert last_error is not None
+        raise BrokerUnavailable(f"IBKR open-order query failed after reconnect: {last_error}") from last_error
+
+    def _fetch_open_orders_once(self) -> list[OpenOrderSnapshot]:
         ib = self._connect()
         try:
             self._assert_connected(ib)
