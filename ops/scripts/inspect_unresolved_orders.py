@@ -344,15 +344,27 @@ def main() -> int:
     settings = get_settings()
     store = OrderStore(settings.state_dir)
     unresolved = store.load_open_orders()
+    historical = sorted(
+        store.load_latest_entries().values(),
+        key=lambda entry: (entry.last_status_at or entry.submitted_at or "", entry.ledger_key),
+        reverse=True,
+    )
+    # A clean open snapshot can mean "terminal", or it can mean "missing state".
+    # Never exit early: always inspect recent durable history and independent broker evidence.
+    selected = unresolved if unresolved else historical[:5]
 
     print(f"state_dir={settings.state_dir}")
     print(f"trading_mode={settings.trading_mode}")
     print(f"unresolved_count={len(unresolved)}")
+    print(f"durable_order_history_count={len(historical)}")
+    print(f"order_events_file_present={store.events_path.exists()}")
+    if not historical:
+        print("HISTORY_WARNING=no durable order events present; cannot verify previous executions from local state")
     if not unresolved:
-        return 0
+        print(f"RECENT_HISTORY_AUDIT=inspecting {len(selected)} recent terminal/order records")
 
-    wanted_order_refs = {entry.order_ref for entry in unresolved if entry.order_ref}
-    wanted_ledger_keys = {entry.ledger_key for entry in unresolved}
+    wanted_order_refs = {entry.order_ref for entry in selected if entry.order_ref}
+    wanted_ledger_keys = {entry.ledger_key for entry in selected}
     events_by_key = _local_events(store, wanted_ledger_keys)
     broker = build_broker(settings)
     print(f"broker_type={type(broker).__name__}")
@@ -382,9 +394,32 @@ def main() -> int:
     print(f"raw_completed_count={len(raw_completed)}")
     print(f"raw_execution_count={len(raw_executions)}")
 
-    for index, entry in enumerate(unresolved, start=1):
+    if not selected:
+        print("diagnosis=no local order evidence; inspect raw IBKR order/execution counts and account holdings")
+    if broker_open:
+        represented_refs = {entry.order_ref for entry in historical}
+        untracked_refs = sorted({row.order_ref for row in broker_open if row.order_ref not in represented_refs})
+        if untracked_refs:
+            print("CRITICAL_UNTRACKED_BROKER_ORDERS=" + json.dumps(untracked_refs))
+
+    try:
+        account = broker.account_snapshot()
+        print("current_broker_portfolio=")
+        print(json.dumps(
+            {
+                "cash_usd": account.cash_usd,
+                "positions": [
+                    {"ticker": position.ticker, "quantity": position.quantity, "market_value": position.market_value}
+                    for position in account.positions
+                ],
+            }, indent=2, sort_keys=True, default=str,
+        ))
+    except Exception as exc:  # noqa: BLE001 - an unavailable API is not proof of a flat account
+        print(f"CURRENT_BROKER_PORTFOLIO_ERROR={type(exc).__name__}: {exc}")
+
+    for index, entry in enumerate(selected, start=1):
         print()
-        print(f"===== unresolved #{index} =====")
+        print(f"===== {'unresolved' if entry in unresolved else 'historical'} #{index} =====")
         print(json.dumps(_entry_json(entry), indent=2, sort_keys=True, default=str))
 
         print("local_order_events=")
@@ -451,9 +486,8 @@ def main() -> int:
             )
         else:
             print(
-                "diagnosis=current IBKR APIs have aged out the exact orderRef/permId evidence; use the retained local "
-                "journal/position timeline above for operator review and keep UNKNOWN unless that evidence is "
-                "conclusive"
+                "diagnosis=no matching broker order/execution evidence in this API response; use durable local "
+                "journal/position history for investigation, never infer terminal state from absence"
             )
 
     return 0
