@@ -479,9 +479,15 @@ class ExecutionManager:
         rebalances solely because the local ledger is stale.
         """
         open_entries = self._open_ledger_entries()
-        if open_entries:
+        # A missing/empty ledger is not evidence of zero broker orders. IBKR trading
+        # must first rediscover any orphaned POMA orders and re-establish API health.
+        if open_entries or isinstance(self.broker, IbkrBroker):
             try:
-                self.reconcile()
+                summary = self.reconcile()
+                if any(update.action == "error" for update in summary.updates):
+                    raise RuntimeError(
+                        "IBKR order-state recovery incomplete; retry reconciliation before trading"
+                    )
             except Exception as exc:  # noqa: BLE001 - fail closed if the broker cannot confirm state
                 tickers = ", ".join(sorted({entry.ticker for entry in open_entries}))
                 return StaleOrderCheck(
@@ -510,6 +516,8 @@ class ExecutionManager:
             if self.settings.stale_order_policy == StaleOrderPolicy.CANCEL:
                 group_cancelled: list[str] = []
                 for entry in group:
+                    if entry.terminal_reason and entry.terminal_reason.startswith("Recovered from IBKR"):
+                        continue  # Never mutate a rediscovered order without its original ledger.
                     if entry.order_id is not None and self.broker.cancel_order(entry.order_id):
                         self.store.upsert(
                             replace(
@@ -558,12 +566,20 @@ class ExecutionManager:
         does not abort reconciliation of the others.
         """
         open_entries = self._open_ledger_entries()
-        if not open_entries:
+        if not open_entries and not isinstance(self.broker, IbkrBroker):
             return ReconcileSummary(checked=0, updates=())
 
+        # Query first, including when the local ledger appears empty. A restart, lost
+        # volume, or crash between IBKR acceptance and the callback must not silently
+        # turn an active POMA order into "nothing to reconcile".
         open_snapshots = [snapshot for snapshot in self.broker.fetch_open_order_snapshots() if snapshot.order_ref]
+        recovered = self._restore_untracked_broker_orders(open_snapshots) if isinstance(self.broker, IbkrBroker) else []
+        open_entries = self._open_ledger_entries()
+        if not open_entries:
+            return ReconcileSummary(checked=0, updates=())
         unmatched = [entry for entry in open_entries if _match_snapshot(entry, open_snapshots)[0] is None]
         completed_snapshots: list[OpenOrderSnapshot] = []
+        history_error: Exception | None = None
         if unmatched:
             wanted_refs = {ref for entry in unmatched for ref in _entry_refs(entry)}
             fetch_completed = getattr(self.broker, "fetch_completed_order_snapshots", None)
@@ -580,18 +596,91 @@ class ExecutionManager:
                     snapshot for snapshot in completed
                     if snapshot.order_ref and any(snapshot.order_ref.startswith(ref) for ref in wanted_refs)
                 ]
-            except Exception:  # noqa: BLE001 - history recovery can fail while UNKNOWN remains fail-closed
+            except Exception as exc:  # noqa: BLE001 - do not claim missing broker evidence was verified
+                history_error = exc
                 completed_snapshots = []
 
         now = datetime.now(UTC)
         updates: list[ReconcileUpdate] = []
+        recovered_keys = {entry.ledger_key for entry in recovered}
         for entry in open_entries:
             try:
-                updates.append(self._reconcile_entry(entry, open_snapshots, completed_snapshots, now))
+                if history_error is not None and _match_snapshot(entry, open_snapshots)[0] is None:
+                    updates.append(
+                        ReconcileUpdate(entry=entry, action="error", matched=False, detail=(
+                            f"IBKR completed-order history unavailable: {history_error}; retaining prior state"
+                        ))
+                    )
+                    continue
+                update = self._reconcile_entry(entry, open_snapshots, completed_snapshots, now)
+                if entry.ledger_key in recovered_keys and update.action is None:
+                    update = replace(update, action="recovered")
+                updates.append(update)
             except Exception as exc:  # noqa: BLE001 - one order's failure must not hide the others
                 current = self.store.get(entry.ledger_key) or entry
                 updates.append(ReconcileUpdate(entry=current, action="error", matched=False, detail=str(exc)))
         return ReconcileSummary(checked=len(open_entries), updates=tuple(updates))
+
+    def _restore_untracked_broker_orders(
+        self, snapshots: list[OpenOrderSnapshot]
+    ) -> list[OrderLedgerEntry]:
+        """Recover live POMA orders omitted from the durable ledger (without placing orders).
+
+        If an orderRef is ambiguous or conflicts with a terminal local entry, stop
+        execution instead of guessing. Recovery of the exact working broker identity is
+        safe; any further replace/cancel is disabled until terminal proof is obtained.
+        """
+        known = self.store.load_latest_entries()
+        recovered: list[OrderLedgerEntry] = []
+        for snapshot in snapshots:
+            if any(entry.order_ref == snapshot.order_ref for entry in known.values()):
+                matching = next(entry for entry in known.values() if entry.order_ref == snapshot.order_ref)
+                if matching.ticker != snapshot.ticker or matching.side != snapshot.side or matching.is_terminal:
+                    raise RuntimeError(
+                        f"IBKR orderRef conflict for {snapshot.order_ref}: broker identity disagrees with ledger"
+                    )
+                continue
+            root_ref = re.sub(r":r[0-9]+$", "", snapshot.order_ref)
+            if root_ref in known:
+                raise RuntimeError(
+                    f"IBKR replacement {snapshot.order_ref} is absent from durable order history; block trading"
+                )
+            parts = root_ref.split(":")
+            if (
+                len(parts) < 5
+                or parts[0] != "poma"
+                or not parts[-3].isdigit()
+                or parts[-2] != snapshot.ticker
+                or parts[-1] != snapshot.side.value
+                or not ":".join(parts[1:-3])
+            ):
+                raise RuntimeError(f"unparseable broker POMA orderRef {snapshot.order_ref!r}; block trading")
+            quantity = snapshot.filled + snapshot.remaining
+            if quantity <= 0 or snapshot.order_id is None:
+                raise RuntimeError(f"incomplete broker identity for {snapshot.order_ref}; block trading")
+            now_iso = datetime.now(UTC).isoformat()
+            entry = OrderLedgerEntry(
+                ledger_key=snapshot.order_ref,
+                order_ref=snapshot.order_ref,
+                run_id=":".join(parts[1:-3]),
+                session_date="1970-01-01",  # Always considered stale until independently reviewed.
+                ticker=snapshot.ticker,
+                side=snapshot.side,
+                quantity=quantity,
+                limit_price=None,
+                order_id=snapshot.order_id,
+                perm_id=snapshot.perm_id,
+                submitted_at=now_iso,
+                lifecycle_state=OrderLifecycleState.UNKNOWN,
+                terminal_reason="Recovered from IBKR: original local order history missing; no automated replace/cancel",
+            ).with_snapshot(snapshot)
+            if entry.is_terminal:
+                raise RuntimeError(f"unexpected terminal order returned as open: {snapshot.order_ref}")
+            # Persist immediately so future runs still recognize the broker-assigned permId.
+            self.store.upsert(entry)
+            known[entry.ledger_key] = entry
+            recovered.append(entry)
+        return recovered
 
     def _reconcile_entry(
         self,
@@ -618,7 +707,11 @@ class ExecutionManager:
                 # The original is working again (cancel rejected); drop the unplaced replacement.
                 updated = replace(updated, replacement_order_ref=None)
             action_name: str | None = None
-            action_taken = self._apply_timeout_policy(updated, now)
+            action_taken = (
+                None
+                if updated.terminal_reason and updated.terminal_reason.startswith("Recovered from IBKR")
+                else self._apply_timeout_policy(updated, now)
+            )
             if action_taken is not None:
                 updated, action_name = action_taken
             self.store.upsert(updated)
