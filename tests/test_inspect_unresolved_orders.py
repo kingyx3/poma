@@ -124,6 +124,7 @@ def test_order_ops_does_not_treat_empty_ledger_as_successful_order_verification(
     tmp_path, monkeypatch, capsys,
 ) -> None:
     from conftest import make_settings
+
     from ops.scripts import inspect_unresolved_orders
     from poma.models import AccountSnapshot
 
