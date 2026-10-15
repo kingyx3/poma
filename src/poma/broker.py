@@ -1111,6 +1111,9 @@ class IbkrBroker:
                         avg_fill_price=_none_if_zero(status.avgFillPrice),
                     )
                 )
+            # If Gateway drops between requesting and collecting callbacks, an empty
+            # cache must not be accepted as verified evidence of no open orders.
+            self._assert_connected(ib)
             return snapshots
         finally:
             ib.disconnect()
