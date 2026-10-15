@@ -53,6 +53,14 @@ class OrderStore:
         self._cache_signature = signature
         return entries
 
+    def load_latest_entries(self) -> dict[str, OrderLedgerEntry]:
+        """Return durable latest states, including terminal orders, for broker identity audits.
+
+        Unlike load_open_orders, this must not interpret an empty open snapshot as proof
+        that no orders ever existed. The append-only event log survives terminal transitions.
+        """
+        return self._latest_entries()
+
     def get(self, ledger_key: str) -> OrderLedgerEntry | None:
         for entry in self.load_open_orders():
             if entry.ledger_key == ledger_key:
