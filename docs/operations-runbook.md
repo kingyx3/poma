@@ -212,3 +212,33 @@ separate `poma-command.lock` so it can skip unnecessary container starts. Custom
 maintenance that changes the ledger or session state must also use
 `poma.runtime_lock.runtime_lock(settings.state_dir)`; direct persistence APIs do not acquire
 it automatically.
+
+
+### Automatic order-state recovery and connection loss
+
+POMA's `reconcile-orders` cron job reopens a fresh IBKR API session every two to three
+minutes (the +2/+4 schedule), polls all currently open POMA-tagged orders, and uses
+completed-order and execution history to confirm terminal states. A transient read
+failure is retried on a fresh connection. A failed reconnection or unavailable history
+**does not** prove cancellation or fill: POMA preserves the durable ledger state,
+blocks subsequent trading when broker verification is unavailable, and retries.
+
+Even if the local open-order file is empty, an IBKR paper/live run checks the broker
+before trading. If a still-working POMA order with an intact orderRef is missing from
+the ledger, POMA restores the broker orderId, permId, quantity and status into its
+durable journal, alerts Telegram, and blocks another rebalance. A recovered order is
+**never auto-replaced or auto-cancelled**; its original execution context may have
+been lost. Conflicting broker/ledger identities also block new trading.
+
+**Limit:** IBKR can become temporarily unreachable (Gateway login/2FA, API or network
+failure), and its historical order/execution APIs have limited retention. No API can
+guarantee knowledge of an order's final outcome while disconnected or after all
+independent evidence has expired. POMA reports **unverified**, never guesses
+`Filled` or `Cancelled`, and does not resubmit an uncertain order. Manual IBKR
+statement/Activity reconciliation may still be needed after severe data loss.
+
+The **Order Ops** workflow is read-only and audits recent terminal order journal
+records and current broker account positions even if `unresolved_count=0`.
+If its output says `HISTORY_WARNING=no durable order events present`, that is
+**not** proof that no trades occurred. Investigate the state volume, IBKR activity
+and deployment history before placing new orders.
