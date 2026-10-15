@@ -167,10 +167,13 @@ class FakeHistoryIB:
     hydrated: list[FakeTrade]
     executions: list[FakeFill] = field(default_factory=list)
     executions_error: Exception | None = None
+    completed_error: Exception | None = None
     disconnected: bool = False
 
     def reqCompletedOrders(self, apiOnly: bool) -> list[FakeTrade]:  # noqa: N802
         assert apiOnly is True
+        if self.completed_error is not None:
+            raise self.completed_error
         return self.completed
 
     def reqExecutions(self) -> list[FakeFill]:  # noqa: N802
@@ -375,3 +378,16 @@ def test_reconcile_promotes_execution_proven_full_fill_to_terminal(monkeypatch, 
     assert summary.updates[0].matched is True
     assert summary.updates[0].entry.lifecycle_state == OrderLifecycleState.FILLED
     assert store.load_open_orders() == []
+
+
+def test_broker_history_double_outage_does_not_look_like_no_completed_orders(monkeypatch) -> None:
+    fake_ib = FakeHistoryIB(
+        completed=[], hydrated=[],
+        completed_error=ConnectionError("completed API unavailable"),
+        executions_error=ConnectionError("executions API unavailable"),
+    )
+    monkeypatch.setattr("poma.ibkr_order_history._connect_ib", lambda *_args, **_kwargs: fake_ib)
+
+    with pytest.raises(RuntimeError, match="completed orders AND execution history unavailable"):
+        fetch_completed_order_snapshots(make_settings(IBKR_ACCOUNT="DU1234567"))
+    assert fake_ib.disconnected
