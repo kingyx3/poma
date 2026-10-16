@@ -759,6 +759,10 @@ class ExecutionManager:
         re-checks that orderRef before placing. Skipped (the entry simply closes as cancelled)
         once the order is past ``CANCEL_AFTER_SECONDS`` or nothing remains to buy/sell.
         """
+        # Deferred replacements created before this safety change must not resubmit after
+        # partial fills, which could trigger another per-order commission minimum.
+        if cancelled.filled_qty > 1e-9:
+            return None
         submit = getattr(self.broker, "submit_replacement", None)
         elapsed = seconds_since(cancelled.submitted_at, now)
         remaining = cancelled.remaining_qty or max(cancelled.quantity - cancelled.filled_qty, 0.0)
@@ -827,7 +831,13 @@ class ExecutionManager:
                 ),
                 "cancel",
             )
-        if elapsed >= self.settings.replace_after_seconds and entry.replace_count < 1 and entry.order_id is not None:
+        if (
+            self.settings.auto_replace_unfilled_orders
+            and entry.filled_qty <= 1e-9
+            and elapsed >= self.settings.replace_after_seconds
+            and entry.replace_count < 1
+            and entry.order_id is not None
+        ):
             new_limit, quote_metadata = self._fresh_replace_limit_price(entry)
             if new_limit is None:
                 return None
