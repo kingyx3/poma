@@ -596,9 +596,22 @@ def main() -> int:
             readiness = api_ready(mode, required=True)
             if readiness != 0:
                 return readiness
-            return timed(
+            if timed(
                 "Verify authenticated recovery watchdog",
                 lambda: verify_recovery_watchdog(remote),
+            ) != 0:
+                return 1
+            # App deploy deliberately leaves paper cron unarmed: opening a TCP socket is
+            # not sufficient evidence that the Gateway has authenticated to the account.
+            # Arm scheduling only after the completed API/permission checks above.
+            return timed(
+                "Enable authenticated paper schedule",
+                lambda: remote(
+                    "if sudo grep -qx TRADING_MODE=paper /opt/poma/.env; then "
+                    "sudo -u poma crontab /opt/poma/ops/cron/poma.cron && sudo systemctl restart cron; "
+                    "else echo 'App is not configured for paper trading; leaving its schedule unchanged.'; fi",
+                    timeout=120,
+                ),
             )
 
         wait_command = (
