@@ -760,8 +760,8 @@ jobs:
               ops/cron/poma-housekeeping.cron | sudo tee /etc/cron.d/poma-housekeeping >/dev/null
             remote_timed "Secure VM housekeeping schedule" sudo chmod 0644 \
               /etc/cron.d/poma-housekeeping
-            if [ "${{ inputs.trading_mode }}" = "live" ]; then
-              echo "Live schedule remains paused until configure-live passes authenticated API checks."
+            if [ "${{ inputs.trading_mode }}" = "live" ] || [ "${{ inputs.trading_mode }}" = "paper" ]; then
+              echo "Broker-backed schedule remains paused until configure-paper/configure-live passes authenticated API checks."
             else
               remote_timed "Install cron schedule" sudo -u poma crontab ops/cron/poma.cron
             fi
