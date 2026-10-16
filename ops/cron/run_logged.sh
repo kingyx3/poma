@@ -54,4 +54,7 @@ set -e
 
 printf '[%s] ===== command end: status=%s =====\n' "$(utc_timestamp)" "${status}" >>"${log_path}"
 report_command_result "${status}" "${run_start_offset}" "${command_name}"
+# Recover earlier failed application and host alerts. This is best-effort and
+# separately bounded, so Telegram outages cannot change the trading result.
+python3 ops/cron/drain_notifications.py || true
 exit "${status}"
