@@ -20,6 +20,7 @@ def assess_rebalance(
     planned_value_usd: float,
     snapshot: AccountSnapshot | None,
     order_entries: Iterable[OrderLedgerEntry],
+    original_broker_value_usd: float | None = None,
     min_trade_notional_usd: float,
     min_weight_delta_pct: float,
 ) -> dict[str, object]:
@@ -59,7 +60,8 @@ def assess_rebalance(
     if not math.isfinite(actual_total) or actual_total <= 0:
         report["warning"] = "invalid broker portfolio value; cannot certify rebalance"
         return report
-    reference_total = min(planned_value_usd, actual_total)
+    capped = original_broker_value_usd is not None and original_broker_value_usd > planned_value_usd * 1.001
+    reference_total = min(planned_value_usd, actual_total) if capped else actual_total
     target_values = {target.ticker: target.target_weight * reference_total for target in targets}
     actual_values: dict[str, float] = {}
     for position in snapshot.positions:
@@ -88,7 +90,7 @@ def assess_rebalance(
         report["status"] = "incomplete"
     else:
         report["status"] = "target_reached"
-    if actual_total > planned_value_usd * 1.001:
+    if capped:
         report["warning"] = (
             "broker equity exceeds the planned managed cap; outside-cap assets and cash "
             "may affect this exposure comparison"
@@ -115,6 +117,7 @@ def assess_saved_run(
         planned_value_usd=float(plan["portfolio_value_usd"]),
         snapshot=snapshot,
         order_entries=[entry for entry in entries if entry.run_id == run_id],
+        original_broker_value_usd=float(plan.get('broker_account_snapshot', {}).get('total_value_usd', plan['portfolio_value_usd'])),
         min_trade_notional_usd=min_trade_notional_usd,
         min_weight_delta_pct=min_weight_delta_pct,
     )
