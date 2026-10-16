@@ -36,6 +36,7 @@ from poma.order_lifecycle import (
 )
 from poma.order_status_alerts import lifecycle_status_alert, order_status_alert
 from poma.order_store import OrderStore
+from poma.rebalance_quality import assess_rebalance, assess_saved_run
 from poma.runtime_lock import RuntimeBusy, runtime_lock
 from poma.state import RETRY_WAIT_STATUS, TERMINAL_STATUSES, LocalState
 
@@ -84,7 +85,7 @@ def _portfolio_status_label(status: str, executed: bool) -> str:
     if executed and status == "completed_with_order_issues":
         return "Completed with order issues"
     if executed:
-        return "Orders accepted/submitted"
+        return "Orders accepted/submitted (target completion unverified)"
     if status == "dry_run":
         return "Dry run — no orders submitted"
     if status == "blocked":
@@ -383,6 +384,31 @@ def _run_rebalance(
     except Exception as exc:  # noqa: BLE001 - reconciliation read is diagnostic, not blocking
         post_trade_snapshot_error = str(exc)
     journal.record_reconciliation(plan, post_trade_snapshot, post_trade_snapshot_error)
+    quality = assess_rebalance(
+        targets=plan.targets,
+        planned_value_usd=plan.portfolio_value_usd,
+        original_broker_value_usd=plan.broker_total_value_usd,
+        snapshot=post_trade_snapshot,
+        order_entries=[
+            entry for entry in OrderStore(settings.state_dir).load_latest_entries().values()
+            if entry.run_id == run_id
+        ],
+        min_trade_notional_usd=settings.min_trade_notional_usd,
+        min_weight_delta_pct=settings.min_weight_delta_pct,
+    )
+    journal.record_quality(run_id, quality)
+    console.print(
+        f"Rebalance quality: {quality['status']}; "
+        f"drift {quality['target_error_pct']:.2%}; "
+        f"fill ratio {quality['fill_ratio']:.1%}"
+    )
+    if quality["status"] == "incomplete":
+        send_alert(
+            settings,
+            f"⚠️ Rebalance incomplete for {session_date}: "
+            f"remaining portfolio drift {quality['target_error_pct']:.2%}. "
+            "Review reconciled quality report.",
+        )
 
     send_alert(settings, _portfolio_summary(session_date, plan, status, executed=True))
     console.print(f"Submitted {len(plan.trades)} trades. Report written to {report_path}")
