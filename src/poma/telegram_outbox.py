@@ -96,28 +96,39 @@ def drain(
                     attempts = int(record["attempts"])
                     due = float(record["next_attempt_at"])
                     message = str(record["text"])
-                    if now - created >= TTL_SECONDS or attempts >= MAX_ATTEMPTS:
-                        path.unlink(missing_ok=True)
-                        continue
-                    if due > now or attempted >= batch_size:
-                        continue
-                    attempted += 1
-                    if deliver(message):
-                        path.unlink(missing_ok=True)
-                        delivered += 1
-                        continue
-                    attempts += 1
-                    if attempts >= MAX_ATTEMPTS:
-                        path.unlink(missing_ok=True)
-                        continue
-                    delay = min(3600, INITIAL_RETRY_SECONDS * (2 ** attempts))
-                    record["attempts"] = attempts
-                    record["next_attempt_at"] = now + delay * random.uniform(0.8, 1.2)
-                    _write(path, record)
                 except (OSError, ValueError, KeyError, TypeError):
-                    # Do not send corrupt or unknown-content messages.
+                    # Corrupt or unrecognized records cannot safely be delivered.
                     with suppress(OSError):
                         path.unlink(missing_ok=True)
+                    continue
+                if now - created >= TTL_SECONDS or attempts >= MAX_ATTEMPTS:
+                    with suppress(OSError):
+                        path.unlink(missing_ok=True)
+                    continue
+                if due > now or attempted >= batch_size:
+                    continue
+                attempted += 1
+                try:
+                    success = deliver(message)
+                except Exception:  # noqa: BLE001 - a failed delivery must retain the message
+                    success = False
+                if success:
+                    with suppress(OSError):
+                        path.unlink(missing_ok=True)
+                    delivered += 1
+                    continue
+                attempts += 1
+                if attempts >= MAX_ATTEMPTS:
+                    with suppress(OSError):
+                        path.unlink(missing_ok=True)
+                    continue
+                delay = min(3600, INITIAL_RETRY_SECONDS * (2 ** attempts))
+                record["attempts"] = attempts
+                record["next_attempt_at"] = now + delay * random.uniform(0.8, 1.2)
+                with suppress(OSError):
+                    # If persistence fails, leave the previous due record for
+                    # another later attempt; never delete a valid unsent message.
+                    _write(path, record)
             return delivered, attempted
     except (OSError, ValueError, TypeError, BlockingIOError):
         return 0, 0
