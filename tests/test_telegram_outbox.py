@@ -52,9 +52,8 @@ def test_failed_in_app_alert_is_durable_but_does_not_break_order(tmp_path, monke
 
 
 def test_outbox_delivery_failure_does_not_expose_credentials(tmp_path, monkeypatch):
-    from pathlib import Path
-
     import importlib.util
+    from pathlib import Path
 
     reporter_path = Path(__file__).resolve().parents[1] / "ops/cron/alert_diagnostics.py"
     spec = importlib.util.spec_from_file_location("retry_cron_alert", reporter_path)
