@@ -292,7 +292,7 @@ def test_check_stale_orders_cancel_policy_cancels_same_session_different_run_ord
 def test_reconcile_replaces_once_after_replace_after_seconds(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
-    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
     manager = ExecutionManager(broker, store, settings)
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.0)]))
 
@@ -479,7 +479,7 @@ def test_submit_plan_skips_repricing_when_execution_price_source_is_snapshot(tmp
 def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
-    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
     manager = ExecutionManager(broker, store, settings)
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.10)]))
 
@@ -504,7 +504,7 @@ def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_pat
 def test_reconcile_replace_is_skipped_when_no_fresh_quote_is_available(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
-    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
     manager = ExecutionManager(broker, store, settings)
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.0)]))
 
@@ -686,3 +686,36 @@ def test_idempotent_replay_message_carries_the_earlier_rejection_reason(tmp_path
     assert replay.message is not None
     assert "already rejected" in replay.message
     assert "ContractUnresolved: Error 200: No security definition" in replay.message
+
+
+def test_reconcile_leaves_unfilled_working_order_in_place_by_default(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600))
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=150)).isoformat())
+    store.upsert(aged)
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    summary = manager.reconcile()
+    assert summary.updates[0].action is None
+    assert store.load_open_orders()[0].replace_count == 0
+    assert broker.cancelled_order_ids == []
+
+
+def test_reconcile_never_replaces_partial_fill_even_with_opt_in(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True,
+                             REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    manager = ExecutionManager(broker, store, settings)
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, filled_qty=2.0, remaining_qty=3.0,
+                       submitted_at=(datetime.now(UTC) - timedelta(seconds=150)).isoformat())
+    store.upsert(aged)
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    summary = manager.reconcile()
+    assert summary.updates[0].action is None
+    assert broker.cancelled_order_ids == []
+    assert store.load_open_orders()[0].filled_qty == 2.0

@@ -396,7 +396,7 @@ def _aged_entry(store: OrderStore, manager: ExecutionManager, ticker: str = "ITU
 def test_lagging_replace_cancel_is_deferred_not_raised_then_completed(tmp_path) -> None:
     broker = ReplaceBroker()
     store = OrderStore(tmp_path)
-    manager = ExecutionManager(broker, store, make_settings())
+    manager = ExecutionManager(broker, store, make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True))
     entry = _aged_entry(store, manager)
     broker.open_order_snapshots = [_snapshot_for_entry(entry)]
     broker.replace_error = CancelNotConfirmed("cancel not confirmed (status=PendingCancel)")
@@ -432,7 +432,7 @@ def test_lagging_replace_cancel_is_deferred_not_raised_then_completed(tmp_path) 
 def test_lagging_cancel_that_fills_closes_as_filled_without_replacement(tmp_path) -> None:
     broker = ReplaceBroker()
     store = OrderStore(tmp_path)
-    manager = ExecutionManager(broker, store, make_settings())
+    manager = ExecutionManager(broker, store, make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True))
     entry = _aged_entry(store, manager)
     broker.open_order_snapshots = [_snapshot_for_entry(entry)]
     broker.replace_error = CancelNotConfirmed("pending")
@@ -492,7 +492,7 @@ def test_legacy_unverified_order_from_failed_replace_resolves_from_history(tmp_p
 def test_one_failing_replace_does_not_abort_reconcile_or_block_planning(tmp_path) -> None:
     broker = ReplaceBroker()
     store = OrderStore(tmp_path)
-    manager = ExecutionManager(broker, store, make_settings())
+    manager = ExecutionManager(broker, store, make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True))
     manager.submit_plan(_plan([_trade("ITUB", OrderSide.SELL), _trade("NEM", OrderSide.BUY)]))
     aged = (datetime.now(UTC) - timedelta(seconds=150)).isoformat()
     entries = []

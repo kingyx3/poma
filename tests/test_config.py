@@ -31,6 +31,8 @@ def test_default_strategy_is_direct_usmc_with_legacy_strategies_kept() -> None:
     assert DEFAULT_STRATEGY_NAME == "USMC"  # Legacy core_etf remains selectable.
     assert settings.core_etf_trend_filter is False
     assert settings.max_order_notional_usd == 25_000
+    assert settings.auto_replace_unfilled_orders is False
+    assert settings.order_time_in_force == "DAY"
     # The previous strategy stays selectable with its original knobs.
     assert CURRENT_STRATEGY_NAME == "rank_velocity_size_equal_weight"
     assert settings.universe == "us_top_market_cap"
@@ -224,3 +226,15 @@ def test_live_trading_blocks_snapshot_execution_price_source_by_default() -> Non
         ALLOW_UNSAFE_EXECUTION_PRICE_SOURCE=True,
     )
     assert settings.execution_price_source.value == "snapshot"
+
+
+def test_paper_live_orders_must_expire_daily() -> None:
+    for mode in ("paper", "live"):
+        with pytest.raises(ValidationError, match="ORDER_TIME_IN_FORCE must be DAY"):
+            Settings(
+                TELEGRAM_BOT_TOKEN="token", TELEGRAM_CHAT_ID="chat",
+                TRADING_MODE=mode, ORDER_TIME_IN_FORCE="GTC",
+            )
+    paper = Settings(TELEGRAM_BOT_TOKEN="token", TELEGRAM_CHAT_ID="chat",
+                     TRADING_MODE="paper", ORDER_TIME_IN_FORCE="day")
+    assert paper.order_time_in_force == "DAY"
