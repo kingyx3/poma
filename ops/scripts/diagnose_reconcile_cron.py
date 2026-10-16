@@ -2,6 +2,7 @@
 """Read-only sanitized diagnostics for failed POMA reconciliation cron commands."""
 import json
 import re
+import socket
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -48,7 +49,6 @@ if ledger.exists():
             counts["corrupt"] += 1
 print("open_order_lifecycle_counts=", dict(counts))
 # Distinguish a running systemd supervisor from a listening/authenticated API.
-import socket
 try:
     with socket.create_connection(("127.0.0.1", 7497), timeout=1):
         print("ibkr_api_socket_7497=LISTENING (TCP only; login not verified)")
