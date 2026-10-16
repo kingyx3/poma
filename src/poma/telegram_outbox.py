@@ -11,9 +11,9 @@ import os
 import random
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Callable
 
 MAX_MESSAGES = 64
 MAX_MESSAGE_LENGTH = 3900
