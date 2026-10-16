@@ -60,6 +60,7 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `REPLACE_AFTER_SECONDS` | yes | `120` | `poma reconcile-orders`, only if `AUTO_REPLACE_UNFILLED_ORDERS=true`, replaces a still-working and completely unfilled limit order once with a more aggressive price after this many seconds. The replacement is placed only after IBKR confirms the original cancelled (polled for up to 15s). If the cancel is still `PendingCancel`, the replace is deferred, never doubled: the next reconcile places the replacement once the original shows as cancelled, or closes the entry if it filled instead. |
 | `CANCEL_AFTER_SECONDS` | yes | `300` | `poma reconcile-orders` cancels zero-fill working orders after this many seconds. **Partial fills remain unchanged until DAY expiry**, to avoid new minimum commissions and pursue residual exposure. Must exceed `REPLACE_AFTER_SECONDS`. |
 | `REPLACE_PRICE_IMPROVEMENT_BPS` | yes | `15` | Used by snapshot-price fallback; IBKR live-quote escalation is capped at the ask/bid and never exceeds the normal spread limit. |
+| `MAX_REPRICE_ADVERSE_BPS` | no | `50` | Upper bound on adverse reference-to-fresh-quote move for a single zero-fill repricing. Both this cap and `MAX_ORDER_NOTIONAL_USD` must pass before cancel/resubmit. |
 | `STALE_ORDER_POLICY` | yes | `block` | What a new rebalance does when unresolved open orders remain from a *prior* session, or from a *different run* within the same session: `block` (default) blocks execution until they are reconciled/cancelled; `cancel` cancels them automatically before planning. Open orders from the exact *same run* are never blocking — a retry of that run relies on idempotent replay instead (see `docs/architecture.md`). |
 | `IBKR_HOST` | paper/live | `127.0.0.1` | IB Gateway host on the deployed host. |
 | `IBKR_PORT` | paper/live | `7497` | Paper commonly uses 7497; verify your setup. |
@@ -187,4 +188,3 @@ Bootstrap apply writes generated, non-secret GCP deployment identifiers to `ops/
 - Paper Gateway login secrets are separate from the paper account id: `IBKR_LOGIN_ID_PAPER` / `IBKR_LOGIN_SECRET_PAPER` authenticate Gateway, while `IBKR_ACCOUNT_PAPER` selects the account the app may trade.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are required so every deployed run has alerting configured.
 
-| `MAX_REPRICE_ADVERSE_BPS` | no | `50` | Upper bound on adverse reference-to-fresh-quote move for a single zero-fill repricing. Both this cap and `MAX_ORDER_NOTIONAL_USD` must pass before cancel/resubmit. |
