@@ -488,16 +488,16 @@ def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_pat
     store.upsert(dc_replace(entry, submitted_at=stale_time))
 
     broker.open_order_snapshots = [_snapshot_for_entry(entry)]
-    # Ask has since dropped well below the original stale limit price; a fresh-quote replace
-    # should follow the market down instead of blindly improving off the stale $100.10 limit.
-    broker.quotes_override = {"AAPL": _quote("AAPL", bid=79.80, ask=79.90)}
+    # Quote moves away from the initial passive limit: one escalation crosses only
+    # the fresh ask rather than blindly adding an offset onto the earlier order.
+    broker.quotes_override = {"AAPL": _quote("AAPL", bid=120.00, ask=120.10)}
 
     summary = manager.reconcile()
 
     assert summary.updates[0].action == "replace"
     updated = store.load_open_orders()[0]
-    assert updated.limit_price < 90.0
-    assert updated.reference_price == 79.90
+    assert updated.limit_price == 120.10
+    assert updated.reference_price == 120.10
     assert updated.reference_price_source == "ibkr"
 
 
@@ -743,7 +743,8 @@ def test_escalation_does_not_replace_already_marketable_order(tmp_path: Path) ->
     manager = ExecutionManager(broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600))
     manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY, limit_price=101.0)]))
     entry = store.load_open_orders()[0]
-    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
+    aged = dc_replace(entry, limit_price=101.0,
+                       submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
     store.upsert(aged)
     broker.open_order_snapshots = [_snapshot_for_entry(aged)]
     assert manager.reconcile().updates[0].action is None
