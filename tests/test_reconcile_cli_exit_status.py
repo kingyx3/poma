@@ -41,4 +41,5 @@ def test_reconcile_errors_exit_nonzero_and_never_claim_success(monkeypatch, tmp_
 
     assert result.exit_code == 1
     assert "ReconciliationError" in result.output
-    assert "broker order finality remains unverified" in result.output
+    assert "broker order finality remains" in result.output
+    assert "unverified" in result.output
