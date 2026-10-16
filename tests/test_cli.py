@@ -292,3 +292,49 @@ def test_positions_renders_portfolio(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "AAPL" in result.stdout
     assert "TOTAL" in result.stdout
+
+
+def test_reconcile_orders_certifies_target_only_after_confirmed_fill(monkeypatch, tmp_path) -> None:
+    from poma.journal import ExecutionJournal
+    from poma.models import TargetPosition
+    from poma.order_lifecycle import OrderLifecycleState
+
+    settings = make_settings(TRADING_MODE="paper", STATE_DIR=str(tmp_path / "state"))
+    run_id = "quality-run"
+    key = f"poma:{run_id}:0:USMC:BUY"
+    plan = RebalancePlan(
+        run_id=run_id, session_date="2026-10-16",
+        targets=[TargetPosition("USMC", 0.9, 9_000.0)],
+        trades=[], execution_results=[], warnings=[],
+        portfolio_value_usd=10_000.0, portfolio_cash_usd=10_000.0,
+    )
+    ExecutionJournal(settings.state_dir).record_planned(plan)
+    OrderStore(settings.state_dir).upsert(
+        OrderLedgerEntry(
+            ledger_key=key, order_ref=key, run_id=run_id, session_date=plan.session_date,
+            ticker="USMC", side=OrderSide.BUY, order_id=42, quantity=90.0,
+            limit_price=100.0, remaining_qty=90.0,
+            lifecycle_state=OrderLifecycleState.BROKER_ACCEPTED,
+        )
+    )
+    broker = _ReconcileBroker([
+        OpenOrderSnapshot(
+            order_ref=key, order_id=42, perm_id=None, ticker="USMC",
+            side=OrderSide.BUY, raw_status="Filled", filled=90.0, remaining=0.0,
+            avg_fill_price=100.0,
+        )
+    ])
+    broker._positions = (CurrentPosition("USMC", 90.0, 9_000.0),)
+    broker.cash_usd = 1_000.0
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("poma.cli.build_broker", lambda _settings: broker)
+    alerts: list[str] = []
+    monkeypatch.setattr("poma.cli.send_alert", lambda _settings, message: alerts.append(message))
+
+    result = runner.invoke(app, ["reconcile-orders"])
+
+    assert result.exit_code == 0, result.output
+    quality = json.loads((settings.state_dir / "reconciliations" / f"{run_id}-quality.json").read_text())
+    assert quality["status"] == "target_reached"
+    assert quality["target_error_usd"] == 0.0
+    assert any("target_reached" in alert for alert in alerts)
