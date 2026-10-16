@@ -267,7 +267,7 @@ jobs:
           set_default ORDER_STATUS_TIMEOUT_SECONDS "60"
           set_default CANCEL_STALE_ORDERS "true"
           set_default ORDER_TIME_IN_FORCE "DAY"
-          set_default AUTO_REPLACE_UNFILLED_ORDERS "false"
+          set_default AUTO_REPLACE_UNFILLED_ORDERS "true"
           set_default REPLACE_AFTER_SECONDS "120"
           set_default CANCEL_AFTER_SECONDS "300"
           set_default REPLACE_PRICE_IMPROVEMENT_BPS "15"

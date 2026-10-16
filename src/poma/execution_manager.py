@@ -820,7 +820,8 @@ class ExecutionManager:
         elapsed = seconds_since(entry.submitted_at, now)
         if elapsed is None:
             return None
-        if elapsed >= self.settings.cancel_after_seconds:
+        # A partially filled DAY order should finish working without a fresh minimum.
+        if elapsed >= self.settings.cancel_after_seconds and entry.filled_qty <= 1e-9:
             if entry.order_id is None or not self.broker.cancel_order(entry.order_id):
                 return None
             return (
@@ -908,6 +909,20 @@ class ExecutionManager:
         if price is None or new_limit is None:
             return None, {}
         spread_bps = quote.spread_bps if quote.spread_bps is not None else compute_spread_bps(quote.bid, quote.ask)
+        # Permit at most one escalation, only against a tight, two-sided fresh quote.
+        # Never take an executable price worse than the current quoted ask/bid.
+        if (
+            quote.bid is None or quote.ask is None
+            or spread_bps is None or spread_bps > settings.execution_max_spread_bps
+        ):
+            return None, {}
+        new_limit = quote.ask if entry.side == OrderSide.BUY else quote.bid
+        # The original is already executable: don't incur a new order for no gain.
+        if entry.limit_price is not None and (
+            (entry.side == OrderSide.BUY and entry.limit_price >= new_limit)
+            or (entry.side == OrderSide.SELL and entry.limit_price <= new_limit)
+        ):
+            return None, {}
         metadata: dict[str, object] = {
             "reference_price": price,
             "reference_price_source": settings.execution_price_source.value,

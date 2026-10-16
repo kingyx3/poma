@@ -142,8 +142,8 @@ class Settings(BaseSettings):
         alias="MAX_CONSECUTIVE_ORDER_ACCEPTANCE_FAILURES",
     )
     order_time_in_force: str = Field(default="DAY", alias="ORDER_TIME_IN_FORCE")
-    # Avoid a fresh commission minimum caused by automatic cancel-and-resubmit.
-    auto_replace_unfilled_orders: bool = Field(default=False, alias="AUTO_REPLACE_UNFILLED_ORDERS")
+    # Controlled one-time zero-fill escalation; never cancel/reprice partial fills.
+    auto_replace_unfilled_orders: bool = Field(default=True, alias="AUTO_REPLACE_UNFILLED_ORDERS")
     replace_after_seconds: PositiveInt = Field(default=120, alias="REPLACE_AFTER_SECONDS")
     cancel_after_seconds: PositiveInt = Field(default=300, alias="CANCEL_AFTER_SECONDS")
     replace_price_improvement_bps: float = Field(default=15.0, alias="REPLACE_PRICE_IMPROVEMENT_BPS")

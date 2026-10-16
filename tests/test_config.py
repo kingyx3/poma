@@ -31,7 +31,7 @@ def test_default_strategy_is_direct_usmc_with_legacy_strategies_kept() -> None:
     assert DEFAULT_STRATEGY_NAME == "USMC"  # Legacy core_etf remains selectable.
     assert settings.core_etf_trend_filter is False
     assert settings.max_order_notional_usd == 25_000
-    assert settings.auto_replace_unfilled_orders is False
+    assert settings.auto_replace_unfilled_orders is True
     assert settings.order_time_in_force == "DAY"
     # The previous strategy stays selectable with its original knobs.
     assert CURRENT_STRATEGY_NAME == "rank_velocity_size_equal_weight"
