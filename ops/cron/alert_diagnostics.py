@@ -18,6 +18,10 @@ import urllib.request
 from contextlib import suppress
 from pathlib import Path
 
+# Host runs system Python; project source is bundled in the VM deploy archive.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from poma.telegram_outbox import enqueue  # noqa: E402
+
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 ACCOUNT = re.compile(r"\b(?:DU|U)\d{5,12}\b", re.IGNORECASE)
 SENSITIVE = re.compile(
@@ -114,11 +118,13 @@ def settings_from_env() -> dict[str, str]:
         pass
     return settings
 
-def send_message(message: str) -> bool:
+def send_message(message: str, *, queue_failure: bool = True) -> bool:
     settings = settings_from_env()
     token = os.getenv("TELEGRAM_BOT_TOKEN") or settings.get("TELEGRAM_BOT_TOKEN")
     chat = os.getenv("TELEGRAM_CHAT_ID") or settings.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
+        if queue_failure:
+            enqueue(Path(os.getenv("POMA_CRON_ALERT_STATE_DIR", "state")), message)
         return False
     payload = json.dumps({"chat_id": chat, "text": message[:3900]}).encode()
     request = urllib.request.Request(
@@ -128,10 +134,12 @@ def send_message(message: str) -> bool:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=5) as response:
             response.read()
         return True
     except (OSError, urllib.error.URLError):
+        if queue_failure:
+            enqueue(Path(os.getenv("POMA_CRON_ALERT_STATE_DIR", "state")), message)
         return False
 
 def local_order_exposure() -> str:
