@@ -26,8 +26,16 @@ if log.exists():
         end = failures[-1]
         start = next((i for i in range(end, -1, -1) if "===== command start:" in lines[i]), end - 140)
         print("=== Last failed command output (redacted) ===")
+        # Emit error signatures only; Rich traceback locals contain sensitive
+        # configuration and must never be copied to GitHub Actions logs.
         for line in lines[max(0, start, end - 140):end + 1]:
-            print(safe(line))
+            if re.search(
+                r"(?i)BrokerUnavailable|ConnectionRefused|TimeoutError|OSError|"
+                r"RuntimeError|ValueError|PermissionError|Traceback|"
+                r"connect to IBKR|Connect call failed|command end: status=",
+                line,
+            ):
+                print(safe(line))
     else:
         print("=== Recent output ===")
         for line in lines[-35:]:

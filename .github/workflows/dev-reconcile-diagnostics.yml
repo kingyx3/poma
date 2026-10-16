@@ -1,9 +1,6 @@
 name: DEV Reconcile Diagnostics
+# Manual-only so untrusted PRs cannot access the DEV VM via WIF.
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/dev-reconcile-diagnostics.yml"
-      - "ops/scripts/diagnose_reconcile_cron.py"
   workflow_dispatch:
 permissions:
   contents: read
