@@ -739,7 +739,9 @@ def execution_costs_command(
             f"{plan}: {summary['orders']} orders, "
             f"USD {summary['notional_usd']:,.2f} filled, "
             f"commissions USD {number(summary['reported_commission_usd'])}, "
-            f"fully itemized brokerage fees USD {number(summary['reported_broker_fees_usd'])}"
+            f"fully itemized brokerage fees USD {number(summary['reported_broker_fees_usd'])}; "
+            f"fee bps {number(summary['reported_fee_bps'])}; "
+            f"reference slippage bps {number(summary['reference_slippage_bps'])}"
         )
     skipped = sum(not fill.order_ref.startswith("poma:") for fill in fills)
     if skipped:

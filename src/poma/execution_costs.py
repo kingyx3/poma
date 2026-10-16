@@ -214,8 +214,17 @@ def plan_summary(costs: list[OrderExecutionCost]) -> dict[str, dict[str, float |
         total_notional = sum(item.notional_usd for item in items)
         complete = all(item.reported_broker_fees_usd is not None for item in items)
         complete_commission = all(item.commission_usd is not None for item in items)
+        complete_slippage = all(item.signed_price_slippage_usd is not None for item in items)
         summaries[plan] = {
             "orders": len(items),
+            "reported_fee_bps": (
+                sum(item.reported_broker_fees_usd for item in items if item.reported_broker_fees_usd is not None)
+                / total_notional * 10_000 if complete and total_notional > 0 else None
+            ),
+            "reference_slippage_bps": (
+                sum(item.signed_price_slippage_usd for item in items if item.signed_price_slippage_usd is not None)
+                / total_notional * 10_000 if complete_slippage and total_notional > 0 else None
+            ),
             "notional_usd": total_notional,
             "reported_commission_usd": (
                 sum(item.commission_usd for item in items if item.commission_usd is not None)

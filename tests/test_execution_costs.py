@@ -141,3 +141,14 @@ def test_read_rejects_duplicate_exec_id_with_conflicting_fill(tmp_path: Path) ->
     )
     with pytest.raises(ValueError, match="conflicting duplicate"):
         read_execution_fills(path)
+
+
+def test_plan_cost_summary_reports_normalized_fees_and_slippage() -> None:
+    costs = analyze_execution_costs(
+        [_fill("a", commission_usd=1.0, exchange_fees_usd=0.5)],
+        {"poma:run:0:USMC:BUY": _entry()},
+    )
+    summary = plan_summary(costs)
+    assert summary["tiered"]["reported_fee_bps"] is not None
+    assert summary["tiered"]["reference_slippage_bps"] is not None
+    assert summary["tiered"]["reported_broker_fees_usd"] == 1.5
