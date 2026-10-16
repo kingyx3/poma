@@ -651,6 +651,51 @@ def reconcile_orders() -> None:
         if update.action is not None or update.entry.is_terminal:
             send_alert(settings, lifecycle_status_alert(update.entry, update.action, update.detail))
 
+    # A working order can fill/expire after the submit process has exited.
+    # Refresh against the ORIGINAL approved targets, not newly selected strategy weights.
+    run_ids = {update.entry.run_id for update in summary.updates}
+    journal = ExecutionJournal(settings.state_dir)
+    assessable = [
+        run_id for run_id in sorted(run_ids)
+        if (journal.orders_dir / f"{run_id}.json").exists()
+    ]
+    if assessable:
+        try:
+            snapshot = broker.account_snapshot()
+        except Exception as exc:  # noqa: BLE001 - no false claim of portfolio completion
+            console.print(f"Post-reconcile portfolio read unavailable: {exc}")
+            snapshot = None
+        entries = store.load_latest_entries()
+        for run_id in assessable:
+            planned_path = journal.orders_dir / f"{run_id}.json"
+            planned = json.loads(planned_path.read_text())
+            if "targets" not in planned or "portfolio_value_usd" not in planned:
+                console.print(f"{run_id}: legacy journal lacks original targets; cannot certify completion")
+                continue
+            quality = assess_saved_run(
+                planned_path,
+                snapshot,
+                entries.values(),
+                min_trade_notional_usd=settings.min_trade_notional_usd,
+                min_weight_delta_pct=settings.min_weight_delta_pct,
+            )
+            previous_path = journal.reconciliations_dir / f"{run_id}-quality.json"
+            previous_status = None
+            if previous_path.exists():
+                previous_status = json.loads(previous_path.read_text()).get("status")
+            journal.record_quality(run_id, quality)
+            console.print(
+                f"{run_id}: rebalance quality {quality['status']}; "
+                f"target drift {quality['target_error_pct']:.2%}; "
+                f"fill ratio {quality['fill_ratio']:.1%}"
+            )
+            if quality["status"] in {"target_reached", "incomplete"} and quality["status"] != previous_status:
+                send_alert(
+                    settings,
+                    f"📊 Rebalance {run_id}: {quality['status']}; "
+                    f"portfolio drift {quality['target_error_pct']:.2%}",
+                )
+
 
 
 @app.command(name="execution-costs")
