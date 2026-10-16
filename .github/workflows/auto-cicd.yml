@@ -159,9 +159,12 @@ jobs:
               fi
             done < "${changed_files}"
 
-            # Deploy and Gateway Ops are coupled only for shared VM foundation paths
-            # (Terraform VM foundation and generated deploy env files).
-            # App/runtime code changes deploy the app only; Gateway-owned changes run Gateway Ops only.
+            # Every app deploy removes paper/live cron and leaves it disarmed until a
+            # separate authenticated Gateway configure has completed. Always pair DEV
+            # deploys with configure-paper so the schedule cannot remain unintentionally off.
+            if [ "${deploy_required}" = "true" ]; then
+              gateway_required=true
+            fi
             if [ "${deploy_required}" = "true" ] || [ "${gateway_required}" = "true" ]; then
               reason="deploy_required=${deploy_required}, gateway_required=${gateway_required} based on changed paths"
             fi
