@@ -271,3 +271,24 @@ readiness and installs the matching crontab. Auto CI/CD PR deployments pair the
 app deploy with configure-paper. After a manual paper-mode deploy, run
 configure-paper explicitly before expecting scheduled reconciliation to resume;
 if readiness fails, the schedule remains paused rather than reporting false health.
+
+
+### Bounded reconnects and Telegram delivery recovery
+
+IBKR socket reconnects use fresh sessions with jittered exponential delays (about
+2s → 4s, capped at 8s for additional attempts), an overall
+`IBKR_CONNECT_BUDGET_SECONDS` (95s by default), and per-attempt timeout clipped
+to the remaining budget. Explicit permanent login/account failures fail early.
+Open-order reads have one shared `IBKR_ORDER_QUERY_BUDGET_SECONDS` (110s)
+across their one permitted mid-query reconnect; a broker connect failure does not
+start a second nested full retry sequence. These safeguards do **not** permit
+replaying an order whose broker acceptance is uncertain.
+
+Failed in-app and host Telegram sends enqueue message text (no token or chat ID)
+in `state/telegram-outbox`, protected with mode 0700/0600. The host cron
+drains up to 3 due messages after each invocation, with bounded 5-second HTTP
+requests, jittered exponential retry (starting at 60s), at most 8 delivery
+attempts, a 24-hour expiry, and a 64-message size limit. This does not affect
+command success/failure, does not access IBKR, and may deliver a duplicate if
+Telegram accepts a request but its acknowledgement is lost (at-least-once).
+If the cron schedule is disabled, the outbox will not drain until it resumes.
