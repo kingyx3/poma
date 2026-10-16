@@ -488,6 +488,13 @@ def main() -> int:
     ) != 0:
         return 1
     try:
+        # The gateway will be restarted below. Prevent cron from hitting the
+        # unauthenticated API mid-restart; only successful readiness re-arms it.
+        if action in {"configure-paper", "configure-live"} and timed(
+            "Pause scheduled trades during Gateway reauthentication",
+            lambda: remote("sudo crontab -r -u poma 2>/dev/null || true", timeout=60),
+        ) != 0:
+            return 1
         if action == "status":
             return remote(f"sudo systemctl status ibgateway --no-pager --lines={log_lines} || true", timeout=180)
         if action == "restart":
@@ -596,9 +603,22 @@ def main() -> int:
             readiness = api_ready(mode, required=True)
             if readiness != 0:
                 return readiness
-            return timed(
+            if timed(
                 "Verify authenticated recovery watchdog",
                 lambda: verify_recovery_watchdog(remote),
+            ) != 0:
+                return 1
+            # App deploy deliberately leaves paper cron unarmed: opening a TCP socket is
+            # not sufficient evidence that the Gateway has authenticated to the account.
+            # Arm scheduling only after the completed API/permission checks above.
+            return timed(
+                "Enable authenticated paper schedule",
+                lambda: remote(
+                    "if sudo grep -qx TRADING_MODE=paper /opt/poma/.env; then "
+                    "sudo -u poma crontab /opt/poma/ops/cron/poma.cron && sudo systemctl restart cron; "
+                    "else echo 'App is not configured for paper trading; leaving its schedule unchanged.'; fi",
+                    timeout=120,
+                ),
             )
 
         wait_command = (

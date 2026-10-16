@@ -242,3 +242,32 @@ records and current broker account positions even if `unresolved_count=0`.
 If its output says `HISTORY_WARNING=no durable order events present`, that is
 **not** proof that no trades occurred. Investigate the state volume, IBKR activity
 and deployment history before placing new orders.
+
+
+### Scheduled-command incident alerts
+
+The host cron wrapper records per-invocation UTC output and, on nonzero exits, sends a
+sanitized Telegram classification, probable cause, concise error signature, exit code,
+consecutive failure count, last successful command run and operational impact. A
+reconciliation failure explicitly labels broker order state **unverified**; the local
+open-order ledger is only a risk indicator, never proof of a fill, cancellation or
+absence of untracked broker orders. Alerts are delivered on the first failure, third
+consecutive occurrence, when the category changes, or after 15 minutes of continued
+failure. The next successful scheduled command sends a recovery notification; that
+proves the command ran successfully, not that each individual order is terminal.
+
+Diagnostic state lives in `state/cron-alert-monitor.json` and
+`state/cron-alert-reconcile-orders.json`, updated atomically with mode 0600.
+These alert-only records do not modify the execution ledger. Investigate DEV using
+the manual **DEV Reconcile Diagnostics** workflow (no broker writes); use
+**IB Gateway Ops** for Gateway/API authentication checks. For a connection-refused
+failure, confirm the Gateway has finished startup and authenticated to the intended
+account before concluding that reconciliation is healthy. Do not manually reset an
+unknown order just because a later socket check succeeds.
+
+Broker-backed deployments intentionally leave the paper/live cron schedule paused
+until **IB Gateway Ops configure-paper/configure-live** verifies authenticated API
+readiness and installs the matching crontab. Auto CI/CD PR deployments pair the
+app deploy with configure-paper. After a manual paper-mode deploy, run
+configure-paper explicitly before expecting scheduled reconciliation to resume;
+if readiness fails, the schedule remains paused rather than reporting false health.

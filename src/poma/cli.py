@@ -712,6 +712,17 @@ def reconcile_orders() -> None:
                     f"portfolio drift {quality['target_error_pct']:.2%}",
                 )
 
+    # ExecutionManager preserves the affected order state and continues reconciling
+    # other entries when one broker/history operation fails. That is not a successful
+    # overall reconciliation: make cron see a failure, rather than falsely alerting
+    # recovery and silently leaving an order unverified.
+    failed_updates = [update for update in summary.updates if update.action == "error"]
+    if failed_updates:
+        console.print(
+            f"ReconciliationError: {len(failed_updates)} order update(s) failed; "
+            "broker order finality remains unverified"
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command(name="execution-costs")
