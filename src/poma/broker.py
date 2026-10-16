@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
@@ -74,7 +75,7 @@ NO_SECURITY_DEFINITION_ERROR = 200
 # Health probes use a dedicated client id offset so they never collide with the client id the
 # scheduled trader connects with (a duplicate client id is rejected by the gateway).
 HEALTH_CLIENT_ID_OFFSET = 90
-IBKR_CONNECT_RETRY_DELAY_SECONDS = 5.0
+IBKR_CONNECT_RETRY_DELAY_SECONDS = 2.0  # Exponential, jittered; capped below 8s.
 OrderStatusCallback = Callable[[ProposedTrade, OrderResult], None]
 
 
@@ -141,23 +142,52 @@ def _collect_market_data_errors(ib: IB) -> Iterator[_MarketDataErrors]:
         ib.errorEvent -= on_error
 
 
-def _connect_ib(settings: Settings, *, client_id: int, timeout: float | None = None) -> IB:
-    """Connect to IBKR and explicitly request live market data on this session.
+def _permanent_connection_error(exc: Exception) -> bool:
+    """Errors a delayed identical socket retry cannot fix; leave reauth to Gateway Ops."""
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "invalid account",
+            "account mismatch",
+            "authentication failed",
+            "not authorized",
+            "two-factor",
+            "2fa required",
+            "read-only api",
+        )
+    )
 
-    Gateway remembers whichever market data type was last requested on a client id rather than
-    defaulting to live every session, so a fresh connection can otherwise silently return no
-    ticks at all even with live entitlements in place.
 
-    ib_insync's ``connect()`` also performs a full account sync-up before returning, which can
-    overrun the timeout on a small or loaded VM even while the Gateway is healthy, surfacing as
-    a bare ``TimeoutError``. Nothing has been submitted at connect time, so each attempt safely
-    retries on a fresh socket; the final failure is raised as ``BrokerUnavailable`` with the
-    connection details instead of an empty timeout.
+def _retry_delay(attempt: int, remaining: float) -> float:
+    """Full jitter is unnecessary here; moderate jitter avoids concurrent reconnect storms."""
+    base = min(8.0, IBKR_CONNECT_RETRY_DELAY_SECONDS * 2 ** (attempt - 1))
+    return min(max(0.0, remaining), base * random.uniform(0.8, 1.2))
+
+
+def _connect_ib(
+    settings: Settings,
+    *,
+    client_id: int,
+    timeout: float | None = None,
+    deadline: float | None = None,
+) -> IB:
+    """Retry pre-submission IBKR handshakes only, with fresh sockets and one time budget.
+
+    Callers with a multi-stage read-only operation may pass a shared monotonic
+    deadline. A request's per-attempt timeout is clipped to remaining time.
+    Failed/uncertain order submissions are NEVER retried by this helper.
     """
     timeout = timeout or settings.ibkr_connect_timeout_seconds
+    deadline = deadline if deadline is not None else time.monotonic() + settings.ibkr_connect_budget_seconds
     attempts = max(1, settings.ibkr_connect_attempts)
     last_error: Exception | None = None
+    attempted = 0
     for attempt in range(1, attempts + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.1:
+            break
+        attempted += 1
         ib = IB()
         try:
             ib.connect(
@@ -165,22 +195,26 @@ def _connect_ib(settings: Settings, *, client_id: int, timeout: float | None = N
                 settings.ibkr_port,
                 clientId=client_id,
                 account=settings.ibkr_account or "",
-                timeout=timeout,
+                timeout=min(timeout, remaining),
             )
             ib.RequestTimeout = timeout
             ib.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
             return ib
-        except Exception as exc:  # noqa: BLE001 - retry any connect failure on a fresh socket
+        except Exception as exc:  # noqa: BLE001 - fresh-socket retry before any order submission
             ib.disconnect()
             last_error = exc
-            if attempt < attempts:
-                time.sleep(IBKR_CONNECT_RETRY_DELAY_SECONDS)
-    detail = str(last_error).strip() or last_error.__class__.__name__
+            if _permanent_connection_error(exc) or attempt >= attempts:
+                break
+            delay = _retry_delay(attempt, deadline - time.monotonic())
+            if delay <= 0.1:
+                break
+            time.sleep(delay)
+    detail = (str(last_error).strip() or last_error.__class__.__name__) if last_error else "budget exhausted"
     raise BrokerUnavailable(
         f"unable to connect to IBKR API at {settings.ibkr_host}:{settings.ibkr_port} "
-        f"(clientId={client_id}, timeout={timeout:g}s) after {attempts} attempt(s): {detail}"
+        f"(clientId={client_id}, timeout={timeout:g}s) after {attempted} attempt(s) "
+        f"(total budget={settings.ibkr_connect_budget_seconds:g}s or caller deadline): {detail}"
     ) from last_error
-
 
 def _stock_contract(ticker: str, exchange: str, resolved: Stock | None = None) -> Stock:
     """A quote contract for one venue, pinned to the resolved conId when one is known.
@@ -701,8 +735,8 @@ class IbkrBroker:
         settings.assert_safe_for_execution()
         self.settings = settings
 
-    def _connect(self) -> IB:
-        ib = _connect_ib(self.settings, client_id=self.settings.ibkr_client_id)
+    def _connect(self, *, deadline: float | None = None) -> IB:
+        ib = _connect_ib(self.settings, client_id=self.settings.ibkr_client_id, deadline=deadline)
         try:
             self._assert_connected(ib)
         except Exception:
@@ -1062,28 +1096,33 @@ class IbkrBroker:
         return order
 
     def fetch_open_order_snapshots(self) -> list[OpenOrderSnapshot]:
-        """Poll for currently open orders placed with a POMA orderRef, for reconciliation.
+        """Read-only query: fresh session retry, governed by one monotonic budget.
 
-        ``reqAllOpenOrders`` (rather than ``reqOpenOrders``) is required here because the
-        reconciliation command connects with its own client id, distinct from the client id
-        that originally submitted the orders; only ``reqAllOpenOrders`` returns orders placed
-        by other client ids on the same account.
+        Do not layer another full connect-retry series after the broker's own
+        connection budget is exhausted. No failures here authorize new orders.
         """
-        # A socket can drop after the initial handshake or during reqAllOpenOrders.
-        # Reads are safe to retry with a NEW IBKR session; submissions never are.
+        deadline = time.monotonic() + self.settings.ibkr_order_query_budget_seconds
         last_error: Exception | None = None
         for attempt in range(2):
+            if deadline - time.monotonic() <= 0.1:
+                break
             try:
-                return self._fetch_open_orders_once()
-            except Exception as exc:  # noqa: BLE001 - fresh connection for a read-only retry
+                return self._fetch_open_orders_once(deadline=deadline)
+            except BrokerUnavailable:
+                # _connect_ib already exhausted its allowed fresh-socket attempts.
+                raise
+            except Exception as exc:  # noqa: BLE001 - read-only retry on a fresh session
                 last_error = exc
                 if attempt == 0:
-                    time.sleep(IBKR_CONNECT_RETRY_DELAY_SECONDS)
-        assert last_error is not None
-        raise BrokerUnavailable(f"IBKR open-order query failed after reconnect: {last_error}") from last_error
+                    delay = _retry_delay(attempt + 1, deadline - time.monotonic())
+                    if delay > 0.1:
+                        time.sleep(delay)
+        raise BrokerUnavailable(
+            f"IBKR open-order query failed after reconnect or time budget: {last_error or 'budget exhausted'}"
+        ) from last_error
 
-    def _fetch_open_orders_once(self) -> list[OpenOrderSnapshot]:
-        ib = self._connect()
+    def _fetch_open_orders_once(self, *, deadline: float | None = None) -> list[OpenOrderSnapshot]:
+        ib = self._connect(deadline=deadline)
         try:
             self._assert_connected(ib)
             ib.reqAllOpenOrders()
