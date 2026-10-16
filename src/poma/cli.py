@@ -629,10 +629,10 @@ def reconcile_orders() -> None:
 
 @app.command(name="execution-costs")
 def execution_costs_command(
-    executions_csv: Path = typer.Argument(..., help="Normalized CSV of actual IBKR execution/Flex report fills."),
-    state_dir: Path = typer.Option(Path("state"), help="Local POMA state directory with the order ledger."),
-    output_csv: Path = typer.Option(
-        Path("reports/execution-costs.csv"), help="Output per-order execution cost audit."
+    executions_csv: Annotated[Path, typer.Argument(help="Normalized CSV of actual IBKR execution/Flex report fills.")],
+    state_dir: Annotated[Path, typer.Option(help="Local POMA state directory with the order ledger.")] = Path("state"),
+    output_csv: Annotated[Path, typer.Option(help="Output per-order execution cost audit.")] = Path(
+        "reports/execution-costs.csv"
     ),
 ) -> None:
     """Audit actual IBKR commissions, separate venue fees, quote spread and signed price slippage.
