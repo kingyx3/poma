@@ -47,6 +47,35 @@ if ledger.exists():
         except (ValueError, AttributeError):
             counts["corrupt"] += 1
 print("open_order_lifecycle_counts=", dict(counts))
+# Distinguish a running systemd supervisor from a listening/authenticated API.
+import socket
+try:
+    with socket.create_connection(("127.0.0.1", 7497), timeout=1):
+        print("ibkr_api_socket_7497=LISTENING (TCP only; login not verified)")
+except OSError as exc:
+    print(f"ibkr_api_socket_7497=UNAVAILABLE ({type(exc).__name__})")
+
+# Only emit classified Gateway startup hints, never raw login logs or secrets.
+gateway_log = root / "logs/ibgateway/gatewaystart-wrapper.log"
+if not gateway_log.exists():
+    gateway_log = Path("/var/log/poma/ibgateway/gatewaystart-wrapper.log")
+if gateway_log.exists():
+    hints = Counter()
+    for line in gateway_log.read_text(errors="replace").splitlines()[-300:]:
+        lowered = line.lower()
+        if "2fa" in lowered or "second factor" in lowered or "mobile app" in lowered:
+            hints["2fa"] += 1
+        if "login" in lowered or "authenticat" in lowered:
+            hints["login_or_auth"] += 1
+        if "api" in lowered or "socket" in lowered or "7497" in lowered:
+            hints["api_or_socket"] += 1
+        if "failed" in lowered or "error" in lowered or "denied" in lowered:
+            hints["error"] += 1
+        if "restart" in lowered or "exiting" in lowered or "starting" in lowered:
+            hints["start_or_restart"] += 1
+    print("gateway_startup_hints_last_300_lines=", dict(hints))
+else:
+    print("gateway_startup_log_unavailable")
 for unit in ("docker", "cron", "ibgateway", "ibgateway-paper"):
     try:
         p = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5, check=False)
