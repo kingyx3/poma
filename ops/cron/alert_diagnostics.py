@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import suppress
 from pathlib import Path
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -40,25 +41,49 @@ def classify(log_lines: list[str]) -> tuple[str, str, str]:
     """Stable classification. The excerpt is intentionally an allowlisted signature."""
     sample = "\n".join(log_lines).lower()
     if any(s in sample for s in ("connectionrefusederror", "connect call failed", "connection refused", "errno 111")):
-        return ("IBKR_CONNECTION_REFUSED", "IBKR API refused a connection; Gateway may be starting, restarting or unauthenticated.", "ConnectionRefusedError / Connect call failed")
+        return (
+            "IBKR_CONNECTION_REFUSED",
+            "IBKR API refused a connection; Gateway may be starting, restarting or unauthenticated.",
+            "ConnectionRefusedError / Connect call failed",
+        )
     if "brokerunavailable" in sample or "unable to connect to ibkr api" in sample:
-        return ("IBKR_UNAVAILABLE", "IBKR API handshake or broker availability failed; account/order state is not verified.", "BrokerUnavailable")
+        return (
+            "IBKR_UNAVAILABLE",
+            "IBKR API handshake or broker availability failed; account/order state is not verified.",
+            "BrokerUnavailable",
+        )
     if "timeouterror" in sample or "timed out" in sample or "timeout" in sample:
-        return ("TIMEOUT", "A scheduled operation timed out; verify IBKR Gateway and VM resource headroom.", "TimeoutError / timed out")
+        return (
+            "TIMEOUT",
+            "A scheduled operation timed out; verify IBKR Gateway and VM resource headroom.",
+            "TimeoutError / timed out",
+        )
     if "no space left on device" in sample:
         return ("DISK_FULL", "VM disk is full; check housekeeping and available space.", "No space left on device")
     if "cannot connect to the docker daemon" in sample or "docker daemon" in sample:
-        return ("DOCKER_UNAVAILABLE", "Docker daemon is unavailable; the trading command could not be verified.", "Docker daemon unavailable")
+        return (
+            "DOCKER_UNAVAILABLE",
+            "Docker daemon is unavailable; the trading command could not be verified.",
+            "Docker daemon unavailable",
+        )
     if "permission denied" in sample:
         return ("PERMISSION_DENIED", "A command was denied access to a required host resource.", "Permission denied")
     if "validationerror" in sample or "missing required" in sample:
-        return ("CONFIGURATION", "Application configuration validation failed.", "ValidationError / missing required configuration")
+        return (
+            "CONFIGURATION",
+            "Application configuration validation failed.",
+            "ValidationError / missing required configuration",
+        )
     for line in reversed(log_lines):
         clean = scrub(line)
         match = re.search(r"\b([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception))\s*:", clean)
         if match:
             return ("APP_EXCEPTION", "An application exception stopped the scheduled command; inspect the sanitized diagnostic log.", match.group(1))
-    return ("COMMAND_FAILED", "Command exited unsuccessfully; inspect the run-specific host log.", "Nonzero process exit")
+    return (
+        "COMMAND_FAILED",
+        "Command exited unsuccessfully; inspect the run-specific host log.",
+        "Nonzero process exit",
+    )
 
 def recent_lines(log_path: Path, start_offset: int) -> list[str]:
     try:
@@ -149,10 +174,8 @@ def write_state(path: Path, state: dict) -> None:
             json.dump(state, stream)
         os.replace(temp, path)
     finally:
-        try:
+        with suppress(OSError):
             temp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 def report(log_path: Path, status: int, command: str, start_offset: int) -> None:
     now = int(time.time())
@@ -193,6 +216,18 @@ def report(log_path: Path, status: int, command: str, start_offset: int) -> None
     if not notify:
         return
     last_success = old.get("last_success_at")
+    success_at = (
+        time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(last_success))
+        if isinstance(last_success, (int, float)) else "unknown"
+    )
+    impact = (
+        local_order_exposure()
+        if command == "reconcile-orders" else "Review session status; execution outcome not certified"
+    )
+    diagnostics = (
+        "DEV diagnostics: https://github.com/kingyx3/poma/actions/workflows/dev-reconcile-diagnostics.yml"
+        if env == "DEV" and command == "reconcile-orders" else "Inspect VM logs and Gateway Ops workflow."
+    )
     message = "\n".join((
         f"📈 POMA · {env}",
         f"🚨 Scheduled {command} failed",
@@ -201,11 +236,11 @@ def report(log_path: Path, status: int, command: str, start_offset: int) -> None
         f"Cause: {explanation}",
         f"Error signature: {signature}",
         f"Consecutive failures: {count}",
-        f"Last successful run: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(last_success)) if isinstance(last_success, (int, float)) else 'unknown'}",
-        f"Order impact: {local_order_exposure() if command == 'reconcile-orders' else 'Review session status; execution outcome not certified'}",
+        f"Last successful run: {success_at}",
+        f"Order impact: {impact}",
         "Recovery: next scheduled invocation will retry; Gateway watchdog handles authenticated restart checks.",
         f"Host log: {scrub(log_path)}",
-        "DEV diagnostics: https://github.com/kingyx3/poma/actions/workflows/dev-reconcile-diagnostics.yml" if env == "DEV" and command == "reconcile-orders" else "Inspect VM logs and Gateway Ops workflow.",
+        diagnostics,
     ))
     send_message(message)
 
