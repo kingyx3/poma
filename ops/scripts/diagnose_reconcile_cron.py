@@ -83,7 +83,10 @@ for unit in ("docker", "cron", "ibgateway", "ibgateway-paper"):
     except (OSError, subprocess.TimeoutExpired):
         print(f"unit_{unit}=unavailable")
 try:
-    p = subprocess.run(["docker", "ps", "--format", "{{.Names}} {{.Status}}"], capture_output=True, text=True, timeout=10, check=False)
+    p = subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}} {{.Status}}"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
     print("containers=", [safe(s) for s in p.stdout.splitlines()[:10]])
 except (OSError, subprocess.TimeoutExpired):
     print("containers_unavailable")
