@@ -177,7 +177,7 @@ def analyze_execution_costs(
         )
         entry = ledger_refs.get(order_ref)
         # A replacement changes the quote basis; do not compute slippage off the old quote.
-        same_quote = entry is not None and order_ref == entry.order_ref
+        same_quote = (entry is not None and order_ref == entry.order_ref and entry.reference_price_source == "ibkr")
         quote_spread = entry.quote_spread_bps if same_quote else None
         reference = entry.reference_price if same_quote else None
         sign = 1 if first.side == "BUY" else -1
@@ -213,9 +213,14 @@ def plan_summary(costs: list[OrderExecutionCost]) -> dict[str, dict[str, float |
     for plan, items in sorted(grouped.items()):
         total_notional = sum(item.notional_usd for item in items)
         complete = all(item.reported_broker_fees_usd is not None for item in items)
+        complete_commission = all(item.commission_usd is not None for item in items)
         summaries[plan] = {
             "orders": len(items),
             "notional_usd": total_notional,
+            "reported_commission_usd": (
+                sum(item.commission_usd for item in items if item.commission_usd is not None)
+                if complete_commission else None
+            ),
             "reported_broker_fees_usd": (
                 sum(item.reported_broker_fees_usd for item in items if item.reported_broker_fees_usd is not None)
                 if complete else None

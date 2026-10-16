@@ -19,6 +19,7 @@ from poma.broker import (
 from poma.config import Settings, TradingMode, get_settings
 from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
+from poma.execution_costs import analyze_execution_costs, plan_summary, read_execution_fills, write_execution_costs
 from poma.execution_manager import ExecutionManager
 from poma.gateway_auth import RECOVERY_MESSAGES, AuthStatus, RecoveryEvent, probe_authentication
 from poma.health import check_ibkr, run_checks
@@ -623,6 +624,61 @@ def reconcile_orders() -> None:
     for update in summary.updates:
         if update.action is not None or update.entry.is_terminal:
             send_alert(settings, lifecycle_status_alert(update.entry, update.action, update.detail))
+
+
+
+@app.command(name="execution-costs")
+def execution_costs_command(
+    executions_csv: Path = typer.Argument(..., help="Normalized CSV of actual IBKR execution/Flex report fills."),
+    state_dir: Path = typer.Option(Path("state"), help="Local POMA state directory with the order ledger."),
+    output_csv: Path = typer.Option(
+        Path("reports/execution-costs.csv"), help="Output per-order execution cost audit."
+    ),
+) -> None:
+    """Audit actual IBKR commissions, separate venue fees, quote spread and signed price slippage.
+
+    Read-only: does not connect to the broker, send orders, or estimate hypothetical rates.
+    A missing broker fee is intentionally unknown, never treated as zero.
+    """
+    try:
+        fills = read_execution_fills(executions_csv)
+        costs = analyze_execution_costs(fills, OrderStore(state_dir).load_latest_entries())
+        write_execution_costs(output_csv, costs)
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]Execution-cost audit failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if not costs:
+        console.print("No POMA-tagged executed fills found; empty audit CSV written.")
+        return
+    table = Table("orderRef", "symbol", "fills", "commission USD", "extra fees USD", "spread bps", "slippage bps")
+    def number(value: float | None, places: int = 2) -> str:
+        return "unknown" if value is None else f"{value:,.{places}f}"
+
+    for cost in costs:
+        table.add_row(
+            cost.order_ref, cost.symbol, str(cost.fills),
+            number(cost.commission_usd), number(cost.exchange_fees_usd),
+            number(cost.captured_quote_spread_bps, 1),
+            number(cost.signed_price_slippage_bps, 1),
+        )
+    console.print(table)
+    for plan, summary in plan_summary(costs).items():
+        console.print(
+            f"{plan}: {summary['orders']} orders, "
+            f"USD {summary['notional_usd']:,.2f} filled, "
+            f"commissions USD {number(summary['reported_commission_usd'])}, "
+            f"fully itemized brokerage fees USD {number(summary['reported_broker_fees_usd'])}"
+        )
+    skipped = sum(not fill.order_ref.startswith("poma:") for fill in fills)
+    if skipped:
+        console.print(f"Ignored {skipped} non-POMA fills.")
+    console.print(
+        "Unknown costs remain unknown. Spread is the quoted pre-submit spread; slippage is signed "
+        "versus POMA's IBKR reference (not an arrival-midpoint benchmark). Comparing Fixed and "
+        "Tiered requires comparable actual executions; directed API orders are not Tiered-eligible."
+    )
+    console.print(f"Audit CSV written to {output_csv}")
 
 
 @app.command(name="gateway-auth-check")
