@@ -26,6 +26,18 @@ def test_outbox_retries_only_after_due_and_removes_success(tmp_path, monkeypatch
     assert list((tmp_path / "telegram-outbox").glob("*.json")) == []
 
 
+def test_outbox_callback_exception_keeps_due_message(tmp_path):
+    assert enqueue(tmp_path, "must survive transient send exception", now=1000)
+
+    def raises(_text):
+        raise OSError("network down")
+
+    assert drain(tmp_path, raises, now=1060) == (0, 1)
+    files = list((tmp_path / "telegram-outbox").glob("*.json"))
+    assert len(files) == 1
+    assert json.loads(files[0].read_text())["attempts"] == 1
+
+
 def test_outbox_limits_size_batch_and_expiry(tmp_path):
     for i in range(MAX_MESSAGES):
         assert enqueue(tmp_path, f"message {i}", now=1000 + i * 0.001)
