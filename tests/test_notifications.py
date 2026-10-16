@@ -26,10 +26,11 @@ def test_send_alert_prefixes_environment(monkeypatch) -> None:
     assert "portfolio updated" in captured["json"]["text"]
 
 
-def test_send_alert_is_best_effort_on_failure(monkeypatch) -> None:
+def test_send_alert_is_best_effort_on_failure(monkeypatch, tmp_path) -> None:
     def boom(*args, **kwargs):
         raise requests.RequestException("telegram down")
 
     monkeypatch.setattr("poma.notifications.requests.post", boom)
     # Must not raise: a Telegram outage cannot break a trading run.
-    send_alert(make_settings(), "anything")
+    send_alert(make_settings(STATE_DIR=tmp_path), "anything")
+    assert len(list((tmp_path / "telegram-outbox").glob("*.json"))) == 1

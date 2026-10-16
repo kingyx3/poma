@@ -110,3 +110,48 @@ def test_broker_connect_survives_one_connect_timeout(flaky_ib: type[FlakyConnect
     assert ib.isConnected()
     assert len(flaky_ib.instances) == 2
     assert flaky_ib.instances[0].disconnect_calls == 1
+
+
+def test_connection_deadline_limits_nested_attempts(flaky_ib, monkeypatch) -> None:
+    # Advance fake time when the gateway rejects an API handshake, so the
+    # overall budget ends before a third long connect.
+    clock = [0.0]
+    original = flaky_ib.connect
+
+    def slow_connect(self, host, port, **kwargs):
+        clock[0] += kwargs["timeout"]
+        return original(self, host, port, **kwargs)
+
+    monkeypatch.setattr(flaky_ib, "connect", slow_connect)
+    monkeypatch.setattr("poma.broker.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("poma.broker.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr("poma.broker.random.uniform", lambda _low, _high: 1.0)
+    flaky_ib.connect_failures = 99
+
+    with pytest.raises(BrokerUnavailable, match="after 2 attempt"):
+        _connect_ib(_settings(IBKR_CONNECT_BUDGET_SECONDS=60), client_id=101)
+
+    assert clock[0] <= 60.0 + 0.01
+    assert len(flaky_ib.instances) == 2
+
+
+def test_connection_does_not_retry_permanent_authentication_failure(flaky_ib, monkeypatch) -> None:
+    attempts = []
+
+    def unauthorized_connect(self, host, port, **kwargs):
+        attempts.append(1)
+        raise ConnectionError("authentication failed: invalid account")
+
+    monkeypatch.setattr(flaky_ib, "connect", unauthorized_connect)
+    with pytest.raises(BrokerUnavailable, match="after 1 attempt"):
+        _connect_ib(_settings(), client_id=101)
+    assert attempts == [1]
+
+
+def test_connection_jitter_backoff_is_capped(monkeypatch) -> None:
+    from poma.broker import _retry_delay
+
+    monkeypatch.setattr("poma.broker.random.uniform", lambda low, high: high)
+    assert _retry_delay(1, 100) == pytest.approx(2.4)
+    assert _retry_delay(3, 100) == pytest.approx(9.6)
+    assert _retry_delay(9, 1) == pytest.approx(1.0)

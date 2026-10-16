@@ -211,6 +211,11 @@ class Settings(BaseSettings):
         alias="IBKR_CONNECT_TIMEOUT_SECONDS",
     )
     ibkr_connect_attempts: PositiveInt = Field(default=3, alias="IBKR_CONNECT_ATTEMPTS")
+    # Hard total budgets prevent stacked fresh-socket retries from starving the e2-micro cron.
+    ibkr_connect_budget_seconds: PositiveFloat = Field(default=95.0, alias="IBKR_CONNECT_BUDGET_SECONDS")
+    ibkr_order_query_budget_seconds: PositiveFloat = Field(
+        default=110.0, alias="IBKR_ORDER_QUERY_BUDGET_SECONDS"
+    )
 
     state_dir: Path = Field(default=Path("state"), alias="STATE_DIR")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
