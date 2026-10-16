@@ -1,0 +1,44 @@
+name: DEV Final Recovery Verification
+on:
+  pull_request:
+    types: [opened, synchronize]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  verify:
+    name: Verify DEV broker and cron (read-only)
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'verify/dev-recovery-evidence-20261017' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: dev
+    env:
+      DEPLOY_ENVIRONMENT: dev
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve DEV WIF config
+        run: |
+          set -euo pipefail
+          source ops/scripts/resolve_gcp_deploy_env.sh
+      - name: Authenticate GCP
+        uses: google-github-actions/auth@v3
+        with:
+          create_credentials_file: true
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Configure project
+        run: gcloud config set project "${GCP_PROJECT_ID}"
+      - name: Upload read-only verification probe
+        run: |
+          timeout --kill-after=30s 3m gcloud compute scp \
+            ops/scripts/verify_dev_recovery_probe.py \
+            "${GCP_VM_NAME}:/tmp/poma-verify-dev-recovery.py" \
+            --zone "${GCP_ZONE}" --tunnel-through-iap \
+            --ssh-key-expire-after=15m --quiet
+      - name: Verify post-recovery cron and broker snapshots
+        run: |
+          timeout --kill-after=30s 4m gcloud compute ssh "${GCP_VM_NAME}" \
+            --zone "${GCP_ZONE}" --tunnel-through-iap \
+            --ssh-key-expire-after=15m --quiet \
+            --command 'sudo -u poma python3 /tmp/poma-verify-dev-recovery.py'
