@@ -17,7 +17,12 @@ def test_timestamped_logger_marks_lines_and_alerts_on_failures() -> None:
     assert "date -u" in script
     assert "%Y-%m-%dT%H:%M:%SZ" in script
     assert "append_timestamped_output" in script
-    assert "send_failure_alert" in script
+    assert "report_command_result" in script
+    assert "alert_diagnostics.py" in script
+    assert "run_start_offset" in script
     assert "Scheduled command failed" in script
-    assert "TELEGRAM_BOT_TOKEN" in script
-    assert "TELEGRAM_CHAT_ID" in script
+    reporter = Path("ops/cron/alert_diagnostics.py").read_text()
+    assert "TELEGRAM_BOT_TOKEN" in reporter
+    assert "TELEGRAM_CHAT_ID" in reporter
+    assert "Consecutive failures:" in reporter
+    assert "broker orders unverified" in reporter
