@@ -490,14 +490,14 @@ def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_pat
     broker.open_order_snapshots = [_snapshot_for_entry(entry)]
     # Quote moves away from the initial passive limit: one escalation crosses only
     # the fresh ask rather than blindly adding an offset onto the earlier order.
-    broker.quotes_override = {"AAPL": _quote("AAPL", bid=120.00, ask=120.10)}
+    broker.quotes_override = {"AAPL": _quote("AAPL", bid=100.15, ask=100.25)}
 
     summary = manager.reconcile()
 
     assert summary.updates[0].action == "replace"
     updated = store.load_open_orders()[0]
-    assert updated.limit_price == 120.10
-    assert updated.reference_price == 120.10
+    assert updated.limit_price == 100.25
+    assert updated.reference_price == 100.25
     assert updated.reference_price_source == "ibkr"
 
 
@@ -761,6 +761,41 @@ def test_escalation_skips_wide_spread_quote(tmp_path: Path) -> None:
     store.upsert(aged)
     quote = broker.execution_quotes(["USMC"])["USMC"]
     broker.quotes_override = {"USMC": dc_replace(quote, bid=99.0, ask=101.0, spread_bps=200.0)}
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    assert manager.reconcile().updates[0].action is None
+    assert broker.cancelled_order_ids == []
+
+
+def test_escalation_rejects_excessive_adverse_price_move(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(
+        broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600),
+    )
+    manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
+    store.upsert(aged)
+    quote = broker.execution_quotes(["USMC"])["USMC"]
+    broker.quotes_override = {"USMC": dc_replace(quote, bid=101.00, ask=101.10)}
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    assert manager.reconcile().updates[0].action is None
+    assert broker.cancelled_order_ids == []
+
+
+def test_escalation_does_not_break_approved_max_order_notional(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    settings = make_settings(
+        REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600, MAX_ORDER_NOTIONAL_USD=501.0,
+    )
+    manager = ExecutionManager(broker, store, settings)
+    manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
+    store.upsert(aged)
+    quote = broker.execution_quotes(["USMC"])["USMC"]
+    broker.quotes_override = {"USMC": dc_replace(quote, bid=100.20, ask=100.25)}
     broker.open_order_snapshots = [_snapshot_for_entry(aged)]
     assert manager.reconcile().updates[0].action is None
     assert broker.cancelled_order_ids == []

@@ -147,6 +147,7 @@ class Settings(BaseSettings):
     replace_after_seconds: PositiveInt = Field(default=120, alias="REPLACE_AFTER_SECONDS")
     cancel_after_seconds: PositiveInt = Field(default=300, alias="CANCEL_AFTER_SECONDS")
     replace_price_improvement_bps: float = Field(default=15.0, alias="REPLACE_PRICE_IMPROVEMENT_BPS")
+    max_reprice_adverse_bps: float = Field(default=50.0, alias="MAX_REPRICE_ADVERSE_BPS")
     stale_order_policy: StaleOrderPolicy = Field(default=StaleOrderPolicy.BLOCK, alias="STALE_ORDER_POLICY")
 
     # Execution pricing: paper/live orders anchor on a fresh broker quote captured immediately
@@ -232,6 +233,7 @@ class Settings(BaseSettings):
     @field_validator(
         "limit_offset_bps",
         "replace_price_improvement_bps",
+        "max_reprice_adverse_bps",
         "estimated_transaction_cost_bps",
     )
     @classmethod

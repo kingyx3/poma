@@ -238,3 +238,8 @@ def test_paper_live_orders_must_expire_daily() -> None:
     paper = Settings(TELEGRAM_BOT_TOKEN="token", TELEGRAM_CHAT_ID="chat",
                      TRADING_MODE="paper", ORDER_TIME_IN_FORCE="day")
     assert paper.order_time_in_force == "DAY"
+
+
+def test_reprice_adverse_bps_must_be_nonnegative() -> None:
+    with pytest.raises(ValidationError, match="basis-point settings must be non-negative"):
+        Settings(TELEGRAM_BOT_TOKEN="token", TELEGRAM_CHAT_ID="chat", MAX_REPRICE_ADVERSE_BPS=-1)

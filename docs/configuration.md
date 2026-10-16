@@ -186,3 +186,5 @@ Bootstrap apply writes generated, non-secret GCP deployment identifiers to `ops/
 - The deploy workflow renders paper runtime `IBKR_ACCOUNT` from `IBKR_ACCOUNT_PAPER`. Live mode uses `IBKR_ACCOUNT`.
 - Paper Gateway login secrets are separate from the paper account id: `IBKR_LOGIN_ID_PAPER` / `IBKR_LOGIN_SECRET_PAPER` authenticate Gateway, while `IBKR_ACCOUNT_PAPER` selects the account the app may trade.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are required so every deployed run has alerting configured.
+
+| `MAX_REPRICE_ADVERSE_BPS` | no | `50` | Upper bound on adverse reference-to-fresh-quote move for a single zero-fill repricing. Both this cap and `MAX_ORDER_NOTIONAL_USD` must pass before cancel/resubmit. |

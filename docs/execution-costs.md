@@ -137,3 +137,9 @@ residual cash and target-weight error; report **fee bps** separately from
 sum is not an arrival-midpoint implementation shortfall. If any actual broker
 fee or reference quote is missing, the corresponding weighted metric remains
 unknown rather than guessed. No unsupported counterfactual Fixed/Tiered claims.
+
+Escalation also fails closed if the refreshed price worsens beyond
+`MAX_REPRICE_ADVERSE_BPS=50` from the originally captured IBKR reference,
+or if the repriced full remaining order exceeds `MAX_ORDER_NOTIONAL_USD`.
+These are independent of the bid/ask spread guard and prevent chasing a sharp
+market move even when that move comes with a tight spread.

@@ -923,6 +923,16 @@ class ExecutionManager:
             or (entry.side == OrderSide.SELL and entry.limit_price <= new_limit)
         ):
             return None, {}
+        if entry.reference_price is None or entry.reference_price <= 0:
+            return None, {}  # No safe arrival reference for a bounded escalation.
+        signed_move = (new_limit - entry.reference_price) * (
+            1 if entry.side == OrderSide.BUY else -1
+        )
+        if signed_move / entry.reference_price * 10_000 > settings.max_reprice_adverse_bps:
+            return None, {}
+        # A refreshed price must not bypass the approved no-splitting order ceiling.
+        if entry.quantity * new_limit > settings.max_order_notional_usd + 1e-6:
+            return None, {}
         metadata: dict[str, object] = {
             "reference_price": price,
             "reference_price_source": settings.execution_price_source.value,
