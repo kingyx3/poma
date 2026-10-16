@@ -117,7 +117,11 @@ def assess_saved_run(
         planned_value_usd=float(plan["portfolio_value_usd"]),
         snapshot=snapshot,
         order_entries=[entry for entry in entries if entry.run_id == run_id],
-        original_broker_value_usd=float(plan.get('broker_account_snapshot', {}).get('total_value_usd', plan['portfolio_value_usd'])),
+        original_broker_value_usd=float(
+            plan.get("broker_account_snapshot", {}).get(
+                "total_value_usd", plan["portfolio_value_usd"]
+            )
+        ),
         min_trade_notional_usd=min_trade_notional_usd,
         min_weight_delta_pct=min_weight_delta_pct,
     )

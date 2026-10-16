@@ -691,7 +691,10 @@ def test_idempotent_replay_message_carries_the_earlier_rejection_reason(tmp_path
 def test_reconcile_leaves_unfilled_working_order_in_place_when_escalation_disabled(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
-    manager = ExecutionManager(broker, store, make_settings(AUTO_REPLACE_UNFILLED_ORDERS=False, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600))
+    manager = ExecutionManager(
+        broker, store,
+        make_settings(AUTO_REPLACE_UNFILLED_ORDERS=False, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600),
+    )
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
     entry = store.load_open_orders()[0]
     aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=150)).isoformat())
