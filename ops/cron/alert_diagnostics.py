@@ -78,7 +78,11 @@ def classify(log_lines: list[str]) -> tuple[str, str, str]:
         clean = scrub(line)
         match = re.search(r"\b([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception))\s*:", clean)
         if match:
-            return ("APP_EXCEPTION", "An application exception stopped the scheduled command; inspect the sanitized diagnostic log.", match.group(1))
+            return (
+                "APP_EXCEPTION",
+                "An application exception stopped the scheduled command; inspect the sanitized diagnostic log.",
+                match.group(1),
+            )
     return (
         "COMMAND_FAILED",
         "Command exited unsuccessfully; inspect the run-specific host log.",
