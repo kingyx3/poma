@@ -634,20 +634,19 @@ def reconcile_orders() -> None:
     summary = manager.reconcile()
     if summary.checked == 0:
         console.print("No open orders to reconcile.")
-        return
-
-    table = Table("ticker", "side", "status", "filled/qty", "action", "matched")
-    for update in summary.updates:
-        entry = update.entry
-        table.add_row(
-            entry.ticker,
-            entry.side.value,
-            entry.lifecycle_state.value,
-            f"{entry.filled_qty:g}/{entry.quantity:g}",
-            update.action or "-",
-            "yes" if update.matched else "no",
-        )
-    console.print(table)
+    else:
+        table = Table("ticker", "side", "status", "filled/qty", "action", "matched")
+        for update in summary.updates:
+            entry = update.entry
+            table.add_row(
+                entry.ticker,
+                entry.side.value,
+                entry.lifecycle_state.value,
+                f"{entry.filled_qty:g}/{entry.quantity:g}",
+                update.action or "-",
+                "yes" if update.matched else "no",
+            )
+        console.print(table)
 
     for update in summary.updates:
         if update.action is not None or update.entry.is_terminal:
@@ -656,6 +655,11 @@ def reconcile_orders() -> None:
     # A working order can fill/expire after the submit process has exited.
     # Refresh against the ORIGINAL approved targets, not newly selected strategy weights.
     run_ids = {update.entry.run_id for update in summary.updates}
+    # The final fill may have been persisted before a crash, leaving no open ledger rows
+    # but a durable orders_pending session. Reevaluate that original plan after restart.
+    pending_run_id = LocalState(settings.state_dir).pending_rebalance_run_id()
+    if pending_run_id is not None:
+        run_ids.add(pending_run_id)
     journal = ExecutionJournal(settings.state_dir)
     assessable = [
         run_id for run_id in sorted(run_ids)
