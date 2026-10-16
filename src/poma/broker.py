@@ -1261,10 +1261,14 @@ class IbkrBroker:
             target_trade = self._find_open_poma_trade(ib, order_id, ticker=ticker, side=side)
             if target_trade is None:
                 raise RuntimeError(f"cannot replace order {order_id}: original order is no longer open")
+            if float(getattr(target_trade.orderStatus, "filled", 0.0) or 0.0) > 0:
+                raise RuntimeError(f"cannot replace partially filled order {order_id}: avoiding new commission minimum")
             ib.cancelOrder(target_trade.order)
             cancelled_status = _await_terminal_status(ib, target_trade)
             original = _snapshot_from_trade(target_trade, ticker=ticker, side=side)
-            if cancelled_status == "Filled" or (original.filled > 0 and original.remaining <= 1e-9):
+            # Partial fills may occur while cancellation is pending. Never place a second
+            # order for the remainder when the original has already executed shares.
+            if original.filled > 0:
                 return original
             if cancelled_status not in CANCELLED_STATUSES:
                 raise CancelNotConfirmed(

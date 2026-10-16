@@ -133,7 +133,11 @@ def test_replacement_crash_keeps_new_identity_unresolved(tmp_path, monkeypatch):
 
     store = OrderStore(tmp_path)
     broker = RecordingBroker()
-    manager = ExecutionManager(broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600))
+    manager = ExecutionManager(
+        broker, store, make_settings(
+            AUTO_REPLACE_UNFILLED_ORDERS=True, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600
+        )
+    )
     manager.submit_plan(_plan([_trade('AAPL', OrderSide.BUY)]))
     entry = replace(store.load_open_orders()[0], submitted_at=(datetime.now(UTC) - timedelta(seconds=10)).isoformat())
     store.upsert(entry)

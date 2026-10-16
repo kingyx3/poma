@@ -56,7 +56,7 @@ def test_portfolio_summary_reports_executed_fills() -> None:
     msg = _portfolio_summary("2026-06-26", plan, "completed", executed=True)
 
     assert "📊 Rebalance summary" in msg
-    assert "Status: Orders accepted/submitted" in msg
+    assert "Status: Orders accepted/submitted (target completion unverified)" in msg
     assert "Orders: 2 total · 1 buy · 1 sell" in msg
     assert "• BUY AAPL: 10/10 shares @ $195.00 · $1,950 · Filled" in msg
     assert "• SELL NVDA: 5/5 shares @ $125.00 · $625 · Filled" in msg
@@ -292,3 +292,136 @@ def test_positions_renders_portfolio(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "AAPL" in result.stdout
     assert "TOTAL" in result.stdout
+
+
+def test_reconcile_orders_certifies_target_only_after_confirmed_fill(monkeypatch, tmp_path) -> None:
+    from poma.journal import ExecutionJournal
+    from poma.models import TargetPosition
+    from poma.order_lifecycle import OrderLifecycleState
+
+    settings = make_settings(TRADING_MODE="paper", STATE_DIR=str(tmp_path / "state"))
+    run_id = "quality-run"
+    key = f"poma:{run_id}:0:USMC:BUY"
+    plan = RebalancePlan(
+        run_id=run_id, session_date="2026-10-16",
+        targets=[TargetPosition("USMC", 0.9, 9_000.0)],
+        trades=[], execution_results=[], warnings=[],
+        portfolio_value_usd=10_000.0, portfolio_cash_usd=10_000.0,
+    )
+    ExecutionJournal(settings.state_dir).record_planned(plan)
+    OrderStore(settings.state_dir).upsert(
+        OrderLedgerEntry(
+            ledger_key=key, order_ref=key, run_id=run_id, session_date=plan.session_date,
+            ticker="USMC", side=OrderSide.BUY, order_id=42, quantity=90.0,
+            limit_price=100.0, remaining_qty=90.0,
+            lifecycle_state=OrderLifecycleState.BROKER_ACCEPTED,
+        )
+    )
+    broker = _ReconcileBroker([
+        OpenOrderSnapshot(
+            order_ref=key, order_id=42, perm_id=None, ticker="USMC",
+            side=OrderSide.BUY, raw_status="Filled", filled=90.0, remaining=0.0,
+            avg_fill_price=100.0,
+        )
+    ])
+    broker._positions = (CurrentPosition("USMC", 90.0, 9_000.0),)
+    broker.cash_usd = 1_000.0
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("poma.cli.build_broker", lambda _settings: broker)
+    alerts: list[str] = []
+    monkeypatch.setattr("poma.cli.send_alert", lambda _settings, message: alerts.append(message))
+
+    result = runner.invoke(app, ["reconcile-orders"])
+
+    assert result.exit_code == 0, result.output
+    quality = json.loads((settings.state_dir / "reconciliations" / f"{run_id}-quality.json").read_text())
+    assert quality["status"] == "target_reached"
+    assert quality["target_error_usd"] == 0.0
+    assert any("target_reached" in alert for alert in alerts)
+
+
+def test_monitor_does_not_resubmit_orders_pending(monkeypatch, tmp_path) -> None:
+    from poma.market_calendar import MarketDecision
+
+    settings = make_settings(STATE_DIR=str(tmp_path / "state"))
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "poma.cli.should_rebalance_now",
+        lambda **_kwargs: MarketDecision(should_run=True, session_date="2026-10-16", reason="ok"),
+    )
+    state = LocalState(settings.state_dir)
+    state.begin_session("2026-10-16", "pending-run")
+    state.mark_session("2026-10-16", "pending-run", "orders_pending")
+    monkeypatch.setattr(
+        "poma.cli._run_rebalance",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("cannot duplicate pending order")),
+    )
+
+    result = runner.invoke(app, ["monitor"])
+
+    assert result.exit_code == 0
+    assert state.session_status("2026-10-16") == "orders_pending"
+
+
+def test_reconcile_orders_recovers_last_fill_when_no_open_orders_remain(monkeypatch, tmp_path) -> None:
+    """Crash after ledger terminal commit, before quality status update, must self-heal."""
+    from poma.journal import ExecutionJournal
+    from poma.models import TargetPosition
+    from poma.order_lifecycle import OrderLifecycleState
+
+    settings = make_settings(TRADING_MODE="paper", STATE_DIR=str(tmp_path / "state"))
+    run_id = "last-fill-crash"
+    session_date = "2026-10-16"
+    key = f"poma:{run_id}:0:USMC:BUY"
+    plan = RebalancePlan(
+        run_id=run_id, session_date=session_date,
+        targets=[TargetPosition("USMC", 0.9, 9_000.0)],
+        trades=[], execution_results=[], warnings=[],
+        portfolio_value_usd=10_000.0, portfolio_cash_usd=10_000.0,
+    )
+    ExecutionJournal(settings.state_dir).record_planned(plan)
+    store = OrderStore(settings.state_dir)
+    store.upsert(
+        OrderLedgerEntry(
+            ledger_key=key, order_ref=key, run_id=run_id, session_date=session_date,
+            ticker="USMC", side=OrderSide.BUY, order_id=42, quantity=90.0,
+            limit_price=100.0, remaining_qty=0.0, filled_qty=90.0,
+            lifecycle_state=OrderLifecycleState.FILLED,
+        )
+    )
+    state = LocalState(settings.state_dir)
+    state.begin_session(session_date, run_id)
+    state.mark_session(session_date, run_id, "orders_pending")
+    broker = _ReconcileBroker([])
+    broker._positions = (CurrentPosition("USMC", 90.0, 9_000.0),)
+    broker.cash_usd = 1_000.0
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("poma.cli.build_broker", lambda _settings: broker)
+    alerts: list[str] = []
+    monkeypatch.setattr("poma.cli.send_alert", lambda _settings, message: alerts.append(message))
+
+    result = runner.invoke(app, ["reconcile-orders"])
+
+    assert result.exit_code == 0, result.output
+    assert "No open orders to reconcile." in result.output
+    quality = json.loads((settings.state_dir / "reconciliations" / f"{run_id}-quality.json").read_text())
+    assert quality["status"] == "target_reached"
+    assert state.session_status(session_date) == "completed"
+    assert sum("target_reached" in msg for msg in alerts) == 1
+    # Another reconciliation is idempotent; no repeated completion alerts or trading.
+    again = runner.invoke(app, ["reconcile-orders"])
+    assert again.exit_code == 0
+    assert sum("target_reached" in msg for msg in alerts) == 1
+
+
+def test_reconcile_orders_zero_open_does_not_call_portfolio_for_no_pending_run(monkeypatch, tmp_path) -> None:
+    settings = make_settings(TRADING_MODE="paper", STATE_DIR=str(tmp_path / "state"))
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    broker = _ReconcileBroker([])
+    def forbid_account_snapshot():
+        raise AssertionError("no completed run to assess")
+    broker.account_snapshot = forbid_account_snapshot
+    monkeypatch.setattr("poma.cli.build_broker", lambda _settings: broker)
+    result = runner.invoke(app, ["reconcile-orders"])
+    assert result.exit_code == 0, result.output
+    assert "No open orders to reconcile." in result.output

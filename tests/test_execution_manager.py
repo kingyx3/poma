@@ -292,7 +292,7 @@ def test_check_stale_orders_cancel_policy_cancels_same_session_different_run_ord
 def test_reconcile_replaces_once_after_replace_after_seconds(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
-    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
     manager = ExecutionManager(broker, store, settings)
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.0)]))
 
@@ -479,7 +479,7 @@ def test_submit_plan_skips_repricing_when_execution_price_source_is_snapshot(tmp
 def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
-    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
     manager = ExecutionManager(broker, store, settings)
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.10)]))
 
@@ -488,23 +488,23 @@ def test_reconcile_replace_reprices_from_fresh_quote_not_stale_old_limit(tmp_pat
     store.upsert(dc_replace(entry, submitted_at=stale_time))
 
     broker.open_order_snapshots = [_snapshot_for_entry(entry)]
-    # Ask has since dropped well below the original stale limit price; a fresh-quote replace
-    # should follow the market down instead of blindly improving off the stale $100.10 limit.
-    broker.quotes_override = {"AAPL": _quote("AAPL", bid=79.80, ask=79.90)}
+    # Quote moves away from the initial passive limit: one escalation crosses only
+    # the fresh ask rather than blindly adding an offset onto the earlier order.
+    broker.quotes_override = {"AAPL": _quote("AAPL", bid=100.15, ask=100.25)}
 
     summary = manager.reconcile()
 
     assert summary.updates[0].action == "replace"
     updated = store.load_open_orders()[0]
-    assert updated.limit_price < 90.0
-    assert updated.reference_price == 79.90
+    assert updated.limit_price == 100.25
+    assert updated.reference_price == 100.25
     assert updated.reference_price_source == "ibkr"
 
 
 def test_reconcile_replace_is_skipped_when_no_fresh_quote_is_available(tmp_path: Path) -> None:
     broker = RecordingBroker()
     store = OrderStore(tmp_path)
-    settings = make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
     manager = ExecutionManager(broker, store, settings)
     manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY, limit_price=100.0)]))
 
@@ -686,3 +686,116 @@ def test_idempotent_replay_message_carries_the_earlier_rejection_reason(tmp_path
     assert replay.message is not None
     assert "already rejected" in replay.message
     assert "ContractUnresolved: Error 200: No security definition" in replay.message
+
+
+def test_reconcile_leaves_unfilled_working_order_in_place_when_escalation_disabled(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(
+        broker, store,
+        make_settings(AUTO_REPLACE_UNFILLED_ORDERS=False, REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600),
+    )
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=150)).isoformat())
+    store.upsert(aged)
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    summary = manager.reconcile()
+    assert summary.updates[0].action is None
+    assert store.load_open_orders()[0].replace_count == 0
+    assert broker.cancelled_order_ids == []
+
+
+def test_reconcile_never_replaces_partial_fill_even_with_opt_in(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    settings = make_settings(AUTO_REPLACE_UNFILLED_ORDERS=True,
+                             REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600)
+    manager = ExecutionManager(broker, store, settings)
+    manager.submit_plan(_plan([_trade("AAPL", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, filled_qty=2.0, remaining_qty=3.0,
+                       submitted_at=(datetime.now(UTC) - timedelta(seconds=150)).isoformat())
+    store.upsert(aged)
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    summary = manager.reconcile()
+    assert summary.updates[0].action is None
+    assert broker.cancelled_order_ids == []
+    assert store.load_open_orders()[0].filled_qty == 2.0
+
+def test_partial_fill_remains_working_past_cancel_timeout(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=5))
+    manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, filled_qty=2.0, remaining_qty=3.0,
+                       submitted_at=(datetime.now(UTC) - timedelta(seconds=90)).isoformat())
+    store.upsert(aged)
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    assert manager.reconcile().updates[0].action is None
+    assert broker.cancelled_order_ids == []
+
+
+def test_escalation_does_not_replace_already_marketable_order(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600))
+    manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY, limit_price=101.0)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, limit_price=101.0,
+                       submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
+    store.upsert(aged)
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    assert manager.reconcile().updates[0].action is None
+    assert broker.cancelled_order_ids == []
+
+
+def test_escalation_skips_wide_spread_quote(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600))
+    manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY, limit_price=99.0)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
+    store.upsert(aged)
+    quote = broker.execution_quotes(["USMC"])["USMC"]
+    broker.quotes_override = {"USMC": dc_replace(quote, bid=99.0, ask=101.0, spread_bps=200.0)}
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    assert manager.reconcile().updates[0].action is None
+    assert broker.cancelled_order_ids == []
+
+
+def test_escalation_rejects_excessive_adverse_price_move(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    manager = ExecutionManager(
+        broker, store, make_settings(REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600),
+    )
+    manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
+    store.upsert(aged)
+    quote = broker.execution_quotes(["USMC"])["USMC"]
+    broker.quotes_override = {"USMC": dc_replace(quote, bid=101.00, ask=101.10)}
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    assert manager.reconcile().updates[0].action is None
+    assert broker.cancelled_order_ids == []
+
+
+def test_escalation_does_not_break_approved_max_order_notional(tmp_path: Path) -> None:
+    broker = RecordingBroker()
+    store = OrderStore(tmp_path)
+    settings = make_settings(
+        REPLACE_AFTER_SECONDS=1, CANCEL_AFTER_SECONDS=600, MAX_ORDER_NOTIONAL_USD=501.0,
+    )
+    manager = ExecutionManager(broker, store, settings)
+    manager.submit_plan(_plan([_trade("USMC", OrderSide.BUY)]))
+    entry = store.load_open_orders()[0]
+    aged = dc_replace(entry, submitted_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat())
+    store.upsert(aged)
+    quote = broker.execution_quotes(["USMC"])["USMC"]
+    broker.quotes_override = {"USMC": dc_replace(quote, bid=100.20, ask=100.25)}
+    broker.open_order_snapshots = [_snapshot_for_entry(aged)]
+    assert manager.reconcile().updates[0].action is None
+    assert broker.cancelled_order_ids == []

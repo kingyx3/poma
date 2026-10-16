@@ -19,6 +19,7 @@ from poma.broker import (
 from poma.config import Settings, TradingMode, get_settings
 from poma.data import build_data_client, utc_run_id
 from poma.engine import RebalanceEngine, RebalanceOutcome
+from poma.execution_costs import analyze_execution_costs, plan_summary, read_execution_fills, write_execution_costs
 from poma.execution_manager import ExecutionManager
 from poma.gateway_auth import RECOVERY_MESSAGES, AuthStatus, RecoveryEvent, probe_authentication
 from poma.health import check_ibkr, run_checks
@@ -35,6 +36,7 @@ from poma.order_lifecycle import (
 )
 from poma.order_status_alerts import lifecycle_status_alert, order_status_alert
 from poma.order_store import OrderStore
+from poma.rebalance_quality import assess_rebalance, assess_saved_run
 from poma.runtime_lock import RuntimeBusy, runtime_lock
 from poma.state import RETRY_WAIT_STATUS, TERMINAL_STATUSES, LocalState
 
@@ -82,8 +84,10 @@ def _portfolio_status_label(status: str, executed: bool) -> str:
         return "No orders accepted by IBKR — session marked attempted"
     if executed and status == "completed_with_order_issues":
         return "Completed with order issues"
+    if executed and status == "orders_pending":
+        return "Orders working — portfolio target completion pending"
     if executed:
-        return "Orders accepted/submitted"
+        return "Orders accepted/submitted (target completion unverified)"
     if status == "dry_run":
         return "Dry run — no orders submitted"
     if status == "blocked":
@@ -382,6 +386,31 @@ def _run_rebalance(
     except Exception as exc:  # noqa: BLE001 - reconciliation read is diagnostic, not blocking
         post_trade_snapshot_error = str(exc)
     journal.record_reconciliation(plan, post_trade_snapshot, post_trade_snapshot_error)
+    quality = assess_rebalance(
+        targets=plan.targets,
+        planned_value_usd=plan.portfolio_value_usd,
+        original_broker_value_usd=plan.broker_total_value_usd,
+        snapshot=post_trade_snapshot,
+        order_entries=[
+            entry for entry in OrderStore(settings.state_dir).load_latest_entries().values()
+            if entry.run_id == run_id
+        ],
+        min_trade_notional_usd=settings.min_trade_notional_usd,
+        min_weight_delta_pct=settings.min_weight_delta_pct,
+    )
+    journal.record_quality(run_id, quality)
+    console.print(
+        f"Rebalance quality: {quality['status']}; "
+        f"drift {quality['target_error_pct']:.2%}; "
+        f"fill ratio {quality['fill_ratio']:.1%}"
+    )
+    if quality["status"] == "incomplete":
+        send_alert(
+            settings,
+            f"⚠️ Rebalance incomplete for {session_date}: "
+            f"remaining portfolio drift {quality['target_error_pct']:.2%}. "
+            "Review reconciled quality report.",
+        )
 
     send_alert(settings, _portfolio_summary(session_date, plan, status, executed=True))
     console.print(f"Submitted {len(plan.trades)} trades. Report written to {report_path}")
@@ -605,24 +634,140 @@ def reconcile_orders() -> None:
     summary = manager.reconcile()
     if summary.checked == 0:
         console.print("No open orders to reconcile.")
-        return
-
-    table = Table("ticker", "side", "status", "filled/qty", "action", "matched")
-    for update in summary.updates:
-        entry = update.entry
-        table.add_row(
-            entry.ticker,
-            entry.side.value,
-            entry.lifecycle_state.value,
-            f"{entry.filled_qty:g}/{entry.quantity:g}",
-            update.action or "-",
-            "yes" if update.matched else "no",
-        )
-    console.print(table)
+    else:
+        table = Table("ticker", "side", "status", "filled/qty", "action", "matched")
+        for update in summary.updates:
+            entry = update.entry
+            table.add_row(
+                entry.ticker,
+                entry.side.value,
+                entry.lifecycle_state.value,
+                f"{entry.filled_qty:g}/{entry.quantity:g}",
+                update.action or "-",
+                "yes" if update.matched else "no",
+            )
+        console.print(table)
 
     for update in summary.updates:
         if update.action is not None or update.entry.is_terminal:
             send_alert(settings, lifecycle_status_alert(update.entry, update.action, update.detail))
+
+    # A working order can fill/expire after the submit process has exited.
+    # Refresh against the ORIGINAL approved targets, not newly selected strategy weights.
+    run_ids = {update.entry.run_id for update in summary.updates}
+    # The final fill may have been persisted before a crash, leaving no open ledger rows
+    # but a durable orders_pending session. Reevaluate that original plan after restart.
+    pending_run_id = LocalState(settings.state_dir).pending_rebalance_run_id()
+    if pending_run_id is not None:
+        run_ids.add(pending_run_id)
+    journal = ExecutionJournal(settings.state_dir)
+    assessable = [
+        run_id for run_id in sorted(run_ids)
+        if (journal.orders_dir / f"{run_id}.json").exists()
+    ]
+    if assessable:
+        try:
+            snapshot = broker.account_snapshot()
+        except Exception as exc:  # noqa: BLE001 - no false claim of portfolio completion
+            console.print(f"Post-reconcile portfolio read unavailable: {exc}")
+            snapshot = None
+        entries = store.load_latest_entries()
+        for run_id in assessable:
+            planned_path = journal.orders_dir / f"{run_id}.json"
+            planned = json.loads(planned_path.read_text())
+            if "targets" not in planned or "portfolio_value_usd" not in planned:
+                console.print(f"{run_id}: legacy journal lacks original targets; cannot certify completion")
+                continue
+            quality = assess_saved_run(
+                planned_path,
+                snapshot,
+                entries.values(),
+                min_trade_notional_usd=settings.min_trade_notional_usd,
+                min_weight_delta_pct=settings.min_weight_delta_pct,
+            )
+            previous_path = journal.reconciliations_dir / f"{run_id}-quality.json"
+            previous_status = None
+            if previous_path.exists():
+                previous_status = json.loads(previous_path.read_text()).get("status")
+            journal.record_quality(run_id, quality)
+            state = LocalState(settings.state_dir)
+            session_date = str(planned["session_date"])
+            if (
+                state.session_run_id(session_date) == run_id
+                and state.session_status(session_date) == "orders_pending"
+            ):
+                if quality["status"] == "target_reached":
+                    state.mark_session(session_date, run_id, "completed")
+                elif quality["status"] == "incomplete":
+                    state.mark_session(session_date, run_id, "completed_with_order_issues")
+            console.print(
+                f"{run_id}: rebalance quality {quality['status']}; "
+                f"target drift {quality['target_error_pct']:.2%}; "
+                f"fill ratio {quality['fill_ratio']:.1%}"
+            )
+            if quality["status"] in {"target_reached", "incomplete"} and quality["status"] != previous_status:
+                send_alert(
+                    settings,
+                    f"📊 Rebalance {run_id}: {quality['status']}; "
+                    f"portfolio drift {quality['target_error_pct']:.2%}",
+                )
+
+
+
+@app.command(name="execution-costs")
+def execution_costs_command(
+    executions_csv: Annotated[Path, typer.Argument(help="Normalized CSV of actual IBKR execution/Flex report fills.")],
+    state_dir: Annotated[Path, typer.Option(help="Local POMA state directory with the order ledger.")] = Path("state"),
+    output_csv: Annotated[Path, typer.Option(help="Output per-order execution cost audit.")] = Path(
+        "reports/execution-costs.csv"
+    ),
+) -> None:
+    """Audit actual IBKR commissions, separate venue fees, quote spread and signed price slippage.
+
+    Read-only: does not connect to the broker, send orders, or estimate hypothetical rates.
+    A missing broker fee is intentionally unknown, never treated as zero.
+    """
+    try:
+        fills = read_execution_fills(executions_csv)
+        costs = analyze_execution_costs(fills, OrderStore(state_dir).load_latest_entries())
+        write_execution_costs(output_csv, costs)
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]Execution-cost audit failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if not costs:
+        console.print("No POMA-tagged executed fills found; empty audit CSV written.")
+        return
+    table = Table("orderRef", "symbol", "fills", "commission USD", "extra fees USD", "spread bps", "slippage bps")
+    def number(value: float | None, places: int = 2) -> str:
+        return "unknown" if value is None else f"{value:,.{places}f}"
+
+    for cost in costs:
+        table.add_row(
+            cost.order_ref, cost.symbol, str(cost.fills),
+            number(cost.commission_usd), number(cost.exchange_fees_usd),
+            number(cost.captured_quote_spread_bps, 1),
+            number(cost.signed_price_slippage_bps, 1),
+        )
+    console.print(table)
+    for plan, summary in plan_summary(costs).items():
+        console.print(
+            f"{plan}: {summary['orders']} orders, "
+            f"USD {summary['notional_usd']:,.2f} filled, "
+            f"commissions USD {number(summary['reported_commission_usd'])}, "
+            f"fully itemized brokerage fees USD {number(summary['reported_broker_fees_usd'])}; "
+            f"fee bps {number(summary['reported_fee_bps'])}; "
+            f"reference slippage bps {number(summary['reference_slippage_bps'])}"
+        )
+    skipped = sum(not fill.order_ref.startswith("poma:") for fill in fills)
+    if skipped:
+        console.print(f"Ignored {skipped} non-POMA fills.")
+    console.print(
+        "Unknown costs remain unknown. Spread is the quoted pre-submit spread; slippage is signed "
+        "versus POMA's IBKR reference (not an arrival-midpoint benchmark). Comparing Fixed and "
+        "Tiered requires comparable actual executions; directed API orders are not Tiered-eligible."
+    )
+    console.print(f"Audit CSV written to {output_csv}")
 
 
 @app.command(name="gateway-auth-check")

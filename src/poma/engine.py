@@ -42,6 +42,7 @@ BLOCK_MARKER = "block execution"
 COMPLETED_STATUS = "completed"
 COMPLETED_WITH_ORDER_ISSUES_STATUS = "completed_with_order_issues"
 NO_ORDERS_ACCEPTED_STATUS = "no_orders_accepted"
+ORDERS_PENDING_STATUS = "orders_pending"
 
 
 @dataclass(frozen=True)
@@ -342,6 +343,12 @@ class RebalanceEngine:
             return NO_ORDERS_ACCEPTED_STATUS
         if order_results_have_issues(results):
             return COMPLETED_WITH_ORDER_ISSUES_STATUS
+        if any(
+            result.status in {"Submitted", "PreSubmitted"}
+            and result.filled + 1e-9 < result.quantity
+            for result in results
+        ):
+            return ORDERS_PENDING_STATUS  # Broker acceptance is not completed portfolio exposure.
         return COMPLETED_STATUS
 
     def run(self, session_date: str, run_id: str) -> RebalanceOutcome:

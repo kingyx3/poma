@@ -326,3 +326,27 @@ def test_current_holding_outside_provider_snapshot_can_still_be_reduced() -> Non
     assert tsla_trades[0].quantity == 10
     assert tsla_trades[0].reference_price == 200
     assert any("held TSLA" in warning for warning in plan.warnings)
+
+
+def test_approved_larger_usmc_order_is_one_order_not_fragmented() -> None:
+    standard = _engine(DRY_RUN_PORTFOLIO_VALUE_USD=100_000.0).build_plan("session", "large-standard")
+    assert any("orders exceed max notional" in warning for warning in standard.warnings)
+
+    approved = _engine(
+        DRY_RUN_PORTFOLIO_VALUE_USD=100_000.0,
+        MAX_ORDER_NOTIONAL_USD=120_000.0,
+    ).build_plan("session", "large-approved")
+    assert len(approved.trades) == 1
+    assert approved.trades[0].ticker == "USMC"
+    assert approved.trades[0].notional > 25_000
+    assert not any("orders exceed max notional" in warning for warning in approved.warnings)
+
+
+def test_broker_submission_without_fill_is_pending_not_completed() -> None:
+    from poma.models import OrderResult, OrderSide
+
+    result = OrderResult(
+        ticker="USMC", side=OrderSide.BUY, quantity=90, notional=9_000,
+        order_id=1, status="Submitted", filled=0, average_fill_price=None,
+    )
+    assert _engine().execution_status([result]) == "orders_pending"

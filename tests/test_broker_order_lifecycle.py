@@ -306,7 +306,7 @@ def test_replace_order_fails_when_original_order_is_not_open(monkeypatch: pytest
     assert fake_ib.placed_orders == []
 
 
-def test_replace_order_uses_remaining_quantity_after_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_replace_order_refuses_partial_fill_before_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_ib = FakeIB(
         open_trades=[
             FakeTrade(
@@ -319,17 +319,18 @@ def test_replace_order_uses_remaining_quantity_after_cancel(monkeypatch: pytest.
     monkeypatch.setattr("poma.broker.IB", lambda: fake_ib)
     broker = IbkrBroker(_settings(monkeypatch))
 
-    broker.replace_order(
-        order_id=7,
-        ticker="AAPL",
-        side=OrderSide.BUY,
-        quantity=5.0,
-        new_limit_price=101.5,
-        order_ref="poma:run-1:0:AAPL:BUY:r1",
-    )
+    with pytest.raises(RuntimeError, match="partially filled"):
+        broker.replace_order(
+            order_id=7,
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            quantity=5.0,
+            new_limit_price=101.5,
+            order_ref="poma:run-1:0:AAPL:BUY:r1",
+        )
 
-    _, replacement = fake_ib.placed_orders[0]
-    assert replacement.totalQuantity == 2.0
+    assert fake_ib.cancelled_orders == []
+    assert fake_ib.placed_orders == []
 
 
 def test_execution_quotes_reads_bid_ask_and_marks_freshness(monkeypatch: pytest.MonkeyPatch) -> None:

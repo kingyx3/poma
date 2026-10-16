@@ -2,9 +2,9 @@
 # configured rebalance window has opened. USMC uses LSE 14:30 local for US overlap.
 */5 * * * * cd /opt/poma && bash ops/cron/run_logged.sh /opt/poma/logs/poma-cron.log /usr/bin/docker compose --env-file .compose.env -f docker-compose.vm.yml run --rm poma monitor
 
-# Follow up on working orders independent of the rebalance process lifetime: replaces a
-# still-unfilled limit order once after REPLACE_AFTER_SECONDS, cancels it after
-# CANCEL_AFTER_SECONDS, and alerts on every lifecycle change. No-op when nothing is open.
+# Follow up on working orders independent of the rebalance process: at most one
+# fresh-quote escalation for zero-fill orders, cancel zero-fill after timeout,
+# leave partial DAY fills working and update the target-fulfillment assessment.
 # Run at +2 and +4 minutes inside each 5-minute monitor interval. This keeps reconcile off
 # every minute divisible by 5, so it cannot lose the shared command lock to poma monitor,
 # while still giving a 120s replacement policy a reconcile opportunity before a 300s cancel.

@@ -11,6 +11,7 @@ RETRY_WAIT_STATUS = "retry_wait"
 TERMINAL_STATUSES = {
     "completed",
     "completed_with_order_issues",
+    "orders_pending",  # Submission attempt is final; fills tracked by reconcile-orders.
     "no_orders_accepted",
     "dry_run",
     "blocked",
@@ -39,6 +40,19 @@ class LocalState:
             return None
         status = payload.get("last_rebalance_status")
         return str(status) if status else None
+
+    def pending_rebalance_run_id(self) -> str | None:
+        """Return the in-flight session's stable run ID for restart-safe quality checks.
+
+        A completed ledger can have zero open orders before the quality status is written
+        (e.g. a crash between the final fill and the journal update). Reconcile must
+        revisit this run without submitting any replacement orders.
+        """
+        payload = self._read()
+        if payload.get("last_rebalance_status") != "orders_pending":
+            return None
+        run_id = payload.get("last_rebalance_run_id")
+        return str(run_id) if run_id else None
 
     def has_session_attempt(self, session_date: str) -> bool:
         status = self.session_status(session_date)
