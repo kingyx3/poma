@@ -130,7 +130,7 @@ def test_open_order_query_reconnects_once_after_mid_session_disconnect(monkeypat
     broker = IbkrBroker(settings)
     attempts = []
 
-    def read():
+    def read(*, deadline=None):
         attempts.append(1)
         if len(attempts) == 1:
             raise OSError("connection reset")
@@ -148,7 +148,7 @@ def test_failed_open_order_query_exhausts_retry_and_reports_unavailable(monkeypa
     broker = IbkrBroker(settings)
     attempts = []
 
-    def fail_read():
+    def fail_read(*, deadline=None):
         attempts.append(1)
         raise ConnectionError("gateway down")
 
