@@ -40,10 +40,22 @@ def test_gateway_verify_socket_is_the_strict_readiness_gate() -> None:
 def test_live_schedule_is_installed_only_after_authenticated_readiness():
     workflow = (REPO_ROOT / ".github/workflows/deploy-gcp-vm.yml").read_text()
     runner = (REPO_ROOT / "ops/scripts/run_gateway_ops_workflow.py").read_text()
-    block = workflow.split('if [ "${{ inputs.trading_mode }}" = "live" ]; then', 1)[1].split('            fi', 1)[0]
+    block = workflow.split('if [ "${{ inputs.trading_mode }}" = "live" ] || [ "${{ inputs.trading_mode }}" = "paper" ]; then', 1)[1].split('            fi', 1)[0]
     assert 'crontab' not in block.split('else', 1)[0]
     assert 'crontab ops/cron/poma.cron' in block.split('else', 1)[1]
     enable = runner.index('Enable authenticated live schedule')
     readiness = runner.rindex('readiness = api_ready(mode, required=True)')
     assert readiness < runner.index('if readiness != 0:', readiness) < enable
     assert 'ALLOW_LIVE_TRADING=true' in runner[enable:]
+
+
+def test_paper_schedule_requires_gateway_readiness_and_auto_deploy_configures_it():
+    runner = (REPO_ROOT / "ops/scripts/run_gateway_ops_workflow.py").read_text()
+    auto = (REPO_ROOT / ".github/workflows/auto-cicd.yml").read_text()
+    paper = runner.index('if mode == "paper"')
+    ready = runner.index("readiness = api_ready(mode, required=True)", paper)
+    gate = runner.index("if readiness != 0:", ready)
+    schedule = runner.index("Enable authenticated paper schedule", gate)
+    assert paper < ready < gate < schedule
+    assert "sudo -u poma crontab /opt/poma/ops/cron/poma.cron" in runner[schedule:]
+    assert "gateway_required=true" in auto[auto.index('if [ "${deploy_required}" = "true" ]; then'): ]
