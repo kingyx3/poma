@@ -78,6 +78,8 @@ class ExecutionJournal:
             "unallocated_capital_usd": plan.unallocated_capital_usd,
             "target_exposure_usd": plan.target_exposure_usd,
             "planned_trades": [_trade_to_json(trade) for trade in plan.trades],
+            "targets": [target.__dict__ for target in plan.targets],
+            "portfolio_value_usd": plan.portfolio_value_usd,
             "broker_account_snapshot": plan.broker_account_snapshot_json(),
             "expected_account_snapshot": {
                 "cash_usd": plan.portfolio_cash_usd,
@@ -110,4 +112,13 @@ class ExecutionJournal:
             "post_trade_snapshot_error": post_trade_snapshot_error,
         }
         path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        return path
+
+    def record_quality(self, run_id: str, quality: dict[str, object]) -> Path:
+        """Persist latest target fulfillment independently from order callbacks."""
+        from poma.persistence import atomic_write_text
+
+        self.reconciliations_dir.mkdir(parents=True, exist_ok=True)
+        path = self.reconciliations_dir / f"{run_id}-quality.json"
+        atomic_write_text(path, json.dumps(quality, indent=2, sort_keys=True))
         return path

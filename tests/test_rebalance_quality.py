@@ -71,12 +71,21 @@ def test_missing_broker_snapshot_or_unknown_order_never_certifies_target():
 
 def test_asset_move_comparison_uses_current_portfolio_equity():
     report = _assess(_snapshot(92, 1_000), _order(state=OrderLifecycleState.FILLED, filled=90))
-    assert report["status"] == "incomplete"
+    assert report["status"] == "target_reached"
     assert report["target_error_usd"] == 20.0
 
 
 def test_managed_cap_outside_assets_cannot_certify_all_account_balance():
-    assert _assess(_snapshot(90, 5_000), _order(state=OrderLifecycleState.FILLED, filled=90))["status"] == "unknown"
+    report = assess_rebalance(
+        targets=[TargetPosition("USMC", 0.90, 9_000.0)],
+        planned_value_usd=10_000.0,
+        original_broker_value_usd=15_000.0,
+        snapshot=_snapshot(90, 5_000),
+        order_entries=[_order(state=OrderLifecycleState.FILLED, filled=90)],
+        min_trade_notional_usd=25,
+        min_weight_delta_pct=0.0025,
+    )
+    assert report["status"] == "unknown"
 
 
 def test_saved_targets_are_reused_without_strategy_recalculation(tmp_path):
