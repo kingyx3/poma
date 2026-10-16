@@ -16,12 +16,17 @@ notional cap is a safety block, not an instruction to split a large order.
   **directed API orders are not eligible for Tiered**. Do not assume that selecting Tiered
   in account settings makes a directed order eligible.
 - POMA paper/live orders require `ORDER_TIME_IN_FORCE=DAY` so they cannot persist into
-  another session and incur another minimum commission. Automatic cancel/resubmit
-  is **disabled** by default (`AUTO_REPLACE_UNFILLED_ORDERS=false`). If enabled, it
-  applies at most once and only to **completely unfilled** orders. Partially filled
-  orders are never automatically replaced, including deferred replacements.
-- Reconciliation still cancels working orders after `CANCEL_AFTER_SECONDS`. A partial fill
-  can therefore close as partially executed and cancelled, not as another buy/sell order.
+  another session and incur another minimum commission. One bounded escalation of
+  **completely unfilled** orders is enabled by default (`AUTO_REPLACE_UNFILLED_ORDERS=true`).
+  It can cancel and resubmit once after `REPLACE_AFTER_SECONDS` (120s), but only with a
+  fresh two-sided IBKR quote inside `EXECUTION_MAX_SPREAD_BPS`, and never beyond the
+  current ask for buys / bid for sells. Already-marketable orders are left untouched.
+  Set false for more passive execution with potentially lower fill rates.
+- Reconciliation cancels **zero-fill** orders after `CANCEL_AFTER_SECONDS` (300s).
+  Partially filled orders are never automatically modified or cancelled for timeout:
+  they remain working through the `DAY` lifetime. They may still expire with
+  residual exposure; POMA reports that remaining gap instead of automatically
+  fragmenting the trade.
   Avoid manual order fragmentation and frequent rebalancing merely to capture tiny drift.
 - IBKR warns that modifications following a partial fill and overnight persistence may
   trigger additional commission minimums. Verify fees against the account's country,
@@ -97,3 +102,38 @@ all-in costs. Do not silently map `SPYL` onto `USMC` or modify the default
 `INVESTMENT_STRATEGY_WEIGHTS=USMC=1.0`. SPYL is **not registered** as a direct
 POMA trading instrument; adding it would require separate qualification,
 calendar, price-series and safety tests and an explicit strategy decision.
+
+## Target fulfillment, controlled escalation and larger portfolios
+
+Order accepted is **not** target reached. A paper/live submission records a latest
+quality assessment at `state/reconciliations/<run_id>-quality.json` alongside the
+execution journal. The scheduled `poma reconcile-orders` command refreshes the
+assessment as IBKR orders fill, expire or cancel; it compares the *original* approved
+target weights with the latest broker holdings and cash. Metrics include aggregate
+absolute exposure drift (USD and fraction of equity), largest ticker drift, separate
+cash drift, working/unverified orders, and recorded filled/requested quantity.
+The final status is `pending`, `target_reached`, `incomplete`, or `unknown`.
+An unavailable snapshot, unresolved broker state or separately capped mandate
+never certifies completion. **Cash drift and exposure drift overlap; do not sum them.**
+
+POMA deliberately does not generate new residual orders from this read-only check.
+A partially executed DAY order continues working, but if the remainder expires the
+next assessment is `incomplete` and an alert is sent, rather than paying an
+unreviewed new minimum or risking a duplicated outstanding broker order.
+The earlier once-per-session monitor continues to treat a submission as *attempted*
+for idempotency; consult the quality report to judge target fulfillment.
+
+For a legitimate USMC order exceeding the **$25,000 default safety cap**, inspect
+the intended allocation, IBKR buying power and verified USMC contract/venue.
+Explicitly raise `MAX_ORDER_NOTIONAL_USD` to an operator-approved **single-order**
+ceiling (e.g. `50000` for a reviewed $40k rebalance), then test in paper mode.
+Do not bypass the cap or break the ETF into many small commission-bearing orders.
+Both plan sizing and fresh IBKR execution quote enforce the approved cap.
+
+Use matched real USMC samples to compare a resting order against the one-time
+zero-fill escalation. Track broker-reported per-order fees and slippage, fill ratio,
+residual cash and target-weight error; report **fee bps** separately from
+**reference-price slippage bps**. The reference is commonly ask/bid, so their
+sum is not an arrival-midpoint implementation shortfall. If any actual broker
+fee or reference quote is missing, the corresponding weighted metric remains
+unknown rather than guessed. No unsupported counterfactual Fixed/Tiered claims.

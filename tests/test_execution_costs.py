@@ -149,6 +149,6 @@ def test_plan_cost_summary_reports_normalized_fees_and_slippage() -> None:
         {"poma:run:0:USMC:BUY": _entry()},
     )
     summary = plan_summary(costs)
-    assert summary["tiered"]["reported_fee_bps"] is not None
-    assert summary["tiered"]["reference_slippage_bps"] is not None
-    assert summary["tiered"]["reported_broker_fees_usd"] == 1.5
+    assert summary["fixed"]["reported_fee_bps"] is not None
+    assert summary["fixed"]["reference_slippage_bps"] is not None
+    assert summary["fixed"]["reported_broker_fees_usd"] == 1.5
