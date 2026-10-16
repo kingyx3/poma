@@ -21,59 +21,12 @@ append_timestamped_output() {
   done >>"${log_path}"
 }
 
-send_failure_alert() {
-  local status="$1"
-  python3 - "${log_path}" "${status}" "${command_text}" <<'PY' || true
-from __future__ import annotations
-
-import json
-import os
-import socket
-import sys
-import urllib.error
-import urllib.request
-from pathlib import Path
-
-log_path, status, command_text = sys.argv[1:4]
-settings: dict[str, str] = {}
-env_path = Path(".env")
-if env_path.exists():
-    for raw_line in env_path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        settings[key.strip()] = value.strip().strip('"').strip("'")
-
-bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or settings.get("TELEGRAM_BOT_TOKEN")
-chat_id = os.environ.get("TELEGRAM_CHAT_ID") or settings.get("TELEGRAM_CHAT_ID")
-if not bot_token or not chat_id:
-    raise SystemExit(0)
-
-env_name = (os.environ.get("APP_ENV") or settings.get("APP_ENV") or "unknown").upper()
-text = "\n".join(
-    [
-        f"📈 POMA · {env_name}",
-        "🚨 Scheduled command failed",
-        f"Host: {socket.gethostname()}",
-        f"Status: {status}",
-        f"Command: {command_text}",
-        f"Log: {log_path}",
-    ]
-)
-payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
-request = urllib.request.Request(
-    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-    data=payload,
-    headers={"Content-Type": "application/json"},
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(request, timeout=15) as response:
-        response.read()
-except (OSError, urllib.error.URLError):
-    pass
-PY
+# The alert script reads only this invocation's log slice, not an older failure.
+# Keep alert delivery best-effort and outside the command's exit status.
+report_command_result() {
+  local status="$1" start_offset="$2" command_name="$3"
+  python3 ops/cron/alert_diagnostics.py \
+    "${log_path}" "${status}" "${command_name}" "${start_offset}" || true
 }
 
 mkdir -p "$(dirname "${log_path}")" "$(dirname "${lock_path}")"
@@ -90,7 +43,9 @@ if ! flock -n 9; then
   exit 0
 fi
 
+run_start_offset=$(stat -c %s -- "${log_path}" 2>/dev/null || echo 0)
 printf '[%s] ===== command start: %s =====\n' "$(utc_timestamp)" "${command_text}" >>"${log_path}"
+command_name="${!#}"
 
 set +e
 "$@" 2>&1 | append_timestamped_output
@@ -98,7 +53,5 @@ status="${PIPESTATUS[0]}"
 set -e
 
 printf '[%s] ===== command end: status=%s =====\n' "$(utc_timestamp)" "${status}" >>"${log_path}"
-if [ "${status}" -ne 0 ]; then
-  send_failure_alert "${status}"
-fi
+report_command_result "${status}" "${run_start_offset}" "${command_name}"
 exit "${status}"
