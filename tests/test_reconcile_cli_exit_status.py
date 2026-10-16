@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from typer.testing import CliRunner
-
 from conftest import make_settings
+from typer.testing import CliRunner
 
 from poma import cli
 from poma.execution_manager import ReconcileSummary
