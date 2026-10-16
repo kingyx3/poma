@@ -3,6 +3,7 @@ from __future__ import annotations
 import requests
 
 from poma.config import Settings
+from poma.telegram_outbox import enqueue
 
 
 def send_alert(settings: Settings, message: str) -> None:
@@ -19,7 +20,10 @@ def send_alert(settings: Settings, message: str) -> None:
         requests.post(
             url,
             json={"chat_id": settings.telegram_chat_id, "text": text},
-            timeout=15,
+            timeout=5,
         ).raise_for_status()
     except requests.RequestException:
+        # Failed delivery must never change a trade's result. Host cron retries
+        # this text from the shared state volume with a bounded outbox.
+        enqueue(settings.state_dir, text)
         return
