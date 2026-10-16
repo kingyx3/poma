@@ -488,6 +488,14 @@ def main() -> int:
     ) != 0:
         return 1
     try:
+        if action in {"configure-paper", "configure-live"}:
+            # The gateway will be restarted below. Prevent cron from hitting the
+            # unauthenticated API mid-restart; only successful readiness re-arms it.
+            if timed(
+                "Pause scheduled trades during Gateway reauthentication",
+                lambda: remote("sudo crontab -r -u poma 2>/dev/null || true", timeout=60),
+            ) != 0:
+                return 1
         if action == "status":
             return remote(f"sudo systemctl status ibgateway --no-pager --lines={log_lines} || true", timeout=180)
         if action == "restart":
