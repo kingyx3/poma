@@ -143,3 +143,10 @@ Escalation also fails closed if the refreshed price worsens beyond
 or if the repriced full remaining order exceeds `MAX_ORDER_NOTIONAL_USD`.
 These are independent of the bid/ask spread guard and prevent chasing a sharp
 market move even when that move comes with a tight spread.
+
+An accepted-but-unfilled submission marks the per-session monitor state
+`orders_pending`, which **still blocks resubmitting that session**. Scheduled
+order reconciliation upgrades this to `completed` only when the target portfolio
+check reports `target_reached`, or `completed_with_order_issues` if it reports
+`incomplete` after the orders close. `pending` and `unknown` never certify
+target completion. This avoids treating IBKR `Submitted` as a completed trade.

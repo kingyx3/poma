@@ -84,6 +84,8 @@ def _portfolio_status_label(status: str, executed: bool) -> str:
         return "No orders accepted by IBKR — session marked attempted"
     if executed and status == "completed_with_order_issues":
         return "Completed with order issues"
+    if executed and status == "orders_pending":
+        return "Orders working — portfolio target completion pending"
     if executed:
         return "Orders accepted/submitted (target completion unverified)"
     if status == "dry_run":
@@ -684,6 +686,16 @@ def reconcile_orders() -> None:
             if previous_path.exists():
                 previous_status = json.loads(previous_path.read_text()).get("status")
             journal.record_quality(run_id, quality)
+            state = LocalState(settings.state_dir)
+            session_date = str(planned["session_date"])
+            if (
+                state.session_run_id(session_date) == run_id
+                and state.session_status(session_date) == "orders_pending"
+            ):
+                if quality["status"] == "target_reached":
+                    state.mark_session(session_date, run_id, "completed")
+                elif quality["status"] == "incomplete":
+                    state.mark_session(session_date, run_id, "completed_with_order_issues")
             console.print(
                 f"{run_id}: rebalance quality {quality['status']}; "
                 f"target drift {quality['target_error_pct']:.2%}; "

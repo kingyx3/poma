@@ -340,3 +340,13 @@ def test_approved_larger_usmc_order_is_one_order_not_fragmented() -> None:
     assert approved.trades[0].ticker == "USMC"
     assert approved.trades[0].notional > 25_000
     assert not any("orders exceed max notional" in warning for warning in approved.warnings)
+
+
+def test_broker_submission_without_fill_is_pending_not_completed() -> None:
+    from poma.models import OrderResult, OrderSide
+
+    result = OrderResult(
+        ticker="USMC", side=OrderSide.BUY, quantity=90, notional=9_000,
+        order_id=1, status="Submitted", filled=0, average_fill_price=None,
+    )
+    assert _engine().execution_status([result]) == "orders_pending"

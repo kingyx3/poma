@@ -11,6 +11,7 @@ RETRY_WAIT_STATUS = "retry_wait"
 TERMINAL_STATUSES = {
     "completed",
     "completed_with_order_issues",
+    "orders_pending",  # Submission attempt is final; fills tracked by reconcile-orders.
     "no_orders_accepted",
     "dry_run",
     "blocked",

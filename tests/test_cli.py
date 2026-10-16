@@ -338,3 +338,26 @@ def test_reconcile_orders_certifies_target_only_after_confirmed_fill(monkeypatch
     assert quality["status"] == "target_reached"
     assert quality["target_error_usd"] == 0.0
     assert any("target_reached" in alert for alert in alerts)
+
+
+def test_monitor_does_not_resubmit_orders_pending(monkeypatch, tmp_path) -> None:
+    from poma.market_calendar import MarketDecision
+
+    settings = make_settings(STATE_DIR=str(tmp_path / "state"))
+    monkeypatch.setattr("poma.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "poma.cli.should_rebalance_now",
+        lambda **_kwargs: MarketDecision(should_run=True, session_date="2026-10-16", reason="ok"),
+    )
+    state = LocalState(settings.state_dir)
+    state.begin_session("2026-10-16", "pending-run")
+    state.mark_session("2026-10-16", "pending-run", "orders_pending")
+    monkeypatch.setattr(
+        "poma.cli._run_rebalance",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("cannot duplicate pending order")),
+    )
+
+    result = runner.invoke(app, ["monitor"])
+
+    assert result.exit_code == 0
+    assert state.session_status("2026-10-16") == "orders_pending"
