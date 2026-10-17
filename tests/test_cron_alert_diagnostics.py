@@ -93,3 +93,35 @@ def test_host_wrapper_retains_exit_code_and_records_incident(tmp_path):
     )
     assert passed.returncode == 0
     assert not json.loads(status_path.read_text())["active"]
+
+
+def test_one_incident_survives_gateway_restart_error_category_transition(tmp_path, monkeypatch):
+    reporter = _module()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("POMA_CRON_ALERT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("APP_ENV", "dev")
+    clock = [1000]
+    monkeypatch.setattr(reporter.time, "time", lambda: clock[0])
+    messages = []
+    monkeypatch.setattr(reporter, "send_message", lambda msg: messages.append(msg) or True)
+    path = tmp_path / "reconcile.log"
+    path.write_text("BrokerUnavailable: gateway API handshake failed\n")
+    reporter.report(path, 1, "reconcile-orders", 0)
+    assert len(messages) == 1
+
+    # Gateway restart changes the signature, not the underlying unresolved incident.
+    clock[0] += 60
+    path.write_text("ConnectionRefusedError: Connect call failed\n")
+    reporter.report(path, 1, "reconcile-orders", 0)
+    clock[0] += 60
+    reporter.report(path, 1, "reconcile-orders", 0)
+    state = json.loads((tmp_path / "state/cron-alert-reconcile-orders.json").read_text())
+    assert state["count"] == 3
+    assert state["first_failed_at"] == 1000
+    assert state["category"] == "IBKR_CONNECTION_REFUSED"
+    assert "Consecutive failures: 3" in messages[-1]
+
+    clock[0] += 60
+    reporter.report(path, 0, "reconcile-orders", 0)
+    assert "Previous failures: 3" in messages[-1]
+    assert "Incident duration: 3 min" in messages[-1]
