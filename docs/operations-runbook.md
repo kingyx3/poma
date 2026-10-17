@@ -112,6 +112,43 @@ Do not skip paper validation. Before live:
 6. Deploy with `trading_mode=live`, `data_provider=yahoo`, and `allow_live_trading=true`.
 7. Manually review the first live report immediately after execution.
 
+## Reconciliation incident recovery gate (paper and live)
+
+A failed scheduled `reconcile-orders` command creates a durable incident at
+`state/cron-alert-reconcile-orders.json`. **A changed IBKR exception category
+does not reset its counter or duration.** The incident stays active until a
+successful scheduled reconciliation; an in-process runtime-lock skip (exit 75)
+does not count as a successful recovery.
+
+While an incident is active, **paper/live rebalance is blocked before planning
+or submitting new orders**; scheduled monitor retains its stable run ID and
+retries, rather than sending a duplicate order. Dry-run diagnostics remain
+possible. This gate complements the existing account/open-order checks; it does
+not cancel existing broker orders or claim they are safe just because Gateway
+login has recovered.
+
+When the host cron runner sees an active reconcile incident, it invokes
+`poma reconcile-orders --verify-recovery`. A clear/recovery notification
+requires all of:
+
+- A successful IBKR open POMA order query and reconciliation without unknown,
+  unverified, or failed ledger updates (including broker-discovered orders).
+- A fresh authenticated read of the **configured account's** USD cash,
+  positions and portfolio value.
+- A read of IBKR's available recent completed API orders and execution
+  records, checking POMA-tagged orders against durable ledger identities.
+  Missing recent completed orders in the local history or identity conflicts
+  block recovery rather than allowing a misleading green notification.
+
+IBKR API completed-order/execution history is not an indefinite audit trail.
+Even after success, *older* order state may need Flex statements, order
+activity reports, or manual investigation. A Gateway watchdog login-success
+message is not equivalent to reconciled order finality. If the incident persists
+through regular trading hours, run the read-only DEV diagnostics, inspect the
+Gateway Ops workflow and order activity, and investigate before promoting
+the release to production. Do not manually delete the incident file to
+force-enable trading.
+
 ## Order lifecycle follow-up
 
 Reaching `PreSubmitted`/`Submitted` only means IBKR accepted the order; a working limit order can sit unfilled indefinitely. `ops/cron/poma.cron` schedules `poma reconcile-orders` on its own cron entry at +2 and +4 minutes within each 5-minute `poma monitor` interval. Those slots never land on a minute divisible by 5, so reconciliation does not compete with monitor for the shared single-VM command lock, while a 120-second replacement threshold still gets a scheduled opportunity before the 300-second cancellation threshold. Working orders are therefore followed up even after the rebalance process exits: reconciliation polls IBKR for every open POMA-tagged order, replaces a still-unfilled order once after `REPLACE_AFTER_SECONDS`, cancels it after `CANCEL_AFTER_SECONDS` if still unfilled, and sends a Telegram alert on every lifecycle change. The replace price is computed from a fresh IBKR quote at reconcile time (`REPLACE_PRICE_IMPROVEMENT_BPS` applied on top of the current side-of-market price), not by blindly improving the order's old limit price — if no valid fresh quote is available the replace is skipped for that pass rather than repricing off stale data. It is a no-op in `dry_run` mode and safe to run even when there is nothing open.
