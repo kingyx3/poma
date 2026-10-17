@@ -634,6 +634,9 @@ def reconcile_orders(
     """
     settings = get_settings()
     if settings.trading_mode == TradingMode.DRY_RUN:
+        if verify_recovery:
+            console.print("Recovery audit requires an authenticated paper/live IBKR account.")
+            raise typer.Exit(code=1)
         console.print("dry_run mode never places broker orders; nothing to reconcile.")
         return
 
