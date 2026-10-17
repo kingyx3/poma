@@ -116,3 +116,19 @@ def test_cli_rebalance_does_not_plan_orders_while_recovery_incident_active(tmp_p
         cli._run_rebalance("2026-10-17", "run-1", force_dry_run=False,
                            allow_outside_market_hours=True)
     assert settings.trading_mode == TradingMode.PAPER
+
+
+def test_dry_run_reconciliation_cannot_clear_real_broker_incident(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from poma import cli
+
+    monkeypatch.setattr(cli, "get_settings", lambda: make_settings(
+        TRADING_MODE="dry_run", STATE_DIR=tmp_path,
+    ))
+    monkeypatch.setattr(
+        cli, "build_broker",
+        lambda _: pytest.fail("dry run recovery must not pretend a broker was queried"),
+    )
+    result = CliRunner().invoke(cli.app, ["reconcile-orders", "--verify-recovery"])
+    assert result.exit_code == 1
+    assert "requires an authenticated paper/live" in result.output
