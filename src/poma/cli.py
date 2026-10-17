@@ -37,6 +37,7 @@ from poma.order_lifecycle import (
 from poma.order_status_alerts import lifecycle_status_alert, order_status_alert
 from poma.order_store import OrderStore
 from poma.rebalance_quality import assess_rebalance, assess_saved_run
+from poma.recovery_readiness import assert_trading_recovery_ready, verify_broker_recovery
 from poma.runtime_lock import RuntimeBusy, runtime_lock
 from poma.state import RETRY_WAIT_STATUS, TERMINAL_STATUSES, LocalState
 
@@ -318,6 +319,10 @@ def _run_rebalance(
     settings = get_settings()
     if force_dry_run:
         settings = settings.model_copy(update={"trading_mode": TradingMode.DRY_RUN})
+    if settings.trading_mode != TradingMode.DRY_RUN:
+        # A verified Gateway login alone cannot clear a failed order reconciliation.
+        # Keep new orders blocked until the host's read-only audit clears the incident.
+        assert_trading_recovery_ready(settings.state_dir)
     _assert_rebalance_market_window(
         settings,
         allow_outside_market_hours=allow_outside_market_hours,
@@ -615,8 +620,12 @@ def ibkr_check() -> None:
 
 
 @app.command(name="reconcile-orders")
-@_serialized_command(skip_if_busy=True)
-def reconcile_orders() -> None:
+@_serialized_command(skip_if_busy=False)
+def reconcile_orders(
+    verify_recovery: Annotated[
+        bool, typer.Option(help="Read-only post-outage broker account and order history audit.")
+    ] = False,
+) -> None:
     """Poll IBKR for open POMA orders and apply the replace-once/cancel timeout policy.
 
     Intended to run on a schedule (e.g. every 1-2 minutes) after a rebalance so working limit
@@ -625,6 +634,9 @@ def reconcile_orders() -> None:
     """
     settings = get_settings()
     if settings.trading_mode == TradingMode.DRY_RUN:
+        if verify_recovery:
+            console.print("Recovery audit requires an authenticated paper/live IBKR account.")
+            raise typer.Exit(code=1)
         console.print("dry_run mode never places broker orders; nothing to reconcile.")
         return
 
@@ -716,13 +728,27 @@ def reconcile_orders() -> None:
     # other entries when one broker/history operation fails. That is not a successful
     # overall reconciliation: make cron see a failure, rather than falsely alerting
     # recovery and silently leaving an order unverified.
-    failed_updates = [update for update in summary.updates if update.action == "error"]
-    if failed_updates:
+    failed_updates = [
+        update for update in summary.updates
+        if update.action in {"error", "unverified"}
+        or (not update.entry.is_terminal and update.entry.lifecycle_state.value == "unknown")
+    ]
+    # Missing history or UNKNOWN order state is not evidence of a successful reconciliation.
+    # This remains a failure even when the open-order API itself has recovered.
+    if failed_updates or any(
+        entry.lifecycle_state.value == "unknown"
+        for entry in store.load_open_orders()
+    ):
         console.print(
-            f"ReconciliationError: {len(failed_updates)} order update(s) failed; "
+            f"ReconciliationError: {len(failed_updates)} unverified order update(s); "
             "broker order finality remains unverified"
         )
         raise typer.Exit(code=1)
+
+    if verify_recovery:
+        # Only the host cron wrapper enables this after an active incident. No
+        # order/cancel action is issued by the audit itself.
+        console.print(verify_broker_recovery(broker, store, settings, summary))
 
 
 @app.command(name="execution-costs")

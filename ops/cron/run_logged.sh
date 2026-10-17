@@ -43,14 +43,51 @@ if ! flock -n 9; then
   exit 0
 fi
 
+# A prior failure requires more than a successful socket call. The app's
+# --verify-recovery check audits broker account/positions and recent order history
+# before the reporter may mark that incident recovered. Malformed incident state
+# triggers verification too (fail closed).
+recovery_check_required() {
+  python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(os.getenv("POMA_CRON_ALERT_STATE_DIR", "state")) / "cron-alert-reconcile-orders.json"
+try:
+    value = json.loads(path.read_text())
+except FileNotFoundError:
+    sys.exit(1)
+except (OSError, ValueError):
+    sys.exit(0)
+sys.exit(1 if isinstance(value, dict) and value.get("active") is False else 0)
+PY
+}
+
 run_start_offset=$(stat -c %s -- "${log_path}" 2>/dev/null || echo 0)
 printf '[%s] ===== command start: %s =====\n' "$(utc_timestamp)" "${command_text}" >>"${log_path}"
 command_name="${!#}"
 
 set +e
-"$@" 2>&1 | append_timestamped_output
-status="${PIPESTATUS[0]}"
+if [[ "${command_name}" == "reconcile-orders" ]] && recovery_check_required; then
+  printf '[%s] ===== active broker incident: verifying account, orders and recent executions =====\n' "$(utc_timestamp)" >>"${log_path}"
+  "$@" --verify-recovery 2>&1 | append_timestamped_output
+  status="${PIPESTATUS[0]}"
+else
+  "$@" 2>&1 | append_timestamped_output
+  status="${PIPESTATUS[0]}"
+fi
 set -e
+
+# A concurrent *direct* CLI command can hold the in-container runtime lock
+# despite the host cron lock. An intentional skip is neither success nor failure.
+# Do not close a real broker incident with this spurious zero-work invocation.
+if [[ "${command_name}" == "reconcile-orders" && "${status}" -eq 75 ]] \
+    && tail -c +"$((run_start_offset + 1))" "${log_path}" | grep -q 'Skipping: another POMA command'; then
+  printf '[%s] ===== reconciliation skipped: runtime lock busy =====\n' "$(utc_timestamp)" >>"${log_path}"
+  exit 0
+fi
 
 printf '[%s] ===== command end: status=%s =====\n' "$(utc_timestamp)" "${status}" >>"${log_path}"
 report_command_result "${status}" "${run_start_offset}" "${command_name}"

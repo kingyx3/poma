@@ -46,7 +46,7 @@ def test_exception_releases_lock_without_unlinking(tmp_path: Path) -> None:
         assert (tmp_path / 'poma-runtime.lock').stat().st_ino == inode
 
 
-@pytest.mark.parametrize(('command', 'exit_code'), [('rebalance', 75), ('monitor', 0), ('reconcile-orders', 0)])
+@pytest.mark.parametrize(('command', 'exit_code'), [('rebalance', 75), ('monitor', 0), ('reconcile-orders', 75)])
 def test_busy_cli_does_not_touch_state_or_broker(monkeypatch, tmp_path: Path, command: str, exit_code: int) -> None:
     monkeypatch.setattr(cli, 'get_settings', lambda: make_settings(STATE_DIR=tmp_path))
 
