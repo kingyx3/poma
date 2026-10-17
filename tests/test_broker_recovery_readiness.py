@@ -120,6 +120,7 @@ def test_cli_rebalance_does_not_plan_orders_while_recovery_incident_active(tmp_p
 
 def test_dry_run_reconciliation_cannot_clear_real_broker_incident(tmp_path, monkeypatch):
     from typer.testing import CliRunner
+
     from poma import cli
 
     monkeypatch.setattr(cli, "get_settings", lambda: make_settings(
