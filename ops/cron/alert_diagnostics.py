@@ -213,11 +213,14 @@ def report(log_path: Path, status: int, command: str, start_offset: int) -> None
     lines = recent_lines(log_path, start_offset)
     category, explanation, signature = classify(lines)
     fingerprint = hashlib.sha256(category.encode()).hexdigest()[:10]
-    same = old.get("active") and old.get("fingerprint") == fingerprint
-    count = int(old.get("count", 0)) + 1 if same else 1
-    first = int(old.get("first_failed_at", now)) if same else now
-    last_sent = int(old.get("last_alert_at", 0)) if same else 0
-    notify = not same or count == 3 or now - last_sent >= REPEAT_ALERT_SECONDS
+    # One incident lasts until a genuinely successful command, even if a Gateway restart
+    # changes BrokerUnavailable to ConnectionRefusedError midway through the outage.
+    active = old.get("active") is True
+    changed_category = active and old.get("fingerprint") != fingerprint
+    count = int(old.get("count", 0)) + 1 if active else 1
+    first = int(old.get("first_failed_at", now)) if active else now
+    last_sent = int(old.get("last_alert_at", 0)) if active else 0
+    notify = not active or changed_category or count == 3 or now - last_sent >= REPEAT_ALERT_SECONDS
     new_state = {
         "active": True, "count": count, "fingerprint": fingerprint,
         "category": category, "first_failed_at": first,
