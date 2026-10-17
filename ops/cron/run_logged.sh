@@ -84,7 +84,7 @@ set -e
 # despite the host cron lock. An intentional skip is neither success nor failure.
 # Do not close a real broker incident with this spurious zero-work invocation.
 if [[ "${command_name}" == "reconcile-orders" && "${status}" -eq 75 ]] \
-    && tail -n 10 "${log_path}" | grep -q 'Skipping: another POMA command'; then
+    && tail -c +"$((run_start_offset + 1))" "${log_path}" | grep -q 'Skipping: another POMA command'; then
   printf '[%s] ===== reconciliation skipped: runtime lock busy =====\n' "$(utc_timestamp)" >>"${log_path}"
   exit 0
 fi
