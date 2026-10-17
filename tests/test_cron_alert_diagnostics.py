@@ -125,3 +125,43 @@ def test_one_incident_survives_gateway_restart_error_category_transition(tmp_pat
     reporter.report(path, 0, "reconcile-orders", 0)
     assert "Previous failures: 3" in messages[-1]
     assert "Incident duration: 3 min" in messages[-1]
+
+
+def test_wrapper_audits_before_closing_incident_and_does_not_count_runtime_skips(tmp_path):
+    (tmp_path / "ops/cron").mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "ops/cron/run_logged.sh", tmp_path / "ops/cron/run_logged.sh")
+    shutil.copy(REPORTER, tmp_path / "ops/cron/alert_diagnostics.py")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    incident = state_dir / "cron-alert-reconcile-orders.json"
+    incident.write_text(json.dumps({
+        "active": True, "count": 2, "first_failed_at": 1,
+        "last_success_at": None, "fingerprint": "older-category",
+    }))
+    env = dict(os.environ)
+    env["POMA_COMMAND_LOCK_PATH"] = str(tmp_path / "lock")
+    env["POMA_CRON_ALERT_STATE_DIR"] = str(state_dir)
+    logfile = tmp_path / "cron.log"
+    prefix = ["bash", "ops/cron/run_logged.sh", str(logfile), "bash", "-c"]
+
+    # An exit 75 from the in-container process lock MUST NOT clear the incident.
+    busy = subprocess.run(
+        prefix + ["echo 'Skipping: another POMA command holds the runtime lock'; exit 75",
+                  "reconcile-orders"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert busy.returncode == 0
+    assert json.loads(incident.read_text())["active"] is True
+
+    # The cron wrapper appends the read-only verification flag for a real success.
+    recovered = subprocess.run(
+        prefix + [
+            'test "$1" = "--verify-recovery" || exit 18; echo "Broker recovery audit passed"',
+            "reconcile-orders",
+        ],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert recovered.returncode == 0
+    assert "--verify-recovery" not in recovered.stderr
+    assert "Broker recovery audit passed" in logfile.read_text()
+    assert json.loads(incident.read_text())["active"] is False
