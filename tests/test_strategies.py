@@ -21,7 +21,10 @@ def _snapshot(tickers: list[str]) -> pd.DataFrame:
 def test_default_registry_contains_core_etf_and_rank_velocity_strategies() -> None:
     registry = default_registry()
 
-    assert registry.names() == ("SP1", "USMC", CORE_ETF_STRATEGY_NAME, RANK_STRATEGY_NAME)
+    assert registry.names() == (
+        "BUGG", "IUCS", "SP1", "USMC", "USPY",
+        CORE_ETF_STRATEGY_NAME, "core_satellite", RANK_STRATEGY_NAME,
+    )
     assert registry.get("USMC").name == "USMC"
     assert registry.get("SP1").name == "SP1"
     assert registry.get(RANK_STRATEGY_NAME).name == RANK_STRATEGY_NAME
@@ -31,7 +34,11 @@ def test_default_registry_contains_core_etf_and_rank_velocity_strategies() -> No
 def test_registry_get_unknown_strategy_lists_available_names() -> None:
     registry = default_registry()
 
-    with pytest.raises(KeyError, match="available strategies: SP1, USMC, core_etf, rank_velocity_size_equal_weight"):
+    expected = (
+        "available strategies: BUGG, IUCS, SP1, USMC, USPY, "
+        "core_etf, core_satellite, rank_velocity_size_equal_weight"
+    )
+    with pytest.raises(KeyError, match=expected):
         registry.get("does_not_exist")
 
 

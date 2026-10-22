@@ -133,6 +133,11 @@ jobs:
       MARKET_CALENDAR: ${{ vars.MARKET_CALENDAR }}
       REBALANCE_AFTER_OPEN_MINUTES: ${{ vars.REBALANCE_AFTER_OPEN_MINUTES }}
       LEGACY_STRATEGY_ALLOCATIONS: ${{ vars.STRATEGY_ALLOCATIONS || secrets.STRATEGY_ALLOCATIONS }}
+      CORE_SATELLITE_CORE_TICKER: ${{ vars.CORE_SATELLITE_CORE_TICKER }}
+      CORE_SATELLITE_CORE_PCT: ${{ vars.CORE_SATELLITE_CORE_PCT }}
+      CORE_SATELLITE_SATELLITES: ${{ vars.CORE_SATELLITE_SATELLITES }}
+      CORE_SATELLITE_REQUIRE_IRISH_DOMICILE: ${{ vars.CORE_SATELLITE_REQUIRE_IRISH_DOMICILE }}
+      MIN_WEIGHT_DELTA_PCT: ${{ vars.MIN_WEIGHT_DELTA_PCT }}
 
     steps:
       - name: Check out repository
@@ -212,6 +217,10 @@ jobs:
           set_default INVESTMENT_STRATEGY_WEIGHTS "USMC=1.0"
           set_default CASH_TARGET_PCT "0.02"
           # Investment strategies are weighted once; core_etf always holds USMC.
+          set_default CORE_SATELLITE_CORE_TICKER "USMC"
+          set_default CORE_SATELLITE_CORE_PCT "0.70"
+          set_default CORE_SATELLITE_SATELLITES "USPY,IUCS"
+          set_default CORE_SATELLITE_REQUIRE_IRISH_DOMICILE "true"
           set_default CORE_ETF_TREND_FILTER "false"
           set_default CORE_ETF_TREND_SMA_MONTHS "10"
           set_default CORE_ETF_SAFE_ASSET "cash"

@@ -40,6 +40,18 @@ Allocate directly by instrument ticker: `USMC=1.0`, `USMC=0.8,SP1=0.2`, or a mix
 `INVESTMENT_STRATEGY_WEIGHTS`, which must total exactly `1.0`; the cash weight
 is configured independently through `CASH_TARGET_PCT`.
 
+### Core-satellite
+
+To run a core with thematic satellites (default 70% `USMC`, 15% cybersecurity `USPY`, 15% consumer staples `IUCS`), set `INVESTMENT_STRATEGY_WEIGHTS=core_satellite=1.0` and also these Environment variables, which paper/live preflight requires whenever `core_satellite` is allocated:
+
+| GitHub Environment variable | Example |
+|---|---|
+| `CORE_SATELLITE_CORE_TICKER` | `USMC` |
+| `CORE_SATELLITE_CORE_PCT` | `0.70` |
+| `CORE_SATELLITE_SATELLITES` | `USPY,IUCS` |
+
+Optional: `CORE_SATELLITE_REQUIRE_IRISH_DOMICILE` (default `true`) and `MIN_WEIGHT_DELTA_PCT` (rebalance band). See [`strategies/core-satellite.md`](strategies/core-satellite.md).
+
 Invalid percentages, unregistered strategies and conflicting market calendars
 fail before deployment. The legacy `STRATEGY_ALLOCATIONS` full-account allocation
 variable/secret is rejected in the GitHub workflow to avoid ambiguous allocation

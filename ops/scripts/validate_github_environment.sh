@@ -35,6 +35,13 @@ if [ "${mode}" != "dry_run" ]; then
   require_var MARKET_CALENDAR
   require_var REBALANCE_AFTER_OPEN_MINUTES
 fi
+# A core_satellite sleeve must name its core, core share and satellites explicitly in paper/live,
+# for the same reason: a default must not silently decide which funds are bought.
+if [ "${mode}" != "dry_run" ] && [[ ",${INVESTMENT_STRATEGY_WEIGHTS:-}," == *"core_satellite="* ]]; then
+  require_var CORE_SATELLITE_CORE_TICKER
+  require_var CORE_SATELLITE_CORE_PCT
+  require_var CORE_SATELLITE_SATELLITES
+fi
 if [ -n "${LEGACY_STRATEGY_ALLOCATIONS:-}" ]; then
   echo "::error::Legacy STRATEGY_ALLOCATIONS GitHub variable/secret is not supported by the new deploy flow; migrate it to INVESTMENT_STRATEGY_WEIGHTS + CASH_TARGET_PCT" >&2
   exit 1

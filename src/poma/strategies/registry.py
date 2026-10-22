@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from poma.strategies.base import Strategy
 from poma.strategies.core_etf import CoreEtfStrategy
+from poma.strategies.core_satellite import CoreSatelliteStrategy
 from poma.strategies.direct_etf import DIRECT_ETF_TICKERS, DirectEtfStrategy
 from poma.strategies.rank_velocity_size_equal_weight import RankVelocitySizeEqualWeightStrategy
 
@@ -31,6 +32,7 @@ class StrategyRegistry:
 def default_registry() -> StrategyRegistry:
     registry = StrategyRegistry()
     registry.register(CoreEtfStrategy())
+    registry.register(CoreSatelliteStrategy())
     for ticker in sorted(DIRECT_ETF_TICKERS):
         registry.register(DirectEtfStrategy(ticker))
     registry.register(RankVelocitySizeEqualWeightStrategy())

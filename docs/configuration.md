@@ -22,6 +22,10 @@ Do not commit `.env`, `.env.deploy`, `state/`, `reports`, or `logs`. The `data/m
 | `INVESTMENT_STRATEGY_WEIGHTS` | yes for paper/live deploy | `USMC=1.0` | Strategy weights relative to the invested part of the portfolio, NOT total account equity. Must total 100%. Example `USMC=80%,SP1=20%` or `USMC=80%,rank_velocity_size_equal_weight=20%`. Direct USD UCITS tickers `USMC` and `SP1` are registered, and unknown tickers are rejected until their instrument definitions are added. New strategy names must first be registered in code. |
 | `CASH_TARGET_PCT` | yes for paper/live deploy | `0.02` | Fraction of total managed portfolio kept as cash; defaults to 2%. The remaining 98% is split by `INVESTMENT_STRATEGY_WEIGHTS`. |
 | `STRATEGY_ALLOCATIONS` | legacy only | unset | Backward-compatible full-portfolio percentages (`core_etf=0.98,cash=0.02`). Cannot be combined with `INVESTMENT_STRATEGY_WEIGHTS`. GitHub deploy workflow rejects legacy environment var and requires migration to the new fields. |
+| `CORE_SATELLITE_CORE_TICKER` | yes | `USMC` | Core fund of the `core_satellite` sleeve. See [core-satellite](strategies/core-satellite.md). |
+| `CORE_SATELLITE_CORE_PCT` | yes | `0.70` | Core share of the sleeve; the rest is split across the satellites. |
+| `CORE_SATELLITE_SATELLITES` | yes | `USPY,IUCS` | Satellite tickers: equal weight, or `USPY=0.6,IUCS=0.4`. |
+| `CORE_SATELLITE_REQUIRE_IRISH_DOMICILE` | yes | `true` | Reject funds whose ISIN is not Irish (`IE`). |
 | `CORE_ETF_TREND_FILTER` | yes | `false` | When `true`, `core_etf` holds each ETF only while its last completed month-end close is above its `CORE_ETF_TREND_SMA_MONTHS` average. |
 | `CORE_ETF_TREND_SMA_MONTHS` | yes | `10` | Month-end moving-average length for the optional trend filter. |
 | `CORE_ETF_SAFE_ASSET` | yes | `cash` | Where the trend filter moves a risk-off ETF's weight: an ETF ticker (for example `SGOV`) or `cash`. |
