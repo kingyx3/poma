@@ -299,3 +299,18 @@ def test_deploy_workflow_leaves_live_quote_proof_opt_in() -> None:
     assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "false"' in block
     assert 'set_default REQUIRE_LIVE_EXECUTION_QUOTES "true"' not in block
     assert "proof-only run" in block
+
+
+def test_deploy_workflow_passes_core_satellite_vars_with_safe_defaults() -> None:
+    workflow = _text(DEPLOY_WORKFLOW)
+    for name in (
+        "CORE_SATELLITE_CORE_TICKER",
+        "CORE_SATELLITE_CORE_PCT",
+        "CORE_SATELLITE_SATELLITES",
+        "CORE_SATELLITE_REQUIRE_IRISH_DOMICILE",
+        "MIN_WEIGHT_DELTA_PCT",
+    ):
+        assert f"{name}: ${{{{ vars.{name} }}}}" in workflow
+    assert 'set_default CORE_SATELLITE_CORE_PCT "0.70"' in workflow
+    assert 'set_default CORE_SATELLITE_SATELLITES "USPY,IUCS"' in workflow
+    assert 'set_default CORE_SATELLITE_REQUIRE_IRISH_DOMICILE "true"' in workflow

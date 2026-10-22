@@ -44,5 +44,7 @@ No engine changes should be required for a normal new strategy sleeve.
 |---|---|
 | `USMC` (default direct holding) | [`docs/strategies/us-megacap-ucits.md`](strategies/us-megacap-ucits.md) |
 | `SP1` (direct holding) | [`docs/strategies/us-megacap-ucits.md`](strategies/us-megacap-ucits.md) |
+| `core_satellite` (core UCITS ETF + thematic satellites, configured from GitHub variables) | [`docs/strategies/core-satellite.md`](strategies/core-satellite.md) |
+| `USPY`, `BUGG`, `IUCS` (direct thematic UCITS holdings) | [`docs/strategies/core-satellite.md`](strategies/core-satellite.md) |
 | `core_etf` (legacy configurable trend strategy) | [`docs/strategies/core-etf.md`](strategies/core-etf.md) |
 | `rank_velocity_size_equal_weight` | [`docs/strategies/rank-velocity-size-equal-weight.md`](strategies/rank-velocity-size-equal-weight.md) |

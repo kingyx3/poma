@@ -10,6 +10,7 @@ POMA is a low-cost Python scaffold for a personal long-only US equities portfoli
 | Portfolio sizing, allocations, cash sleeves, and portfolio-level targets | [`docs/portfolio-management.md`](docs/portfolio-management.md) |
 | Strategy extension contract | [`docs/strategy-contract.md`](docs/strategy-contract.md) |
 | Default strategy and the audit behind it | [`docs/strategies/core-etf.md`](docs/strategies/core-etf.md) |
+| Core-satellite sleeve (Irish UCITS core + cybersecurity/consumer staples satellites) | [`docs/strategies/core-satellite.md`](docs/strategies/core-satellite.md) |
 | Previous stock-picking strategy (still selectable) | [`docs/strategies/rank-velocity-size-equal-weight.md`](docs/strategies/rank-velocity-size-equal-weight.md) |
 | Runtime configuration and GitHub secret shapes | [`docs/configuration.md`](docs/configuration.md) |
 | GCP free-tier deployment | [`docs/deployment-gcp-free-tier.md`](docs/deployment-gcp-free-tier.md) |

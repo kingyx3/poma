@@ -16,6 +16,8 @@ from poma.portfolio import (
 from poma.strategies import default_registry
 from poma.strategies.core_etf import CORE_ETF_TICKER
 from poma.strategies.core_etf import NAME as CORE_ETF_STRATEGY_NAME
+from poma.strategies.core_satellite import NAME as CORE_SATELLITE_STRATEGY_NAME
+from poma.strategies.core_satellite import resolve_plan as resolve_core_satellite_plan
 from poma.ucits_instruments import ucits_listing
 
 
@@ -94,6 +96,16 @@ class Settings(BaseSettings):
     core_etf_trend_filter: bool = Field(default=False, alias="CORE_ETF_TREND_FILTER")
     core_etf_trend_sma_months: PositiveInt = Field(default=10, alias="CORE_ETF_TREND_SMA_MONTHS")
     core_etf_safe_asset: str = Field(default="cash", alias="CORE_ETF_SAFE_ASSET")
+
+    # core_satellite sleeve: a core UCITS ETF plus thematic UCITS ETF satellites. Used only when
+    # INVESTMENT_STRATEGY_WEIGHTS allocates the core_satellite strategy.
+    core_satellite_core_ticker: str = Field(default="USMC", alias="CORE_SATELLITE_CORE_TICKER")
+    core_satellite_core_pct: float = Field(default=0.70, alias="CORE_SATELLITE_CORE_PCT")
+    core_satellite_satellites: str = Field(default="USPY,IUCS", alias="CORE_SATELLITE_SATELLITES")
+    core_satellite_require_irish_domicile: bool = Field(
+        default=True,
+        alias="CORE_SATELLITE_REQUIRE_IRISH_DOMICILE",
+    )
 
     dry_run_portfolio_value_usd: PositiveFloat = Field(
         default=10_000.0,
@@ -305,6 +317,8 @@ class Settings(BaseSettings):
         }
         if core_etf_active:
             target_tickers.add(CORE_ETF_TICKER)
+        if allocations.get(CORE_SATELLITE_STRATEGY_NAME, 0) > 0:
+            target_tickers.update(resolve_core_satellite_plan(self).tickers)
         safe_ticker = (self.core_etf_safe_asset or "").strip().upper()
         if core_etf_active and self.core_etf_trend_filter and safe_ticker not in {"", "CASH", "NONE"}:
             target_tickers.add(safe_ticker)

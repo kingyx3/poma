@@ -176,3 +176,24 @@ def test_workflows_wire_gh_environment_vars_and_preflight_before_deploy() -> Non
         assert "secrets.IBKR_LOGIN_SECRET" in workflow
     assert deploy.index("Validate mandatory GitHub Environment") < deploy.index("Resolve generated deployment config")
     assert gateway.index("Validate mandatory GitHub Environment") < gateway.index("Resolve broker login secrets")
+
+
+CORE_SATELLITE_VARS = {
+    "CORE_SATELLITE_CORE_TICKER": "USMC",
+    "CORE_SATELLITE_CORE_PCT": "0.70",
+    "CORE_SATELLITE_SATELLITES": "USPY,IUCS",
+}
+
+
+@pytest.mark.parametrize(("mode", "settings"), [("paper", PAPER), ("live", LIVE)])
+def test_core_satellite_sleeve_requires_explicit_instrument_variables(mode: str, settings: dict[str, str]) -> None:
+    base = {**settings, "INVESTMENT_STRATEGY_WEIGHTS": "core_satellite=1.0"}
+    assert run_check(mode, {**base, **CORE_SATELLITE_VARS}).returncode == 0
+    for key in CORE_SATELLITE_VARS:
+        result = run_check(mode, {**base, **{k: v for k, v in CORE_SATELLITE_VARS.items() if k != key}})
+        assert result.returncode != 0
+        assert key in result.stderr
+
+
+def test_core_satellite_variables_are_not_required_by_other_sleeves() -> None:
+    assert run_check("paper", PAPER).returncode == 0
